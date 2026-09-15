@@ -1,0 +1,54 @@
+{
+  "arm": "bp",
+  "use_sigreg": true,
+  "tag": "lr0.003",
+  "out_dir": "runs",
+  "data": {
+    "dataset": "galaxy10",
+    "root": "../data",
+    "img_size": 32,
+    "grayscale": false,
+    "n_train": -1,
+    "n_test": 2000,
+    "seed": 0,
+    "n_views": 4,
+    "n_global_views": 4,
+    "crop_area": [
+      0.4,
+      1.0
+    ],
+    "max_rotation": 3.14159265,
+    "hflip": true,
+    "brightness": 0.2,
+    "contrast": 0.2
+  },
+  "enc": {
+    "depth": 8,
+    "width": 128,
+    "embed_dim": 128,
+    "act": "relu",
+    "parameterisation": "mupc"
+  },
+  "sig": {
+    "num_slices": 256,
+    "t_max": 5.0,
+    "n_points": 17,
+    "scale_by_n": true,
+    "resample_directions": true,
+    "lambd": 0.05
+  },
+  "pc": {
+    "T": 16,
+    "activity_lr": 0.5,
+    "init": "feedforward",
+    "output_drive": "coupled"
+  },
+  "opt": {
+    "param_lr": 0.003,
+    "batch_size": 256,
+    "n_steps": 2000,
+    "eval_every": 200,
+    "grad_clip": 1.0,
+    "seed": 0
+  }
+}

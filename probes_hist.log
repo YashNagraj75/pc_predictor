@@ -1,0 +1,72 @@
+
+=== bp_sigreg_e400  Z(6000, 128) -> img(32, 32, 3) ===
+[probes] scene-quantity probes ...
+[probes] decoder ...
+Could not load symbol cuStreamGetGreenCtx. Error: /lib/x86_64-linux-gnu/libcuda.so.1: undefined symbol: cuStreamGetGreenCtx
+E0915 12:02:06.846240 3516106 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+  decoder step     0  mse=0.11703
+  decoder step   500  mse=0.00257
+  decoder step  1000  mse=0.00227
+  decoder step  1500  mse=0.00227
+  decoder step  2000  mse=0.00185
+  decoder step  2500  mse=0.00203
+[probes] figures ...
+  class probe   linear 0.4475  mlp 0.4055
+  flux           linear r=0.933 nmse=0.134  mlp r=0.949
+  size_rms       linear r=0.988 nmse=0.024  mlp r=0.989
+  ellipticity    linear r=0.651 nmse=0.582  mlp r=0.685
+  concentration  linear r=0.974 nmse=0.055  mlp r=0.984
+  decode  ssim=0.8103 (floor 0.7033, gain +0.1070)  psnr=26.61
+
+=== pc_sigreg_T16_coupled_e400  Z(6000, 128) -> img(32, 32, 3) ===
+[probes] scene-quantity probes ...
+[probes] decoder ...
+  decoder step     0  mse=0.11706
+  decoder step   500  mse=0.00224
+  decoder step  1000  mse=0.00176
+  decoder step  1500  mse=0.00162
+  decoder step  2000  mse=0.00152
+  decoder step  2500  mse=0.00148
+[probes] figures ...
+  class probe   linear 0.3365  mlp 0.3785
+  flux           linear r=0.987 nmse=0.026  mlp r=0.975
+  size_rms       linear r=0.973 nmse=0.055  mlp r=0.979
+  ellipticity    linear r=0.757 nmse=0.431  mlp r=0.790
+  concentration  linear r=0.958 nmse=0.087  mlp r=0.969
+  decode  ssim=0.8305 (floor 0.7033, gain +0.1272)  psnr=28.02
+
+=== pc_sigreg_T32_coupled_Tsweep  Z(6000, 128) -> img(32, 32, 3) ===
+[probes] scene-quantity probes ...
+[probes] decoder ...
+  decoder step     0  mse=0.11706
+  decoder step   500  mse=0.00270
+  decoder step  1000  mse=0.00242
+  decoder step  1500  mse=0.00215
+  decoder step  2000  mse=0.00194
+  decoder step  2500  mse=0.00206
+[probes] figures ...
+  class probe   linear 0.3385  mlp 0.3455
+  flux           linear r=0.974 nmse=0.055  mlp r=0.954
+  size_rms       linear r=0.968 nmse=0.065  mlp r=0.973
+  ellipticity    linear r=0.753 nmse=0.437  mlp r=0.776
+  concentration  linear r=0.956 nmse=0.092  mlp r=0.961
+  decode  ssim=0.8089 (floor 0.7033, gain +0.1056)  psnr=26.99
+
+=== pc_sigreg_T64_coupled_Tsweep  Z(6000, 128) -> img(32, 32, 3) ===
+[probes] scene-quantity probes ...
+[probes] decoder ...
+  decoder step     0  mse=0.11707
+  decoder step   500  mse=0.00300
+  decoder step  1000  mse=0.00290
+  decoder step  1500  mse=0.00294
+  decoder step  2000  mse=0.00273
+  decoder step  2500  mse=0.00299
+[probes] figures ...
+  class probe   linear 0.3380  mlp 0.3020
+  flux           linear r=0.982 nmse=0.036  mlp r=0.954
+  size_rms       linear r=0.974 nmse=0.054  mlp r=0.975
+  ellipticity    linear r=0.754 nmse=0.436  mlp r=0.730
+  concentration  linear r=0.954 nmse=0.096  mlp r=0.960
+  decode  ssim=0.7774 (floor 0.7033, gain +0.0741)  psnr=25.58
+
+wrote probes_summary.csv (4 runs)

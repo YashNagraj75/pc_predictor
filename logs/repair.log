@@ -1,0 +1,59 @@
++ cd /media/md_lab/hd_21/preprocessed/pc_predictor
++ /snap/bin/uv pip uninstall --python .venv/bin/python jax jaxlib jax-cuda12-plugin jax-cuda12-pjrt jpc optax
+Uninstalled 6 packages in 201ms
+ - jax==0.5.2
+ - jax-cuda12-pjrt==0.10.2
+ - jax-cuda12-plugin==0.10.2
+ - jaxlib==0.5.1
+ - jpc==1.0.0 (from git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5)
+ - optax==0.2.5
++ /snap/bin/uv pip install --python .venv/bin/python 'jax[cuda12]==0.10.2' optax==0.2.8
+Resolved 23 packages in 1.61s
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 5 packages in 2m 57s
+ + jax==0.10.2
+ + jax-cuda12-pjrt==0.10.2
+ + jax-cuda12-plugin==0.10.2
+ + jaxlib==0.10.2
+ + optax==0.2.8
++ echo '=== jax alone ==='
+=== jax alone ===
++ .venv/bin/python -c 'import jax; print(jax.__version__, jax.default_backend(), jax.devices())'
+0.10.2 gpu [CudaDevice(id=0)]
++ /snap/bin/uv pip install --python .venv/bin/python --no-deps 'jpc @ git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5'
+Resolved 1 package in 892ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 525ms
+ + jpc==1.0.0 (from git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5)
++ echo '=== final ==='
+=== final ===
++ .venv/bin/python -c '
+import importlib.metadata as md
+for p in ['\''jax'\'','\''jaxlib'\'','\''equinox'\'','\''optax'\'','\''jpc'\'','\''numpy'\'','\''h5py'\'']:
+    try: print(p, md.version(p))
+    except Exception: print(p, '\''MISSING'\'')
+import jax, jpc, equinox, optax
+print('\''backend'\'', jax.default_backend(), jax.devices())
+import jax.numpy as jnp; x=jnp.ones((4096,4096)); print('\''matmul'\'', float((x@x)[0,0]))
+print('\''IMPORTS_OK'\'')
+'
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jpc/__init__.py", line 41, in <module>
+    from ._utils import (
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jpc/_utils.py", line 8, in <module>
+    from jaxlib.xla_extension import PjitFunction
+ModuleNotFoundError: No module named 'jaxlib.xla_extension'
+jax 0.10.2
+jaxlib 0.10.2
+equinox 0.13.8
+optax 0.2.8
+jpc 1.0.0
+numpy 2.4.6
+h5py 3.16.0
++ echo '=== REPAIR_DONE ==='
+=== REPAIR_DONE ===

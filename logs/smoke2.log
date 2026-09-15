@@ -1,0 +1,13 @@
+jpc import OK
+backend gpu [CudaDevice(id=0)]
+=== SMOKE ===
+device: [CudaDevice(id=0)] backend: gpu
+V=4 B=256 input_dim=3072 depth=8 width=128 T=16
+bp_grads   OK  compile+run   5.98s  |g|=2.249657e+00
+bp_grads   warm run         0.005s
+pc_grads   OK  compile+run  12.26s  |g|=2.766636e-02
+pc_grads   warm run         2.684s
+cos(bp, pc) = 0.416471
+F_final=1.661441e-02  L_final=43.334740
+SMOKE_OK
+=== SMOKE2_DONE ===

@@ -1,0 +1,3 @@
+[submodule "PredictiveCodingBackprop"]
+	path = PredictiveCodingBackprop
+	url = https://github.com/BerenMillidge/PredictiveCodingBackprop.git

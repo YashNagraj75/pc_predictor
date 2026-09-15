@@ -1,0 +1,23 @@
++ ROOT=/media/md_lab/hd_21/preprocessed/pc_predictor
++ cd /media/md_lab/hd_21/preprocessed/pc_predictor
++ '[' '!' -x .venv/bin/python ']'
++ /snap/bin/uv pip install --python .venv/bin/python 'jax[cuda12]' equinox optax numpy h5py
+Checked 5 packages in 7ms
++ echo '=== GPU VERIFY ==='
+=== GPU VERIFY ===
++ .venv/bin/python -c '
+import jax, jaxlib, equinox, optax, h5py
+print('\''jax'\'', jax.__version__, '\''| jaxlib'\'', jaxlib.__version__)
+print('\''equinox'\'', equinox.__version__, '\''| optax'\'', optax.__version__)
+print('\''backend:'\'', jax.default_backend())
+print('\''devices:'\'', jax.devices())
+import jax.numpy as jnp
+x = jnp.ones((8192,8192)); print('\''gpu matmul:'\'', float((x@x)[0,0]))
+'
+jax 0.10.2 | jaxlib 0.10.2
+equinox 0.13.8 | optax 0.2.8
+backend: gpu
+devices: [CudaDevice(id=0)]
+gpu matmul: 8192.0
++ echo '=== PROVISION_DONE rc=0 ==='
+=== PROVISION_DONE rc=0 ===

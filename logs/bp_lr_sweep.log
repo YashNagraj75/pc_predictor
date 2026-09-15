@@ -1,0 +1,79 @@
+=== RUN bp_sigreg_lr0.0001 (param_lr=0.0001) ===
+[bp_sigreg_lr0.0001] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 6.21, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.0001] step   200  |g|=6.533e-02  {'step': 200, 'grad_norm_preclip': 0.0653, 'loss_ff': 5.4691, 'loss': 5.4701, 'pred': 0.2713, 'sigreg': 104.2464, 'total': 5.4701}
+[bp_sigreg_lr0.0001] step   400  |g|=3.159e-02  {'step': 400, 'grad_norm_preclip': 0.0316, 'loss_ff': 5.3534, 'loss': 5.3537, 'pred': 0.1487, 'sigreg': 104.2484, 'total': 5.3537}
+[bp_sigreg_lr0.0001] step   600  |g|=2.188e-02  {'step': 600, 'grad_norm_preclip': 0.0219, 'loss_ff': 5.3043, 'loss': 5.3045, 'pred': 0.0881, 'sigreg': 104.4156, 'total': 5.3045}
+[bp_sigreg_lr0.0001] step   800  |g|=1.547e-02  {'step': 800, 'grad_norm_preclip': 0.0155, 'loss_ff': 5.2797, 'loss': 5.2798, 'pred': 0.059, 'sigreg': 104.4763, 'total': 5.2798}
+[bp_sigreg_lr0.0001] step  1000  |g|=9.426e-03  {'step': 1000, 'grad_norm_preclip': 0.0094, 'loss_ff': 5.2622, 'loss': 5.2622, 'pred': 0.0371, 'sigreg': 104.5389, 'total': 5.2622}
+[bp_sigreg_lr0.0001] step  1200  |g|=6.008e-03  {'step': 1200, 'grad_norm_preclip': 0.006, 'loss_ff': 5.2548, 'loss': 5.2548, 'pred': 0.0276, 'sigreg': 104.5713, 'total': 5.2548}
+[bp_sigreg_lr0.0001] step  1400  |g|=4.885e-03  {'step': 1400, 'grad_norm_preclip': 0.0049, 'loss_ff': 5.2511, 'loss': 5.2511, 'pred': 0.0229, 'sigreg': 104.5877, 'total': 5.2511}
+[bp_sigreg_lr0.0001] step  1600  |g|=4.049e-03  {'step': 1600, 'grad_norm_preclip': 0.004, 'loss_ff': 5.2475, 'loss': 5.2475, 'pred': 0.018, 'sigreg': 104.6093, 'total': 5.2475}
+[bp_sigreg_lr0.0001] step  1800  |g|=3.762e-03  {'step': 1800, 'grad_norm_preclip': 0.0038, 'loss_ff': 5.2457, 'loss': 5.2457, 'pred': 0.0155, 'sigreg': 104.619, 'total': 5.2457}
+[bp_sigreg_lr0.0001] step  1999  |g|=2.746e-03  {'step': 1999, 'grad_norm_preclip': 0.0027, 'loss_ff': 5.2441, 'loss': 5.2441, 'pred': 0.0134, 'sigreg': 104.6266, 'total': 5.2441}
+=== DONE bp_sigreg_lr0.0001 in 143.5s ===
+=== RUN bp_sigreg_lr0.0003 (param_lr=0.0003) ===
+[bp_sigreg_lr0.0003] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 6.1872, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.0003] step   200  |g|=1.946e-02  {'step': 200, 'grad_norm_preclip': 0.0195, 'loss_ff': 5.3001, 'loss': 5.3006, 'pred': 0.0829, 'sigreg': 104.4356, 'total': 5.3006}
+[bp_sigreg_lr0.0003] step   400  |g|=6.727e-03  {'step': 400, 'grad_norm_preclip': 0.0067, 'loss_ff': 5.2574, 'loss': 5.2575, 'pred': 0.0311, 'sigreg': 104.5577, 'total': 5.2575}
+[bp_sigreg_lr0.0003] step   600  |g|=3.585e-03  {'step': 600, 'grad_norm_preclip': 0.0036, 'loss_ff': 5.2465, 'loss': 5.2465, 'pred': 0.0167, 'sigreg': 104.6122, 'total': 5.2465}
+[bp_sigreg_lr0.0003] step   800  |g|=2.464e-03  {'step': 800, 'grad_norm_preclip': 0.0025, 'loss_ff': 5.243, 'loss': 5.243, 'pred': 0.012, 'sigreg': 104.6322, 'total': 5.243}
+[bp_sigreg_lr0.0003] step  1000  |g|=1.498e-03  {'step': 1000, 'grad_norm_preclip': 0.0015, 'loss_ff': 5.2402, 'loss': 5.2402, 'pred': 0.0082, 'sigreg': 104.6483, 'total': 5.2402}
+[bp_sigreg_lr0.0003] step  1200  |g|=1.210e-03  {'step': 1200, 'grad_norm_preclip': 0.0012, 'loss_ff': 5.2391, 'loss': 5.2391, 'pred': 0.0067, 'sigreg': 104.6548, 'total': 5.2391}
+[bp_sigreg_lr0.0003] step  1400  |g|=9.330e-04  {'step': 1400, 'grad_norm_preclip': 0.0009, 'loss_ff': 5.2381, 'loss': 5.2381, 'pred': 0.0054, 'sigreg': 104.6601, 'total': 5.2381}
+[bp_sigreg_lr0.0003] step  1600  |g|=7.655e-04  {'step': 1600, 'grad_norm_preclip': 0.0008, 'loss_ff': 5.237, 'loss': 5.237, 'pred': 0.0038, 'sigreg': 104.6676, 'total': 5.237}
+[bp_sigreg_lr0.0003] step  1800  |g|=6.116e-04  {'step': 1800, 'grad_norm_preclip': 0.0006, 'loss_ff': 5.2369, 'loss': 5.2369, 'pred': 0.0036, 'sigreg': 104.6681, 'total': 5.2369}
+[bp_sigreg_lr0.0003] step  1999  |g|=5.400e-04  {'step': 1999, 'grad_norm_preclip': 0.0005, 'loss_ff': 5.2364, 'loss': 5.2364, 'pred': 0.0031, 'sigreg': 104.6705, 'total': 5.2364}
+=== DONE bp_sigreg_lr0.0003 in 121.7s ===
+=== RUN bp_sigreg_lr0.001 (param_lr=0.001) ===
+[bp_sigreg_lr0.001] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 6.1126, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.001] step   200  |g|=2.958e-03  {'step': 200, 'grad_norm_preclip': 0.003, 'loss_ff': 5.2448, 'loss': 5.2449, 'pred': 0.0143, 'sigreg': 104.6247, 'total': 5.2449}
+[bp_sigreg_lr0.001] step   400  |g|=1.142e-03  {'step': 400, 'grad_norm_preclip': 0.0011, 'loss_ff': 5.239, 'loss': 5.239, 'pred': 0.0066, 'sigreg': 104.6549, 'total': 5.239}
+[bp_sigreg_lr0.001] step   600  |g|=6.390e-04  {'step': 600, 'grad_norm_preclip': 0.0006, 'loss_ff': 5.2367, 'loss': 5.2368, 'pred': 0.0035, 'sigreg': 104.6685, 'total': 5.2368}
+[bp_sigreg_lr0.001] step   800  |g|=4.240e-04  {'step': 800, 'grad_norm_preclip': 0.0004, 'loss_ff': 5.236, 'loss': 5.236, 'pred': 0.0025, 'sigreg': 104.6726, 'total': 5.236}
+[bp_sigreg_lr0.001] step  1000  |g|=2.675e-04  {'step': 1000, 'grad_norm_preclip': 0.0003, 'loss_ff': 5.2354, 'loss': 5.2354, 'pred': 0.0017, 'sigreg': 104.6765, 'total': 5.2354}
+[bp_sigreg_lr0.001] step  1200  |g|=2.039e-04  {'step': 1200, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2349, 'loss': 5.2349, 'pred': 0.0009, 'sigreg': 104.6804, 'total': 5.2349}
+[bp_sigreg_lr0.001] step  1400  |g|=1.376e-04  {'step': 1400, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2345, 'loss': 5.2345, 'pred': 0.0004, 'sigreg': 104.6823, 'total': 5.2345}
+[bp_sigreg_lr0.001] step  1600  |g|=1.443e-04  {'step': 1600, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2343, 'loss': 5.2343, 'pred': 0.0001, 'sigreg': 104.6837, 'total': 5.2343}
+[bp_sigreg_lr0.001] step  1800  |g|=1.056e-04  {'step': 1800, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0001, 'sigreg': 104.6835, 'total': 5.2342}
+[bp_sigreg_lr0.001] step  1999  |g|=2.746e-05  {'step': 1999, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6835, 'total': 5.2342}
+=== DONE bp_sigreg_lr0.001 in 119.5s ===
+=== RUN bp_sigreg_lr0.003 (param_lr=0.003) ===
+[bp_sigreg_lr0.003] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 5.9385, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.003] step   200  |g|=6.995e-04  {'step': 200, 'grad_norm_preclip': 0.0007, 'loss_ff': 5.2369, 'loss': 5.2369, 'pred': 0.0037, 'sigreg': 104.6683, 'total': 5.2369}
+[bp_sigreg_lr0.003] step   400  |g|=2.563e-04  {'step': 400, 'grad_norm_preclip': 0.0003, 'loss_ff': 5.2353, 'loss': 5.2353, 'pred': 0.0016, 'sigreg': 104.6769, 'total': 5.2353}
+[bp_sigreg_lr0.003] step   600  |g|=5.719e-05  {'step': 600, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6835, 'total': 5.2342}
+[bp_sigreg_lr0.003] step   800  |g|=5.334e-05  {'step': 800, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1000  |g|=4.511e-05  {'step': 1000, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1200  |g|=5.403e-05  {'step': 1200, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1400  |g|=4.152e-05  {'step': 1400, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1600  |g|=5.640e-05  {'step': 1600, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1800  |g|=4.662e-05  {'step': 1800, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.003] step  1999  |g|=6.436e-05  {'step': 1999, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+=== DONE bp_sigreg_lr0.003 in 122.4s ===
+=== RUN bp_sigreg_lr0.01 (param_lr=0.01) ===
+[bp_sigreg_lr0.01] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 5.6585, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.01] step   200  |g|=1.603e-04  {'step': 200, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2347, 'loss': 5.2347, 'pred': 0.0007, 'sigreg': 104.6807, 'total': 5.2347}
+[bp_sigreg_lr0.01] step   400  |g|=9.007e-05  {'step': 400, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2345, 'loss': 5.2345, 'pred': 0.0004, 'sigreg': 104.6818, 'total': 5.2345}
+[bp_sigreg_lr0.01] step   600  |g|=2.412e-04  {'step': 600, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step   800  |g|=2.363e-04  {'step': 800, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1000  |g|=1.736e-04  {'step': 1000, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1200  |g|=1.747e-04  {'step': 1200, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1400  |g|=1.725e-04  {'step': 1400, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1600  |g|=1.654e-04  {'step': 1600, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1800  |g|=1.560e-04  {'step': 1800, 'grad_norm_preclip': 0.0002, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.01] step  1999  |g|=1.165e-04  {'step': 1999, 'grad_norm_preclip': 0.0001, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+=== DONE bp_sigreg_lr0.01 in 120.6s ===
+=== RUN bp_sigreg_lr0.03 (param_lr=0.03) ===
+[bp_sigreg_lr0.03] step     0  |g|=3.182e-01  {'step': 0, 'grad_norm_preclip': 0.3182, 'loss_ff': 5.8875, 'loss': 6.2215, 'pred': 1.0245, 'sigreg': 104.9637, 'total': 6.2215}
+[bp_sigreg_lr0.03] step   200  |g|=3.079e-05  {'step': 200, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0001, 'sigreg': 104.6834, 'total': 5.2342}
+[bp_sigreg_lr0.03] step   400  |g|=2.575e-05  {'step': 400, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0001, 'sigreg': 104.6834, 'total': 5.2342}
+[bp_sigreg_lr0.03] step   600  |g|=1.444e-05  {'step': 600, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+[bp_sigreg_lr0.03] step   800  |g|=1.760e-05  {'step': 800, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1000  |g|=1.484e-05  {'step': 1000, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1200  |g|=2.317e-05  {'step': 1200, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6835, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1400  |g|=1.137e-05  {'step': 1400, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1600  |g|=4.985e-06  {'step': 1600, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6837, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1800  |g|=1.052e-05  {'step': 1800, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+[bp_sigreg_lr0.03] step  1999  |g|=1.171e-05  {'step': 1999, 'grad_norm_preclip': 0.0, 'loss_ff': 5.2342, 'loss': 5.2342, 'pred': 0.0, 'sigreg': 104.6836, 'total': 5.2342}
+=== DONE bp_sigreg_lr0.03 in 118.7s ===
+SWEEP_DONE total=746.3s

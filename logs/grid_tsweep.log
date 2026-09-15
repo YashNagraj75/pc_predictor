@@ -1,0 +1,51 @@
+=== START pc_sigreg_T32_coupled_Tsweep T 32
+[pc_sigreg_T32_coupled_Tsweep] step     0  |g|=9.043e-03  {'step': 0, 'grad_norm_preclip': 0.009, 'loss_ff': 1.3147, 'F_final': 0.0066, 'L_final': 1.0896}
+[pc_sigreg_T32_coupled_Tsweep] step   860  |g|=1.823e-03  {'step': 860, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.7922, 'F_final': 0.0034, 'L_final': 0.6726}
+[pc_sigreg_T32_coupled_Tsweep] step  1720  |g|=1.692e-03  {'step': 1720, 'grad_norm_preclip': 0.0017, 'loss_ff': 0.7238, 'F_final': 0.0035, 'L_final': 0.599}
+[pc_sigreg_T32_coupled_Tsweep] step  2580  |g|=2.158e-03  {'step': 2580, 'grad_norm_preclip': 0.0022, 'loss_ff': 0.7224, 'F_final': 0.0041, 'L_final': 0.577}
+[pc_sigreg_T32_coupled_Tsweep] step  3440  |g|=1.701e-03  {'step': 3440, 'grad_norm_preclip': 0.0017, 'loss_ff': 0.6973, 'F_final': 0.0041, 'L_final': 0.5492}
+[pc_sigreg_T32_coupled_Tsweep] step  4300  |g|=1.885e-03  {'step': 4300, 'grad_norm_preclip': 0.0019, 'loss_ff': 0.7163, 'F_final': 0.0051, 'L_final': 0.5319}
+[pc_sigreg_T32_coupled_Tsweep] step  5160  |g|=2.152e-03  {'step': 5160, 'grad_norm_preclip': 0.0022, 'loss_ff': 0.6877, 'F_final': 0.0054, 'L_final': 0.4919}
+[pc_sigreg_T32_coupled_Tsweep] step  6020  |g|=1.772e-03  {'step': 6020, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.6813, 'F_final': 0.0058, 'L_final': 0.4568}
+[pc_sigreg_T32_coupled_Tsweep] step  6880  |g|=1.788e-03  {'step': 6880, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.7078, 'F_final': 0.0067, 'L_final': 0.4381}
+[pc_sigreg_T32_coupled_Tsweep] step  7740  |g|=1.667e-03  {'step': 7740, 'grad_norm_preclip': 0.0017, 'loss_ff': 0.7027, 'F_final': 0.0068, 'L_final': 0.4037}
+[pc_sigreg_T32_coupled_Tsweep] step  8600  |g|=1.760e-03  {'step': 8600, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.7092, 'F_final': 0.0074, 'L_final': 0.3535}
+[pc_sigreg_T32_coupled_Tsweep] step  9460  |g|=1.640e-03  {'step': 9460, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.7234, 'F_final': 0.0076, 'L_final': 0.3387}
+[pc_sigreg_T32_coupled_Tsweep] step 10320  |g|=1.525e-03  {'step': 10320, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.6949, 'F_final': 0.0073, 'L_final': 0.2938}
+[pc_sigreg_T32_coupled_Tsweep] step 11180  |g|=1.579e-03  {'step': 11180, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.7635, 'F_final': 0.0078, 'L_final': 0.288}
+[pc_sigreg_T32_coupled_Tsweep] step 12040  |g|=1.463e-03  {'step': 12040, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.7472, 'F_final': 0.0075, 'L_final': 0.2713}
+[pc_sigreg_T32_coupled_Tsweep] step 12900  |g|=1.452e-03  {'step': 12900, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.7216, 'F_final': 0.0071, 'L_final': 0.2568}
+[pc_sigreg_T32_coupled_Tsweep] step 13760  |g|=1.481e-03  {'step': 13760, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.7789, 'F_final': 0.0074, 'L_final': 0.2573}
+[pc_sigreg_T32_coupled_Tsweep] step 14620  |g|=1.543e-03  {'step': 14620, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.7691, 'F_final': 0.0072, 'L_final': 0.2543}
+[pc_sigreg_T32_coupled_Tsweep] step 15480  |g|=1.704e-03  {'step': 15480, 'grad_norm_preclip': 0.0017, 'loss_ff': 0.7736, 'F_final': 0.0074, 'L_final': 0.2507}
+[pc_sigreg_T32_coupled_Tsweep] step 16340  |g|=1.646e-03  {'step': 16340, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.7442, 'F_final': 0.0071, 'L_final': 0.232}
+[pc_sigreg_T32_coupled_Tsweep] step 17199  |g|=1.542e-03  {'step': 17199, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.7469, 'F_final': 0.0073, 'L_final': 0.2544}
+=== DONE pc_sigreg_T32_coupled_Tsweep 1449.9 s
+=== START pc_sigreg_T64_coupled_Tsweep T 64
+[pc_sigreg_T64_coupled_Tsweep] step     0  |g|=1.579e-02  {'step': 0, 'grad_norm_preclip': 0.0158, 'loss_ff': 1.3147, 'F_final': 0.0196, 'L_final': 0.9473}
+[pc_sigreg_T64_coupled_Tsweep] step   860  |g|=3.029e-03  {'step': 860, 'grad_norm_preclip': 0.003, 'loss_ff': 0.7856, 'F_final': 0.0098, 'L_final': 0.5922}
+[pc_sigreg_T64_coupled_Tsweep] step  1720  |g|=2.650e-03  {'step': 1720, 'grad_norm_preclip': 0.0026, 'loss_ff': 0.7119, 'F_final': 0.0105, 'L_final': 0.4963}
+[pc_sigreg_T64_coupled_Tsweep] step  2580  |g|=3.132e-03  {'step': 2580, 'grad_norm_preclip': 0.0031, 'loss_ff': 0.7329, 'F_final': 0.0136, 'L_final': 0.4406}
+[pc_sigreg_T64_coupled_Tsweep] step  3440  |g|=2.281e-03  {'step': 3440, 'grad_norm_preclip': 0.0023, 'loss_ff': 0.7093, 'F_final': 0.0147, 'L_final': 0.3583}
+[pc_sigreg_T64_coupled_Tsweep] step  4300  |g|=2.525e-03  {'step': 4300, 'grad_norm_preclip': 0.0025, 'loss_ff': 0.7575, 'F_final': 0.0169, 'L_final': 0.2666}
+[pc_sigreg_T64_coupled_Tsweep] step  5160  |g|=2.106e-03  {'step': 5160, 'grad_norm_preclip': 0.0021, 'loss_ff': 0.7633, 'F_final': 0.0152, 'L_final': 0.1812}
+[pc_sigreg_T64_coupled_Tsweep] step  6020  |g|=1.591e-03  {'step': 6020, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.778, 'F_final': 0.0126, 'L_final': 0.1196}
+[pc_sigreg_T64_coupled_Tsweep] step  6880  |g|=1.799e-03  {'step': 6880, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.8725, 'F_final': 0.011, 'L_final': 0.0898}
+[pc_sigreg_T64_coupled_Tsweep] step  7740  |g|=1.581e-03  {'step': 7740, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.9089, 'F_final': 0.0094, 'L_final': 0.0636}
+[pc_sigreg_T64_coupled_Tsweep] step  8600  |g|=1.532e-03  {'step': 8600, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.9443, 'F_final': 0.0086, 'L_final': 0.0559}
+[pc_sigreg_T64_coupled_Tsweep] step  9460  |g|=1.713e-03  {'step': 9460, 'grad_norm_preclip': 0.0017, 'loss_ff': 0.9781, 'F_final': 0.0086, 'L_final': 0.0508}
+[pc_sigreg_T64_coupled_Tsweep] step 10320  |g|=1.589e-03  {'step': 10320, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.9351, 'F_final': 0.0081, 'L_final': 0.0452}
+[pc_sigreg_T64_coupled_Tsweep] step 11180  |g|=1.625e-03  {'step': 11180, 'grad_norm_preclip': 0.0016, 'loss_ff': 1.0227, 'F_final': 0.008, 'L_final': 0.0418}
+[pc_sigreg_T64_coupled_Tsweep] step 12040  |g|=1.837e-03  {'step': 12040, 'grad_norm_preclip': 0.0018, 'loss_ff': 0.914, 'F_final': 0.008, 'L_final': 0.0426}
+[pc_sigreg_T64_coupled_Tsweep] step 12900  |g|=1.573e-03  {'step': 12900, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.9536, 'F_final': 0.0078, 'L_final': 0.0386}
+[pc_sigreg_T64_coupled_Tsweep] step 13760  |g|=1.469e-03  {'step': 13760, 'grad_norm_preclip': 0.0015, 'loss_ff': 1.0828, 'F_final': 0.0082, 'L_final': 0.0397}
+[pc_sigreg_T64_coupled_Tsweep] step 14620  |g|=1.765e-03  {'step': 14620, 'grad_norm_preclip': 0.0018, 'loss_ff': 1.037, 'F_final': 0.0077, 'L_final': 0.0379}
+[pc_sigreg_T64_coupled_Tsweep] step 15480  |g|=1.556e-03  {'step': 15480, 'grad_norm_preclip': 0.0016, 'loss_ff': 0.9882, 'F_final': 0.0078, 'L_final': 0.0366}
+[pc_sigreg_T64_coupled_Tsweep] step 16340  |g|=1.891e-03  {'step': 16340, 'grad_norm_preclip': 0.0019, 'loss_ff': 1.0037, 'F_final': 0.0077, 'L_final': 0.034}
+[pc_sigreg_T64_coupled_Tsweep] step 17199  |g|=1.456e-03  {'step': 17199, 'grad_norm_preclip': 0.0015, 'loss_ff': 0.9109, 'F_final': 0.0075, 'L_final': 0.0371}
+=== DONE pc_sigreg_T64_coupled_Tsweep 2035.4 s
+=== START pc_sigreg_T128_coupled_Tsweep T 128
+[pc_sigreg_T128_coupled_Tsweep] step     0  |g|=2.433e-02  {'step': 0, 'grad_norm_preclip': 0.0243, 'loss_ff': 1.3146, 'F_final': 0.0461, 'L_final': 0.7934}
+[pc_sigreg_T128_coupled_Tsweep] step   860  |g|=4.349e-03  {'step': 860, 'grad_norm_preclip': 0.0043, 'loss_ff': 0.7864, 'F_final': 0.0243, 'L_final': 0.4734}
+[pc_sigreg_T128_coupled_Tsweep] step  1720  |g|=3.351e-03  {'step': 1720, 'grad_norm_preclip': 0.0034, 'loss_ff': 0.7091, 'F_final': 0.0284, 'L_final': 0.3003}
+[pc_sigreg_T128_coupled_Tsweep] step  2580  |g|=3.329e-03  {'step': 2580, 'grad_norm_preclip': 0.0033, 'loss_ff': 0.814, 'F_final': 0.0321, 'L_final': 0.1654}

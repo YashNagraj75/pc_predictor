@@ -1,0 +1,34 @@
+
+=== bp_sigreg  Z(6000, 128) -> img(32, 32, 3) ===
+[probes] scene-quantity probes ...
+[probes] decoder ...
+Could not load symbol cuStreamGetGreenCtx. Error: /lib/x86_64-linux-gnu/libcuda.so.1: undefined symbol: cuStreamGetGreenCtx
+E0915 11:52:43.271556 3510785 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+E0915 11:52:43.536166 3510785 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+  decoder step     0  mse=0.11704
+  decoder step   500  mse=0.00204
+  decoder step  1000  mse=0.00168
+  decoder step  1500  mse=0.00148
+  decoder step  2000  mse=0.00148
+  decoder step  2500  mse=0.00137
+[probes] figures ...
+Traceback (most recent call last):
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/run_probes.py", line 132, in <module>
+    main()
+    ~~~~^^
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/run_probes.py", line 97, in main
+    rep = P.run_suite(
+        Ztr, Zte, Itr, Ite, np.asarray(ytr)[itr], np.asarray(yte)[ite],
+        out_dir=run_dir, tag="",
+        decoder_steps=400 if args.fast else args.decoder_steps,
+        probe_mlp=not args.fast, make_figures=not args.no_figures)
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/probes.py", line 645, in run_suite
+    rep["fig_recon"] = reconstruction_figure(
+                       ~~~~~~~~~~~~~~~~~~~~~^
+        Xte, recon, os.path.join(out_dir, f"probes_recon{tag}.png"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        title=f"Decoded from frozen embedding  {tag}", mean_img=mean_img)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/probes.py", line 570, in reconstruction_figure
+    import matplotlib.pyplot as plt
+ModuleNotFoundError: No module named 'matplotlib'

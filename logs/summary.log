@@ -1,0 +1,16 @@
+=== per-run final eval ===
+bp_sigreg                    step= 1999 loss_ff=5.2342 knn=0.1335 twonn=0.11 collapse={"mean_abs_mean": 0.0, "mean_std": 0.0, "min_std": 0.0, "effective_rank": 2.0702, "dim": 128}
+bp_nosigreg                  step= 1999 loss_ff=0.0001 knn=0.1280 twonn=0.11 collapse={"mean_abs_mean": 0.0001, "mean_std": 0.0, "min_std": 0.0, "effective_rank": 1.8228, "dim": 128}
+pc_sigreg_T16_coupled        step= 1999 loss_ff=5.2691 knn=0.2980 twonn=20.32 collapse={"mean_abs_mean": 0.0054, "mean_std": 0.0193, "min_std": 0.0106, "effective_rank": 21.543, "dim": 128}
+pc_nosigreg_T16_coupled      step= 1999 loss_ff=0.0362 knn=0.2800 twonn=20.09 collapse={"mean_abs_mean": 0.0108, "mean_std": 0.0157, "min_std": 0.0071, "effective_rank": 23.072, "dim": 128}
+
+=== cross-arm comparisons (matched configs, same held-out batch) ===
+--- sigreg ---
+  cka_embedding = 0.2236
+  cka_hidden    = [0.9244, 0.928, 0.9323, 0.9323, 0.9293, 0.9276, 0.9343, 0.9328, 0.9367]
+  two_sample_embedding = {'ks_max': 0.8975, 'ks_mean': 0.62534765625, 'ks_q90': 0.7695000000000001}
+--- nosigreg ---
+  cka_embedding = 0.6810
+  cka_hidden    = [0.9207, 0.9247, 0.9298, 0.9301, 0.9278, 0.9264, 0.9336, 0.9334, 0.9411]
+  two_sample_embedding = {'ks_max': 0.996, 'ks_mean': 0.7517988281250001, 'ks_q90': 0.9390000000000001}
+SUMMARY_DONE

@@ -1,0 +1,93 @@
+=== START bp_sigreg_e400 n_steps 17200
+[bp_sigreg_e400] step     0  |g|=2.754e-01  {'step': 0, 'grad_norm_preclip': 0.2754, 'loss_ff': 1.3138, 'loss': 1.3148, 'pred': 0.6862, 'sigreg': 13.2583, 'total': 1.3148}
+[bp_sigreg_e400] step   860  |g|=5.701e-02  {'step': 860, 'grad_norm_preclip': 0.057, 'loss_ff': 0.6866, 'loss': 0.689, 'pred': 0.5325, 'sigreg': 3.6637, 'total': 0.689}
+[bp_sigreg_e400] step  1720  |g|=5.976e-02  {'step': 1720, 'grad_norm_preclip': 0.0598, 'loss_ff': 0.6026, 'loss': 0.6047, 'pred': 0.4338, 'sigreg': 3.8506, 'total': 0.6047}
+[bp_sigreg_e400] step  2580  |g|=6.083e-02  {'step': 2580, 'grad_norm_preclip': 0.0608, 'loss_ff': 0.5647, 'loss': 0.5674, 'pred': 0.3273, 'sigreg': 5.1286, 'total': 0.5674}
+[bp_sigreg_e400] step  3440  |g|=7.001e-02  {'step': 3440, 'grad_norm_preclip': 0.07, 'loss_ff': 0.567, 'loss': 0.5714, 'pred': 0.3498, 'sigreg': 4.7824, 'total': 0.5714}
+[bp_sigreg_e400] step  4300  |g|=5.790e-02  {'step': 4300, 'grad_norm_preclip': 0.0579, 'loss_ff': 0.5166, 'loss': 0.5191, 'pred': 0.3158, 'sigreg': 4.3824, 'total': 0.5191}
+[bp_sigreg_e400] step  5160  |g|=7.128e-02  {'step': 5160, 'grad_norm_preclip': 0.0713, 'loss_ff': 0.499, 'loss': 0.5029, 'pred': 0.2723, 'sigreg': 4.8841, 'total': 0.5029}
+[bp_sigreg_e400] step  6020  |g|=7.692e-02  {'step': 6020, 'grad_norm_preclip': 0.0769, 'loss_ff': 0.4453, 'loss': 0.448, 'pred': 0.2527, 'sigreg': 4.1588, 'total': 0.448}
+[bp_sigreg_e400] step  6880  |g|=7.364e-02  {'step': 6880, 'grad_norm_preclip': 0.0736, 'loss_ff': 0.4353, 'loss': 0.4368, 'pred': 0.2254, 'sigreg': 4.4531, 'total': 0.4368}
+[bp_sigreg_e400] step  7740  |g|=6.993e-02  {'step': 7740, 'grad_norm_preclip': 0.0699, 'loss_ff': 0.4179, 'loss': 0.4193, 'pred': 0.2343, 'sigreg': 3.9344, 'total': 0.4193}
+[bp_sigreg_e400] step  8600  |g|=1.055e-01  {'step': 8600, 'grad_norm_preclip': 0.1055, 'loss_ff': 0.4749, 'loss': 0.4774, 'pred': 0.1823, 'sigreg': 6.0845, 'total': 0.4774}
+[bp_sigreg_e400] step  9460  |g|=7.368e-02  {'step': 9460, 'grad_norm_preclip': 0.0737, 'loss_ff': 0.3972, 'loss': 0.3987, 'pred': 0.2064, 'sigreg': 4.0527, 'total': 0.3987}
+[bp_sigreg_e400] step 10320  |g|=7.925e-02  {'step': 10320, 'grad_norm_preclip': 0.0793, 'loss_ff': 0.3875, 'loss': 0.39, 'pred': 0.2012, 'sigreg': 3.9768, 'total': 0.39}
+[bp_sigreg_e400] step 11180  |g|=7.134e-02  {'step': 11180, 'grad_norm_preclip': 0.0713, 'loss_ff': 0.381, 'loss': 0.3817, 'pred': 0.1958, 'sigreg': 3.9137, 'total': 0.3817}
+[bp_sigreg_e400] step 12040  |g|=6.696e-02  {'step': 12040, 'grad_norm_preclip': 0.067, 'loss_ff': 0.3954, 'loss': 0.3956, 'pred': 0.1931, 'sigreg': 4.2442, 'total': 0.3956}
+[bp_sigreg_e400] step 12900  |g|=8.290e-02  {'step': 12900, 'grad_norm_preclip': 0.0829, 'loss_ff': 0.3879, 'loss': 0.3888, 'pred': 0.1973, 'sigreg': 4.0275, 'total': 0.3888}
+[bp_sigreg_e400] step 13760  |g|=7.539e-02  {'step': 13760, 'grad_norm_preclip': 0.0754, 'loss_ff': 0.3998, 'loss': 0.4002, 'pred': 0.2049, 'sigreg': 4.11, 'total': 0.4002}
+[bp_sigreg_e400] step 14620  |g|=7.280e-02  {'step': 14620, 'grad_norm_preclip': 0.0728, 'loss_ff': 0.3939, 'loss': 0.3941, 'pred': 0.1956, 'sigreg': 4.166, 'total': 0.3941}
+[bp_sigreg_e400] step 15480  |g|=6.691e-02  {'step': 15480, 'grad_norm_preclip': 0.0669, 'loss_ff': 0.3698, 'loss': 0.3698, 'pred': 0.1846, 'sigreg': 3.8899, 'total': 0.3698}
+[bp_sigreg_e400] step 16340  |g|=7.876e-02  {'step': 16340, 'grad_norm_preclip': 0.0788, 'loss_ff': 0.3872, 'loss': 0.3872, 'pred': 0.1794, 'sigreg': 4.3346, 'total': 0.3872}
+[bp_sigreg_e400] step 17199  |g|=6.414e-02  {'step': 17199, 'grad_norm_preclip': 0.0641, 'loss_ff': 0.3999, 'loss': 0.3999, 'pred': 0.1953, 'sigreg': 4.2867, 'total': 0.3999}
+=== DONE bp_sigreg_e400 564.6 s
+=== START bp_nosigreg_e400 n_steps 17200
+[bp_nosigreg_e400] step     0  |g|=1.770e-02  {'step': 0, 'grad_norm_preclip': 0.0177, 'loss_ff': 0.6861, 'loss': 0.6862, 'pred': 0.6862, 'sigreg': 0.0, 'total': 0.6862}
+[bp_nosigreg_e400] step   860  |g|=6.870e-03  {'step': 860, 'grad_norm_preclip': 0.0069, 'loss_ff': 0.0656, 'loss': 0.066, 'pred': 0.066, 'sigreg': 0.0, 'total': 0.066}
+[bp_nosigreg_e400] step  1720  |g|=1.315e-02  {'step': 1720, 'grad_norm_preclip': 0.0132, 'loss_ff': 0.022, 'loss': 0.0225, 'pred': 0.0225, 'sigreg': 0.0, 'total': 0.0225}
+[bp_nosigreg_e400] step  2580  |g|=3.140e-03  {'step': 2580, 'grad_norm_preclip': 0.0031, 'loss_ff': 0.0186, 'loss': 0.0186, 'pred': 0.0186, 'sigreg': 0.0, 'total': 0.0186}
+[bp_nosigreg_e400] step  3440  |g|=5.483e-03  {'step': 3440, 'grad_norm_preclip': 0.0055, 'loss_ff': 0.0155, 'loss': 0.0156, 'pred': 0.0156, 'sigreg': 0.0, 'total': 0.0156}
+[bp_nosigreg_e400] step  4300  |g|=2.699e-03  {'step': 4300, 'grad_norm_preclip': 0.0027, 'loss_ff': 0.0151, 'loss': 0.0152, 'pred': 0.0152, 'sigreg': 0.0, 'total': 0.0152}
+[bp_nosigreg_e400] step  5160  |g|=5.338e-03  {'step': 5160, 'grad_norm_preclip': 0.0053, 'loss_ff': 0.015, 'loss': 0.0149, 'pred': 0.0149, 'sigreg': 0.0, 'total': 0.0149}
+[bp_nosigreg_e400] step  6020  |g|=3.229e-03  {'step': 6020, 'grad_norm_preclip': 0.0032, 'loss_ff': 0.012, 'loss': 0.012, 'pred': 0.012, 'sigreg': 0.0, 'total': 0.012}
+[bp_nosigreg_e400] step  6880  |g|=2.980e-03  {'step': 6880, 'grad_norm_preclip': 0.003, 'loss_ff': 0.0146, 'loss': 0.0147, 'pred': 0.0147, 'sigreg': 0.0, 'total': 0.0147}
+[bp_nosigreg_e400] step  7740  |g|=7.332e-03  {'step': 7740, 'grad_norm_preclip': 0.0073, 'loss_ff': 0.0125, 'loss': 0.0127, 'pred': 0.0127, 'sigreg': 0.0, 'total': 0.0127}
+[bp_nosigreg_e400] step  8600  |g|=8.608e-03  {'step': 8600, 'grad_norm_preclip': 0.0086, 'loss_ff': 0.0143, 'loss': 0.0144, 'pred': 0.0144, 'sigreg': 0.0, 'total': 0.0144}
+[bp_nosigreg_e400] step  9460  |g|=3.427e-03  {'step': 9460, 'grad_norm_preclip': 0.0034, 'loss_ff': 0.0137, 'loss': 0.0138, 'pred': 0.0138, 'sigreg': 0.0, 'total': 0.0138}
+[bp_nosigreg_e400] step 10320  |g|=5.459e-03  {'step': 10320, 'grad_norm_preclip': 0.0055, 'loss_ff': 0.0124, 'loss': 0.0126, 'pred': 0.0126, 'sigreg': 0.0, 'total': 0.0126}
+[bp_nosigreg_e400] step 11180  |g|=7.066e-03  {'step': 11180, 'grad_norm_preclip': 0.0071, 'loss_ff': 0.0131, 'loss': 0.0131, 'pred': 0.0131, 'sigreg': 0.0, 'total': 0.0131}
+[bp_nosigreg_e400] step 12040  |g|=5.342e-03  {'step': 12040, 'grad_norm_preclip': 0.0053, 'loss_ff': 0.0138, 'loss': 0.0138, 'pred': 0.0138, 'sigreg': 0.0, 'total': 0.0138}
+[bp_nosigreg_e400] step 12900  |g|=3.623e-03  {'step': 12900, 'grad_norm_preclip': 0.0036, 'loss_ff': 0.0127, 'loss': 0.0127, 'pred': 0.0127, 'sigreg': 0.0, 'total': 0.0127}
+[bp_nosigreg_e400] step 13760  |g|=3.172e-03  {'step': 13760, 'grad_norm_preclip': 0.0032, 'loss_ff': 0.0134, 'loss': 0.0134, 'pred': 0.0134, 'sigreg': 0.0, 'total': 0.0134}
+[bp_nosigreg_e400] step 14620  |g|=3.838e-03  {'step': 14620, 'grad_norm_preclip': 0.0038, 'loss_ff': 0.0128, 'loss': 0.0128, 'pred': 0.0128, 'sigreg': 0.0, 'total': 0.0128}
+[bp_nosigreg_e400] step 15480  |g|=3.164e-03  {'step': 15480, 'grad_norm_preclip': 0.0032, 'loss_ff': 0.0113, 'loss': 0.0113, 'pred': 0.0113, 'sigreg': 0.0, 'total': 0.0113}
+[bp_nosigreg_e400] step 16340  |g|=2.306e-03  {'step': 16340, 'grad_norm_preclip': 0.0023, 'loss_ff': 0.0126, 'loss': 0.0126, 'pred': 0.0126, 'sigreg': 0.0, 'total': 0.0126}
+[bp_nosigreg_e400] step 17199  |g|=2.880e-03  {'step': 17199, 'grad_norm_preclip': 0.0029, 'loss_ff': 0.013, 'loss': 0.013, 'pred': 0.013, 'sigreg': 0.0, 'total': 0.013}
+=== DONE bp_nosigreg_e400 505.9 s
+=== START pc_sigreg_T16_coupled_e400 n_steps 17200
+[pc_sigreg_T16_coupled_e400] step     0  |g|=4.834e-03  {'step': 0, 'grad_norm_preclip': 0.0048, 'loss_ff': 1.3147, 'F_final': 0.0019, 'L_final': 1.1894}
+[pc_sigreg_T16_coupled_e400] step   860  |g|=1.052e-03  {'step': 860, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.799, 'F_final': 0.0011, 'L_final': 0.7294}
+[pc_sigreg_T16_coupled_e400] step  1720  |g|=9.587e-04  {'step': 1720, 'grad_norm_preclip': 0.001, 'loss_ff': 0.7342, 'F_final': 0.0011, 'L_final': 0.6628}
+[pc_sigreg_T16_coupled_e400] step  2580  |g|=1.188e-03  {'step': 2580, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.7256, 'F_final': 0.0011, 'L_final': 0.65}
+[pc_sigreg_T16_coupled_e400] step  3440  |g|=9.554e-04  {'step': 3440, 'grad_norm_preclip': 0.001, 'loss_ff': 0.6992, 'F_final': 0.0011, 'L_final': 0.6264}
+[pc_sigreg_T16_coupled_e400] step  4300  |g|=1.026e-03  {'step': 4300, 'grad_norm_preclip': 0.001, 'loss_ff': 0.7181, 'F_final': 0.0013, 'L_final': 0.6295}
+[pc_sigreg_T16_coupled_e400] step  5160  |g|=1.170e-03  {'step': 5160, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.6972, 'F_final': 0.0013, 'L_final': 0.6105}
+[pc_sigreg_T16_coupled_e400] step  6020  |g|=9.936e-04  {'step': 6020, 'grad_norm_preclip': 0.001, 'loss_ff': 0.6967, 'F_final': 0.0015, 'L_final': 0.6002}
+[pc_sigreg_T16_coupled_e400] step  6880  |g|=1.148e-03  {'step': 6880, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.6998, 'F_final': 0.0015, 'L_final': 0.5999}
+[pc_sigreg_T16_coupled_e400] step  7740  |g|=1.007e-03  {'step': 7740, 'grad_norm_preclip': 0.001, 'loss_ff': 0.7025, 'F_final': 0.0016, 'L_final': 0.5982}
+[pc_sigreg_T16_coupled_e400] step  8600  |g|=1.170e-03  {'step': 8600, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.6933, 'F_final': 0.0018, 'L_final': 0.5732}
+[pc_sigreg_T16_coupled_e400] step  9460  |g|=1.183e-03  {'step': 9460, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.6975, 'F_final': 0.0017, 'L_final': 0.5848}
+[pc_sigreg_T16_coupled_e400] step 10320  |g|=1.108e-03  {'step': 10320, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.6792, 'F_final': 0.0017, 'L_final': 0.5676}
+[pc_sigreg_T16_coupled_e400] step 11180  |g|=1.089e-03  {'step': 11180, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.699, 'F_final': 0.0018, 'L_final': 0.5761}
+[pc_sigreg_T16_coupled_e400] step 12040  |g|=1.180e-03  {'step': 12040, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.6947, 'F_final': 0.0019, 'L_final': 0.5703}
+[pc_sigreg_T16_coupled_e400] step 12900  |g|=1.153e-03  {'step': 12900, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.7073, 'F_final': 0.0019, 'L_final': 0.5774}
+[pc_sigreg_T16_coupled_e400] step 13760  |g|=1.150e-03  {'step': 13760, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.7038, 'F_final': 0.0019, 'L_final': 0.5756}
+[pc_sigreg_T16_coupled_e400] step 14620  |g|=1.087e-03  {'step': 14620, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.6988, 'F_final': 0.0018, 'L_final': 0.577}
+[pc_sigreg_T16_coupled_e400] step 15480  |g|=1.191e-03  {'step': 15480, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.7009, 'F_final': 0.0019, 'L_final': 0.5713}
+[pc_sigreg_T16_coupled_e400] step 16340  |g|=1.222e-03  {'step': 16340, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.6749, 'F_final': 0.0019, 'L_final': 0.5482}
+[pc_sigreg_T16_coupled_e400] step 17199  |g|=1.097e-03  {'step': 17199, 'grad_norm_preclip': 0.0011, 'loss_ff': 0.6942, 'F_final': 0.0018, 'L_final': 0.5744}
+=== DONE pc_sigreg_T16_coupled_e400 1141.8 s
+=== START pc_nosigreg_T16_coupled_e400 n_steps 17200
+[pc_nosigreg_T16_coupled_e400] step     0  |g|=2.318e-04  {'step': 0, 'grad_norm_preclip': 0.0002, 'loss_ff': 0.6862, 'F_final': 0.0001, 'L_final': 0.6789}
+[pc_nosigreg_T16_coupled_e400] step   860  |g|=9.761e-05  {'step': 860, 'grad_norm_preclip': 0.0001, 'loss_ff': 0.1911, 'F_final': 0.0, 'L_final': 0.189}
+[pc_nosigreg_T16_coupled_e400] step  1720  |g|=5.148e-05  {'step': 1720, 'grad_norm_preclip': 0.0001, 'loss_ff': 0.1305, 'F_final': 0.0, 'L_final': 0.1295}
+[pc_nosigreg_T16_coupled_e400] step  2580  |g|=2.890e-05  {'step': 2580, 'grad_norm_preclip': 0.0, 'loss_ff': 0.1148, 'F_final': 0.0, 'L_final': 0.1141}
+[pc_nosigreg_T16_coupled_e400] step  3440  |g|=1.898e-05  {'step': 3440, 'grad_norm_preclip': 0.0, 'loss_ff': 0.1152, 'F_final': 0.0, 'L_final': 0.1145}
+[pc_nosigreg_T16_coupled_e400] step  4300  |g|=1.655e-05  {'step': 4300, 'grad_norm_preclip': 0.0, 'loss_ff': 0.1144, 'F_final': 0.0, 'L_final': 0.1137}
+[pc_nosigreg_T16_coupled_e400] step  5160  |g|=1.423e-05  {'step': 5160, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0956, 'F_final': 0.0, 'L_final': 0.0951}
+[pc_nosigreg_T16_coupled_e400] step  6020  |g|=1.627e-05  {'step': 6020, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0918, 'F_final': 0.0, 'L_final': 0.0912}
+[pc_nosigreg_T16_coupled_e400] step  6880  |g|=2.150e-05  {'step': 6880, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0929, 'F_final': 0.0, 'L_final': 0.0924}
+[pc_nosigreg_T16_coupled_e400] step  7740  |g|=2.442e-05  {'step': 7740, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0823, 'F_final': 0.0, 'L_final': 0.0818}
+[pc_nosigreg_T16_coupled_e400] step  8600  |g|=9.115e-06  {'step': 8600, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0768, 'F_final': 0.0, 'L_final': 0.0764}
+[pc_nosigreg_T16_coupled_e400] step  9460  |g|=3.233e-05  {'step': 9460, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0989, 'F_final': 0.0, 'L_final': 0.0982}
+[pc_nosigreg_T16_coupled_e400] step 10320  |g|=1.571e-05  {'step': 10320, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0831, 'F_final': 0.0, 'L_final': 0.0826}
+[pc_nosigreg_T16_coupled_e400] step 11180  |g|=1.785e-05  {'step': 11180, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0924, 'F_final': 0.0, 'L_final': 0.0918}
+[pc_nosigreg_T16_coupled_e400] step 12040  |g|=1.403e-05  {'step': 12040, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0916, 'F_final': 0.0, 'L_final': 0.091}
+[pc_nosigreg_T16_coupled_e400] step 12900  |g|=1.660e-05  {'step': 12900, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0971, 'F_final': 0.0, 'L_final': 0.0963}
+[pc_nosigreg_T16_coupled_e400] step 13760  |g|=3.628e-05  {'step': 13760, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0938, 'F_final': 0.0, 'L_final': 0.0932}
+[pc_nosigreg_T16_coupled_e400] step 14620  |g|=2.558e-05  {'step': 14620, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0924, 'F_final': 0.0, 'L_final': 0.0918}
+[pc_nosigreg_T16_coupled_e400] step 15480  |g|=1.592e-05  {'step': 15480, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0865, 'F_final': 0.0, 'L_final': 0.0859}
+[pc_nosigreg_T16_coupled_e400] step 16340  |g|=2.435e-05  {'step': 16340, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0831, 'F_final': 0.0, 'L_final': 0.0826}
+[pc_nosigreg_T16_coupled_e400] step 17199  |g|=2.720e-05  {'step': 17199, 'grad_norm_preclip': 0.0, 'loss_ff': 0.0924, 'F_final': 0.0, 'L_final': 0.0917}
+=== DONE pc_nosigreg_T16_coupled_e400 957.6 s
+ALL DONE

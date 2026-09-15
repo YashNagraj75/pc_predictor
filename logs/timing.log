@@ -1,0 +1,12 @@
+BP warm step: 2.23 ms
+drive       T  compile_s    warm_ms     x_BP   cos(bp)  2k_steps_h
+coupled     8      11.81     2598.6     1166  0.414962        1.44
+coupled    16       2.77     2711.2     1217  0.416471        1.51
+coupled    64       2.83     2885.5     1295  0.424158        1.60
+coupled   256       3.34     2938.0     1318  0.438330        1.63
+frozen      8       5.60     2604.8     1169  0.414957        1.45
+frozen     16       2.46     2496.7     1120  0.416447        1.39
+frozen     64       2.54     2614.2     1173  0.423758        1.45
+frozen    256       2.64     2665.2     1196  0.432899        1.48
+TIMING_OK
+=== TIMING_DONE ===

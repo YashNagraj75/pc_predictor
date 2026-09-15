@@ -1,0 +1,11 @@
+# Environments -- regenerate with uv (see Q1-PhaseA/README or provision.sh)
+.venv/
+__pycache__/
+*.pyc
+
+# Datasets -- downloadable, too large for git (GitHub hard-blocks >100MB anyway)
+data/
+
+# Notebook checkpoints, OS junk
+.ipynb_checkpoints/
+.DS_Store

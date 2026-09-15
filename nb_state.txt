@@ -1,0 +1,276 @@
+TOTAL CELLS 20
+--- cell 0 exec=1 outputs=[]
+--- cell 1 exec=2 outputs=[]
+--- cell 2 exec=3 outputs=[]
+--- cell 4 exec=4 outputs=['stream']
+STREAM:
+[Sequential(
+  layers=(
+    Lambda(fn=Identity()),
+    Linear(
+      weight=f32[128,784],
+      bias=None,
+      in_features=784,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambda(fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>),
+    Linear(
+      weight=f32[128,128],
+      bias=None,
+      in_features=128,
+      out_features=128,
+      use_bias=False
+    )
+  )
+), Sequential(
+  layers=(
+    Lambd
+--- cell 5 exec=5 outputs=[]
+--- cell 6 exec=6 outputs=['stream']
+STREAM:
+FCResnet(
+  layers=[
+    ScaledLinear(
+      linear=Linear(
+        weight=f32[128,784],
+        bias=None,
+        in_features=784,
+        out_features=128,
+        use_bias=False
+      ),
+      scaling=0.03571428571428571
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+      act_fn=<PjitFunction of <function relu at 0x7fd9dfa3e090>>
+    ),
+    ResNetBlock(
+      scaled_linear=ScaledLinear(
+        linear=Linear(
+          weight=f32[128,128],
+          bias=None,
+          in_features=128,
+          out_features=128,
+          use_bias=False
+        ),
+        scaling=0.01613743060919757
+      ),
+  
+--- cell 7 exec=7 outputs=[]
+--- cell 8 exec=8 outputs=[]
+--- cell 9 exec=9 outputs=['stream']
+STREAM:
+Train iter 100, train loss=0.161766, avg test accuracy=86.066879
+Train iter 200, train loss=0.122849, avg test accuracy=88.724129
+Train iter 300, train loss=0.097826, avg test accuracy=90.545387
+Train iter 400, train loss=0.093509, avg test accuracy=91.271896
+Train iter 500, train loss=0.115731, avg test accuracy=92.436310
+Train iter 600, train loss=0.089593, avg test accuracy=92.078026
+Train iter 700, train loss=0.066950, avg test accuracy=93.103104
+Train iter 800, train loss=0.090923, avg test accuracy=93.441483
+Train iter 900, train loss=0.089084, avg test accuracy=93.610672
+
+--- cell 10 exec=None outputs=[]
+--- cell 12 exec=10 outputs=['stream', 'display_data']
+STREAM:
+ layer       muPC           SP
+     1     10.845        6.283
+     2     10.927        6.759
+    16     12.094       22.152
+    29     13.176       60.357
+    30      0.199        8.557
+
+drift (last hidden / first hidden):  muPC 1.21x   SP 9.61x
+
+--- cell 13 exec=11 outputs=[]
+--- cell 14 exec=13 outputs=['stream', 'error']
+STREAM:
+muPC, depth 30
+  iter  100  loss=0.1618  acc=82.24%  F(z_0)=0.1618  F(z_T)=0.1610  ||W||=810.28
+  iter  200  loss=0.1228  acc=84.22%  F(z_0)=0.1228  F(z_T)=0.1222  ||W||=860.08
+  iter  300  loss=0.0978  acc=86.46%  F(z_0)=0.0978  F(z_T)=0.0973  ||W||=898.36
+  iter  400  loss=0.0935  acc=88.59%  F(z_0)=0.0935  F(z_T)=0.0930  ||W||=938.23
+
+ERROR: KeyboardInterrupt: 
+--- cell 15 exec=None outputs=[]
+--- cell 16 exec=None outputs=[]
+--- cell 17 exec=None outputs=[]
+--- cell 18 exec=None outputs=[]
+--- cell 19 exec=None outputs=[]

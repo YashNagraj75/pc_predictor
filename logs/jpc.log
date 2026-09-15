@@ -1,0 +1,38 @@
++ cd /media/md_lab/hd_21/preprocessed/pc_predictor
++ /snap/bin/uv pip install --python .venv/bin/python 'jpc @ git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5'
+Resolved 25 packages in 1.87s
+Checked 25 packages in 1ms
++ echo '=== versions ==='
+=== versions ===
++ .venv/bin/python -c '
+import importlib.metadata as md
+for p in ['\''jax'\'','\''jaxlib'\'','\''equinox'\'','\''optax'\'','\''jpc'\'','\''numpy'\'','\''h5py'\'']:
+    try: print(p, md.version(p))
+    except Exception: print(p, '\''MISSING'\'')
+import jax; print('\''backend'\'', jax.default_backend(), jax.devices())
+import jpc; print('\''jpc import ok'\'')
+'
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jax/__init__.py", line 25, in <module>
+    from jax._src.cloud_tpu_init import cloud_tpu_init as _cloud_tpu_init
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jax/_src/cloud_tpu_init.py", line 19, in <module>
+    from jax._src import config
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jax/_src/config.py", line 27, in <module>
+    from jax._src.lib import guard_lib
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jax/_src/lib/__init__.py", line 109, in <module>
+    import jaxlib.gpu_sparse as gpu_sparse  # pytype: disable=import-error  # noqa: F401
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.11/site-packages/jaxlib/gpu_sparse.py", line 63, in <module>
+    cuda_is_supported = bool(_cusparse and _cusparse.sparse_supported)
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'jax_cuda12_plugin._sparse' has no attribute 'sparse_supported'
+jax 0.5.2
+jaxlib 0.5.1
+equinox 0.13.8
+optax 0.2.5
+jpc 1.0.0
+numpy 2.4.6
+h5py 3.16.0
++ echo '=== JPC_DONE ==='
+=== JPC_DONE ===

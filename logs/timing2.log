@@ -1,0 +1,12 @@
+BP warm step: 2.01 ms
+   drive     T  compile_s    warm_ms     x_BP       proj_2k
+  frozen     8        5.4        8.1        4        0.00h
+  frozen    16        2.8       14.2        7        0.01h
+  frozen    64        3.1       50.3       25        0.03h
+  frozen   256        3.1      169.0       84        0.09h
+ coupled     8        2.9       10.3        5        0.01h
+ coupled    16        3.1       17.9        9        0.01h
+ coupled    64        3.0       79.0       39        0.04h
+ coupled   256        3.1      234.4      117        0.13h
+TIMING2_DONE
+=== TIMING2_END ===

@@ -1,0 +1,126 @@
++ ROOT=/media/md_lab/hd_21/preprocessed/pc_predictor
++ case "$ROOT" in
++ cd /media/md_lab/hd_21/preprocessed/pc_predictor
++ export UV_LINK_MODE=copy
++ UV_LINK_MODE=copy
++ rm -rf /media/md_lab/hd_21/preprocessed/pc_predictor/.venv /tmp/probe3.13 /tmp/probe3.12
++ /snap/bin/uv venv --python 3.13 /media/md_lab/hd_21/preprocessed/pc_predictor/.venv
+Using CPython 3.13.12 interpreter at: /usr/bin/python3.13
+Creating virtual environment at: .venv
+Activate with: source .venv/bin/activate
++ /snap/bin/uv pip install --python /media/md_lab/hd_21/preprocessed/pc_predictor/.venv/bin/python 'jax[cuda12]==0.11.0' equinox==0.13.8 optax==0.2.8 h5py
+Resolved 28 packages in 680ms
+Downloading h5py (5.2MiB)
+Downloading scipy (33.7MiB)
+Downloading numpy (15.9MiB)
+Downloading jax (3.1MiB)
+Downloading jax-cuda12-pjrt (167.7MiB)
+Downloading jaxlib (83.2MiB)
+Downloading jax-cuda12-plugin (7.8MiB)
+ Downloaded h5py
+ Downloaded jax
+ Downloaded numpy
+ Downloaded scipy
+ Downloaded jax-cuda12-plugin
+ Downloaded jaxlib
+ Downloaded jax-cuda12-pjrt
+Prepared 8 packages in 1m 00s
+Installed 28 packages in 9m 58s
+ + absl-py==2.5.0
+ + equinox==0.13.8
+ + h5py==3.16.0
+ + jax==0.11.0
+ + jax-cuda12-pjrt==0.11.0
+ + jax-cuda12-plugin==0.11.0
+ + jaxlib==0.11.0
+ + jaxtyping==0.3.11
+ + ml-dtypes==0.6.0
+ + numpy==2.5.3
+ + nvidia-cublas-cu12==12.9.2.10
+ + nvidia-cuda-cccl-cu12==12.9.27
+ + nvidia-cuda-cupti-cu12==12.9.79
+ + nvidia-cuda-nvcc-cu12==12.9.86
+ + nvidia-cuda-nvrtc-cu12==12.9.86
+ + nvidia-cuda-runtime-cu12==12.9.79
+ + nvidia-cudnn-cu12==9.25.1.1
+ + nvidia-cufft-cu12==11.4.1.4
+ + nvidia-cusolver-cu12==11.7.5.82
+ + nvidia-cusparse-cu12==12.5.10.65
+ + nvidia-nccl-cu12==2.31.2
+ + nvidia-nvjitlink-cu12==12.9.86
+ + nvidia-nvshmem-cu12==3.7.2
+ + opt-einsum==3.4.0
+ + optax==0.2.8
+ + scipy==1.18.1
+ + typing-extensions==4.16.0
+ + wadler-lindig==0.1.7
++ /snap/bin/uv pip install --python /media/md_lab/hd_21/preprocessed/pc_predictor/.venv/bin/python --no-deps 'jpc @ git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5'
+Resolved 1 package in 205ms
+Installed 1 package in 26ms
+ + jpc==1.0.0 (from git+https://github.com/thebuckleylab/jpc.git@7d6cc05742d28b543311e6c4d4ca140ba996f8b5)
++ echo '=== FINAL VERIFY ==='
+=== FINAL VERIFY ===
++ /media/md_lab/hd_21/preprocessed/pc_predictor/.venv/bin/python -c '
+import importlib.metadata as md, sys
+print('\''python'\'', sys.version.split()[0])
+for p in ['\''jax'\'','\''jaxlib'\'','\''equinox'\'','\''optax'\'','\''jpc'\'','\''numpy'\'','\''h5py'\'','\''jaxtyping'\'']:
+    try: print(p, md.version(p))
+    except Exception: print(p, '\''MISSING'\'')
+import jax, jpc
+print('\''backend'\'', jax.default_backend(), jax.devices())
+import jax.numpy as jnp; x = jnp.ones((8192,8192)); print('\''matmul'\'', float((x@x)[0,0]))
+print('\''IMPORTS_OK'\'')
+'
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_init.py:22: SyntaxWarning: invalid escape sequence '\{'
+  $\{ f_\ell(\mathbf{z}_{\ell-1}) \}_{\ell=1}^L$ where $f_\ell(\cdot)$ is some
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_init.py:93: SyntaxWarning: invalid escape sequence '\s'
+  $z_i \sim \mathcal{N}(0, \sigma^2)$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_init.py:132: SyntaxWarning: invalid escape sequence '\{'
+  $\{ f_{L-\ell+1}(\mathbf{z}_{L-\ell}) \}_{\ell=1}^L$ where $\mathbf{z}_0 = \mathbf{y}$ is
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_init.py:170: SyntaxWarning: invalid escape sequence '\{'
+  """Initialises zero errors for use with ePC $\{ \epsilon_\ell = 0 \}_{l=1}^L$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:40: SyntaxWarning: invalid escape sequence '\m'
+  with respect to the activities $- ∇_{\mathbf{z}} \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:110: SyntaxWarning: invalid escape sequence '\m'
+  with respect to the activities $∇_{\mathbf{z}} \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:183: SyntaxWarning: invalid escape sequence '\m'
+  with respect to the activities $∇_{\mathbf{z}} \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:250: SyntaxWarning: invalid escape sequence '\m'
+  with respect to the activities $∇_{\mathbf{z}_\ell} \mathcal{F}_\ell$ of
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:451: SyntaxWarning: invalid escape sequence '\m'
+  with respect to model parameters $∇_θ \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:510: SyntaxWarning: invalid escape sequence '\m'
+  with respect to the amortiser's parameters $∇_θ \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:557: SyntaxWarning: invalid escape sequence '\m'
+  with respect to all the model parameters $∇_θ \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:636: SyntaxWarning: invalid escape sequence '\m'
+  with respect to all the model parameters $∇_θ \mathcal{F}$, which is the
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:867: SyntaxWarning: invalid escape sequence '\e'
+  with respect to the errors $∇_{\epsilon} \mathcal{F}$.
+/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py:917: SyntaxWarning: invalid escape sequence '\m'
+  with respect to model parameters $∇_θ \mathcal{F}$.
+Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+    import jax, jpc
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/__init__.py", line 3, in <module>
+    from ._core import (
+    ...<36 lines>...
+    )
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/__init__.py", line 15, in <module>
+    from ._grads import (
+    ...<10 lines>...
+    )
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/.venv/lib/python3.13/site-packages/jpc/_core/_grads.py", line 9, in <module>
+    from diffrax import AbstractStepSizeController
+ModuleNotFoundError: No module named 'diffrax'
+python 3.13.12
+jax 0.11.0
+jaxlib 0.11.0
+equinox 0.13.8
+optax 0.2.8
+jpc 1.0.0
+numpy 2.5.3
+h5py 3.16.0
+jaxtyping 0.3.11
++ echo '=== REBUILD_DONE ==='
+=== REBUILD_DONE ===

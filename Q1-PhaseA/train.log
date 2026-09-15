@@ -1,0 +1,12 @@
+
+########## bp_sigreg  (2000 steps) ##########
+[bp_sigreg] step     0  |g|=2.754e-01  {'step': 0, 'grad_norm_preclip': 0.2754, 'loss_ff': 1.3138, 'loss': 1.3148, 'pred': 0.6862, 'sigreg': 13.2583, 'total': 1.3148}
+[bp_sigreg] step  1000  |g|=4.944e-02  {'step': 1000, 'grad_norm_preclip': 0.0494, 'loss_ff': 0.657, 'loss': 0.658, 'pred': 0.5021, 'sigreg': 3.6216, 'total': 0.658}
+[bp_sigreg] step  1999  |g|=5.332e-02  {'step': 1999, 'grad_norm_preclip': 0.0533, 'loss_ff': 0.6364, 'loss': 0.6364, 'pred': 0.4728, 'sigreg': 3.745, 'total': 0.6364}
+########## bp_sigreg done in 106s ##########
+
+########## pc_sigreg_T16_coupled  (2000 steps) ##########
+[pc_sigreg_T16_coupled] step     0  |g|=4.834e-03  {'step': 0, 'grad_norm_preclip': 0.0048, 'loss_ff': 1.3147, 'F_final': 0.0019, 'L_final': 1.1894}
+[pc_sigreg_T16_coupled] step  1000  |g|=1.040e-03  {'step': 1000, 'grad_norm_preclip': 0.001, 'loss_ff': 0.7588, 'F_final': 0.001, 'L_final': 0.6914}
+[pc_sigreg_T16_coupled] step  1999  |g|=1.158e-03  {'step': 1999, 'grad_norm_preclip': 0.0012, 'loss_ff': 0.7741, 'F_final': 0.0011, 'L_final': 0.7014}
+########## pc_sigreg_T16_coupled done in 152s ##########
