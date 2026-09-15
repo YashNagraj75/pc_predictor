@@ -70,6 +70,28 @@ def embed_split(params, cfg, X, n, seed=0):
     return np.asarray(z), imgs, idx
 
 
+def embed_augmented(params, cfg, X, n, seed=0):
+    """ONE augmented view per image -> (Z, boxes, aug_params).
+
+    Separate from `embed_split` on purpose.  The scene-quantity probes must
+    read the deterministic centre view, because that is the deployment
+    condition for an encoder.  The augmentation-invariance probes cannot use
+    that view at all: they ask whether the crop offset and rotation APPLIED TO
+    A VIEW survive into its embedding, so they need embeddings of augmented
+    views paired with the parameters that generated them.
+
+    Only the first view of each image is kept, so rows stay independent --
+    two views of one image share a target and would leak across the
+    train/test probe split.
+    """
+    idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
+    key = jax.random.PRNGKey(10_000 + seed)
+    views, boxes, prms = D.make_views_labeled(
+        key, jax.numpy.asarray(X[idx]), cfg.data)
+    z, _ = E.forward(params, views[0], cfg.enc)
+    return np.asarray(z), np.asarray(boxes[0]), np.asarray(prms[0])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
@@ -87,18 +109,47 @@ def main():
         if not os.path.exists(os.path.join(run_dir, "params.eqx")):
             print(f"[skip] {run_dir}: no params.eqx", flush=True)
             continue
-        cfg, params = load_run(run_dir)
+        if run_dir.startswith("random:"):
+            # Untrained-encoder reference.  Not a nicety: PC's trained kNN
+            # probe previously landed BELOW this floor, so "beats backprop"
+            # and "beats doing nothing" are different questions and both have
+            # to be on the table.  Computed under the same probes and the same
+            # split as every trained arm, since the existing 0.343 reference
+            # was kNN-only and the two probes disagree.
+            sd = int(run_dir.split(":", 1)[1])
+            cfg = RunCfg(opt=OptCfg(seed=sd))
+            params = E.init(jax.random.PRNGKey(sd), cfg.enc, cfg.data.input_dim)
+            run_dir = os.path.join("runs", f"random_init_seed{sd}")
+            os.makedirs(run_dir, exist_ok=True)
+        else:
+            cfg, params = load_run(run_dir)
         Xtr, ytr, Xte, yte = D.load_dataset(cfg.data)
         Ztr, Itr, itr = embed_split(params, cfg, Xtr, args.n_train, seed=0)
         Zte, Ite, ite = embed_split(params, cfg, Xte, args.n_test, seed=1)
+
+        Zatr, Batr, Patr = embed_augmented(params, cfg, Xtr, args.n_train, seed=0)
+        Zate, Bate, Pate = embed_augmented(params, cfg, Xte, args.n_test, seed=1)
 
         tag = os.path.basename(os.path.normpath(run_dir))
         print(f"\n=== {tag}  Z{Ztr.shape} -> img{Itr.shape[1:]} ===", flush=True)
         rep = P.run_suite(
             Ztr, Zte, Itr, Ite, np.asarray(ytr)[itr], np.asarray(yte)[ite],
             out_dir=run_dir, tag="",
+            boxes_tr=Batr, boxes_te=Bate,
+            aug_params_tr=Patr, aug_params_te=Pate,
+            Zaug_tr=Zatr, Zaug_te=Zate,
             decoder_steps=400 if args.fast else args.decoder_steps,
             probe_mlp=not args.fast, make_figures=not args.no_figures)
+        # kNN probe alongside the parametric ones: it is the protocol the
+        # historical Q1 numbers and MPC's Table 1 both used, so it is the only
+        # metric directly comparable to what is already on record.
+        try:
+            import metrics as M
+            rep["knn"] = {"accuracy": float(M.knn_accuracy(
+                Ztr, np.asarray(ytr)[itr], Zte, np.asarray(yte)[ite]))}
+        except Exception as e:
+            rep["knn"] = {"error": f"{type(e).__name__}: {e}"}
+
         rep["tag"] = tag
         json.dump(rep, open(os.path.join(run_dir, "probes.json"), "w"), indent=2)
         rows.append(P.summarise(rep))
@@ -116,6 +167,15 @@ def main():
               f"(floor {rep['decode_floor']['ssim']:.4f}, "
               f"gain {rep['decode']['ssim_gain_over_floor']:+.4f})  "
               f"psnr={rep['decode']['psnr']:.2f}", flush=True)
+        if "accuracy" in rep.get("knn", {}):
+            print(f"  knn probe     {rep['knn']['accuracy']:.4f}", flush=True)
+        if "augmentation" in rep:
+            print("  -- augmentation invariance (HIGH nmse = invariance held) --",
+                  flush=True)
+            a = rep["augmentation"]["regression"]
+            for k in sorted(a):
+                print(f"  {k:18s} linear r={a[k]['linear']['r']:+.3f} "
+                      f"nmse={a[k]['linear']['nmse']:.3f}", flush=True)
 
     if rows:
         import csv

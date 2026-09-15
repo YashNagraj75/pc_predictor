@@ -210,25 +210,42 @@ def _reg_scores(pred, targ, tsd):
 
 
 def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500, lr=3e-3,
-              batch=512, seed=0):
-    """Two-layer MLP probe.  -> {nmse, mse, r}
+              batch=512, seed=0, val_frac=0.2, eval_every=50,
+              weight_decay=1e-4):
+    """Two-layer MLP probe, early-stopped.  -> {nmse, mse, r, best_step}
 
     The gap between this and `ridge_probe` is the quantity of interest: it
     separates "the encoder discarded this" from "the encoder kept this but
     entangled it nonlinearly".  metrics.py cannot distinguish those two.
+
+    EARLY STOPPING IS LOAD-BEARING HERE, not a refinement.  Trained for a
+    fixed step count with no held-out check, a probe with this much capacity
+    overfits a few thousand embeddings and can score WORSE than the
+    closed-form ridge probe -- which is incoherent as a measurement, since a
+    strictly more expressive model cannot have less access to the same
+    information.  When that happens the number describes the probe's
+    optimisation, not the representation.  So a slice of TRAIN is held out,
+    the best-validation parameters are kept, and TEST is touched exactly once
+    at the end.
     """
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ttr = np.asarray(ttr, np.float64).ravel()
     tte = np.asarray(tte, np.float64).ravel()
     tmu, tsd = ttr.mean(), ttr.std() + 1e-12
-    ytr = ((ttr - tmu) / tsd).astype(np.float32)
+    y_all = ((ttr - tmu) / tsd).astype(np.float32)
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(Ztr))
+    nval = max(1, int(val_frac * len(Ztr)))
+    vi, fi = perm[:nval], perm[nval:]
 
     key = jax.random.PRNGKey(seed)
-    k1, k2, kb = jax.random.split(key, 3)
+    k1, kb = jax.random.split(key)
     net = eqx.nn.MLP(Ztr.shape[1], 1, hidden, 1, activation=jax.nn.gelu, key=k1)
-    opt = optax.adam(lr)
+    opt = optax.adamw(lr, weight_decay=weight_decay)
     state = opt.init(eqx.filter(net, eqx.is_inexact_array))
-    Zj, yj = jnp.asarray(Ztr), jnp.asarray(ytr)
+    Zf, yf = jnp.asarray(Ztr[fi]), jnp.asarray(y_all[fi])
+    Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(y_all[vi])
 
     def loss_fn(m, zb, yb):
         return jnp.mean((jax.vmap(m)(zb).squeeze(-1) - yb) ** 2)
@@ -239,30 +256,54 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500, lr=3e-3,
         upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
         return eqx.apply_updates(m, upd), st, l
 
-    n = len(Zj)
+    @eqx.filter_jit
+    def val_loss(m):
+        return loss_fn(m, Zv, yv)
+
+    n = len(Zf)
+    best, best_net, best_step = float("inf"), net, 0
     for i in range(steps):
         kb, sub = jax.random.split(kb)
         idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
-        net, state, _ = step(net, state, Zj[idx], yj[idx])
+        net, state, _ = step(net, state, Zf[idx], yf[idx])
+        if (i + 1) % eval_every == 0:
+            v = float(val_loss(net))
+            if v < best:
+                best, best_net, best_step = v, net, i + 1
 
-    pred = np.asarray(jax.vmap(net)(jnp.asarray(Zte)).squeeze(-1), np.float64)
+    pred = np.asarray(jax.vmap(best_net)(jnp.asarray(Zte)).squeeze(-1), np.float64)
     pred = pred * tsd + tmu
-    return _reg_scores(pred, tte, tsd)
+    out = _reg_scores(pred, tte, tsd)
+    out["best_step"] = int(best_step)
+    return out
 
 
 def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
-                batch=512, seed=0):
-    """Linear (hidden=None) or MLP softmax probe.  -> {accuracy}
+                batch=512, seed=0, val_frac=0.2, eval_every=50,
+                weight_decay=1e-4):
+    """Linear (hidden=None) or MLP softmax probe, early-stopped.
+    -> {accuracy, chance, best_step, val_accuracy}
 
     Complements knn_accuracy in metrics.py: kNN is capacity-free but purely
     local, so it misses globally-linear class structure that a linear readout
     would find.  Reporting both separates "clustered" from "linearly
     separable".
+
+    Model selection on a held-out slice of TRAIN, for the reason given in
+    `mlp_probe`: without it the hidden=256 variant overfits and lands below
+    the linear variant, which cannot be a true statement about the
+    representation.  Both variants are selected the same way so the
+    linear-vs-MLP gap stays interpretable.
     """
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ytr = np.asarray(ytr).ravel().astype(np.int32)
     yte = np.asarray(yte).ravel().astype(np.int32)
     n_cls = int(max(ytr.max(), yte.max())) + 1
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(Ztr))
+    nval = max(1, int(val_frac * len(Ztr)))
+    vi, fi = perm[:nval], perm[nval:]
 
     key = jax.random.PRNGKey(seed)
     k1, kb = jax.random.split(key)
@@ -271,9 +312,10 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
     else:
         net = eqx.nn.MLP(Ztr.shape[1], n_cls, hidden, 1,
                          activation=jax.nn.gelu, key=k1)
-    opt = optax.adam(lr)
+    opt = optax.adamw(lr, weight_decay=weight_decay)
     state = opt.init(eqx.filter(net, eqx.is_inexact_array))
-    Zj, yj = jnp.asarray(Ztr), jnp.asarray(ytr)
+    Zf, yf = jnp.asarray(Ztr[fi]), jnp.asarray(ytr[fi])
+    Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(ytr[vi])
 
     def loss_fn(m, zb, yb):
         lg = jax.vmap(m)(zb)
@@ -285,14 +327,26 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
         upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
         return eqx.apply_updates(m, upd), st, l
 
-    n = len(Zj)
+    @eqx.filter_jit
+    def val_acc(m):
+        return jnp.mean(jax.vmap(m)(Zv).argmax(-1) == yv)
+
+    n = len(Zf)
+    best, best_net, best_step = -1.0, net, 0
     for i in range(steps):
         kb, sub = jax.random.split(kb)
         idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
-        net, state, _ = step(net, state, Zj[idx], yj[idx])
+        net, state, _ = step(net, state, Zf[idx], yf[idx])
+        if (i + 1) % eval_every == 0:
+            a = float(val_acc(net))
+            if a > best:
+                best, best_net, best_step = a, net, i + 1
 
-    pred = np.asarray(jax.vmap(net)(jnp.asarray(Zte)).argmax(-1))
-    return {"accuracy": float((pred == yte).mean()), "chance": float(1.0 / n_cls)}
+    pred = np.asarray(jax.vmap(best_net)(jnp.asarray(Zte)).argmax(-1))
+    return {"accuracy": float((pred == yte).mean()),
+            "chance": float(1.0 / n_cls),
+            "val_accuracy": float(best),
+            "best_step": int(best_step)}
 
 
 def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
@@ -598,7 +652,8 @@ def reconstruction_figure(X, recon, path, n=8, title="", mean_img=None):
 # ============================================================ 6. run_suite
 def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
               boxes_te=None, aug_params_te=None, boxes_tr=None,
-              aug_params_tr=None, decoder_steps=3000, probe_mlp=True,
+              aug_params_tr=None, Zaug_tr=None, Zaug_te=None,
+              decoder_steps=3000, probe_mlp=True,
               make_figures=True, seed=0, verbose=True):
     """Everything, in one call.  -> dict (json-serialisable), written to disk.
 
@@ -624,10 +679,22 @@ def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
     if boxes_te is not None and boxes_tr is not None:
         if verbose:
             print("[probes] augmentation-factor probes ...", flush=True)
+        if Zaug_tr is None or Zaug_te is None:
+            raise ValueError(
+                "augmentation probes require Zaug_tr/Zaug_te -- embeddings of "
+                "the AUGMENTED views that boxes_*/aug_params_* describe. "
+                "Handing them the deterministic centre-view embeddings "
+                "(Ztr/Zte) asks whether a crop box is recoverable from an "
+                "image that was never cropped, which is unanswerable by "
+                "construction and would score as a spurious invariance.")
         Atr = augmentation_factors(boxes_tr, aug_params_tr)
         Ate = augmentation_factors(boxes_te, aug_params_te)
-        rep["augmentation"] = probe_report(Ztr, Zte, Atr, Ate,
+        rep["augmentation"] = probe_report(Zaug_tr, Zaug_te, Atr, Ate,
                                            mlp=probe_mlp, seed=seed)
+        rep["augmentation_note"] = (
+            "Read INVERTED relative to 'scene': the objective asks the encoder "
+            "to be invariant to these, so LOW r / HIGH nmse is the good "
+            "outcome. Recovering a factor means the invariance did not take.")
 
     if verbose:
         print("[probes] decoder ...", flush=True)
