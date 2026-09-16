@@ -209,8 +209,9 @@ def _reg_scores(pred, targ, tsd):
     return {"nmse": float(mse / (tsd ** 2)), "mse": mse, "r": r}
 
 
-def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500, lr=3e-3,
-              batch=512, seed=0, val_frac=0.2, eval_every=50,
+def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
+              lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
+              eval_every=50,
               weight_decay=1e-4):
     """Two-layer MLP probe, early-stopped.  -> {nmse, mse, r, best_step}
 
@@ -239,11 +240,6 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500, lr=3e-3,
     nval = max(1, int(val_frac * len(Ztr)))
     vi, fi = perm[:nval], perm[nval:]
 
-    key = jax.random.PRNGKey(seed)
-    k1, kb = jax.random.split(key)
-    net = eqx.nn.MLP(Ztr.shape[1], 1, hidden, 1, activation=jax.nn.gelu, key=k1)
-    opt = optax.adamw(lr, weight_decay=weight_decay)
-    state = opt.init(eqx.filter(net, eqx.is_inexact_array))
     Zf, yf = jnp.asarray(Ztr[fi]), jnp.asarray(y_all[fi])
     Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(y_all[vi])
 
@@ -251,38 +247,55 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500, lr=3e-3,
         return jnp.mean((jax.vmap(m)(zb).squeeze(-1) - yb) ** 2)
 
     @eqx.filter_jit
-    def step(m, st, zb, yb):
-        l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
-        upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
-        return eqx.apply_updates(m, upd), st, l
-
-    @eqx.filter_jit
     def val_loss(m):
         return loss_fn(m, Zv, yv)
 
     n = len(Zf)
-    best, best_net, best_step = float("inf"), net, 0
-    for i in range(steps):
-        kb, sub = jax.random.split(kb)
-        idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
-        net, state, _ = step(net, state, Zf[idx], yf[idx])
-        if (i + 1) % eval_every == 0:
-            v = float(val_loss(net))
-            if v < best:
-                best, best_net, best_step = v, net, i + 1
+    best, best_net, best_step, best_lr = float("inf"), None, 0, None
+    for lr in lrs:
+        key = jax.random.PRNGKey(seed)
+        k1, kb = jax.random.split(key)
+        net = eqx.nn.MLP(Ztr.shape[1], 1, hidden, 1,
+                         activation=jax.nn.gelu, key=k1)
+        opt = optax.adamw(lr, weight_decay=weight_decay)
+        state = opt.init(eqx.filter(net, eqx.is_inexact_array))
+
+        @eqx.filter_jit
+        def step(m, st, zb, yb):
+            l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
+            upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
+            return eqx.apply_updates(m, upd), st, l
+
+        for i in range(steps):
+            kb, sub = jax.random.split(kb)
+            idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
+            net, state, _ = step(net, state, Zf[idx], yf[idx])
+            if (i + 1) % eval_every == 0:
+                v = float(val_loss(net))
+                if v < best:
+                    best, best_net, best_step, best_lr = v, net, i + 1, lr
 
     pred = np.asarray(jax.vmap(best_net)(jnp.asarray(Zte)).squeeze(-1), np.float64)
     pred = pred * tsd + tmu
     out = _reg_scores(pred, tte, tsd)
     out["best_step"] = int(best_step)
+    out["best_lr"] = float(best_lr)
     return out
 
 
-def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
-                batch=512, seed=0, val_frac=0.2, eval_every=50,
-                weight_decay=1e-4):
-    """Linear (hidden=None) or MLP softmax probe, early-stopped.
-    -> {accuracy, chance, best_step, val_accuracy}
+def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
+                lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
+                eval_every=50, weight_decay=1e-4):
+    """Linear (hidden=None) or MLP softmax probe, early-stopped over a small
+    learning-rate grid.  -> {accuracy, chance, best_step, best_lr, val_accuracy}
+
+    The learning rate is SELECTED on validation, not fixed.  With a single
+    fixed rate the MLP variant peaked at step 100 of 2000 on every arm --
+    a probe that peaks at 5% of its budget is reporting its own tuning, not
+    the representation's extractable content, and it understates every arm's
+    number by an unknown amount.  Since the linear-vs-MLP gap is the quantity
+    that distinguishes "information absent" from "information entangled", the
+    probe has to be selected properly for that gap to mean anything.
 
     Complements knn_accuracy in metrics.py: kNN is capacity-free but purely
     local, so it misses globally-linear class structure that a linear readout
@@ -305,15 +318,6 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
     nval = max(1, int(val_frac * len(Ztr)))
     vi, fi = perm[:nval], perm[nval:]
 
-    key = jax.random.PRNGKey(seed)
-    k1, kb = jax.random.split(key)
-    if hidden is None:
-        net = eqx.nn.Linear(Ztr.shape[1], n_cls, key=k1)
-    else:
-        net = eqx.nn.MLP(Ztr.shape[1], n_cls, hidden, 1,
-                         activation=jax.nn.gelu, key=k1)
-    opt = optax.adamw(lr, weight_decay=weight_decay)
-    state = opt.init(eqx.filter(net, eqx.is_inexact_array))
     Zf, yf = jnp.asarray(Ztr[fi]), jnp.asarray(ytr[fi])
     Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(ytr[vi])
 
@@ -322,31 +326,43 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000, lr=3e-3,
         return -jnp.mean(jax.nn.log_softmax(lg)[jnp.arange(len(yb)), yb])
 
     @eqx.filter_jit
-    def step(m, st, zb, yb):
-        l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
-        upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
-        return eqx.apply_updates(m, upd), st, l
-
-    @eqx.filter_jit
     def val_acc(m):
         return jnp.mean(jax.vmap(m)(Zv).argmax(-1) == yv)
 
     n = len(Zf)
-    best, best_net, best_step = -1.0, net, 0
-    for i in range(steps):
-        kb, sub = jax.random.split(kb)
-        idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
-        net, state, _ = step(net, state, Zf[idx], yf[idx])
-        if (i + 1) % eval_every == 0:
-            a = float(val_acc(net))
-            if a > best:
-                best, best_net, best_step = a, net, i + 1
+    best, best_net, best_step, best_lr = -1.0, None, 0, None
+    for lr in lrs:
+        key = jax.random.PRNGKey(seed)
+        k1, kb = jax.random.split(key)
+        if hidden is None:
+            net = eqx.nn.Linear(Ztr.shape[1], n_cls, key=k1)
+        else:
+            net = eqx.nn.MLP(Ztr.shape[1], n_cls, hidden, 1,
+                             activation=jax.nn.gelu, key=k1)
+        opt = optax.adamw(lr, weight_decay=weight_decay)
+        state = opt.init(eqx.filter(net, eqx.is_inexact_array))
+
+        @eqx.filter_jit
+        def step(m, st, zb, yb):
+            l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
+            upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
+            return eqx.apply_updates(m, upd), st, l
+
+        for i in range(steps):
+            kb, sub = jax.random.split(kb)
+            idx = jax.random.choice(sub, n, (min(batch, n),), replace=False)
+            net, state, _ = step(net, state, Zf[idx], yf[idx])
+            if (i + 1) % eval_every == 0:
+                a = float(val_acc(net))
+                if a > best:
+                    best, best_net, best_step, best_lr = a, net, i + 1, lr
 
     pred = np.asarray(jax.vmap(best_net)(jnp.asarray(Zte)).argmax(-1))
     return {"accuracy": float((pred == yte).mean()),
             "chance": float(1.0 / n_cls),
             "val_accuracy": float(best),
-            "best_step": int(best_step)}
+            "best_step": int(best_step),
+            "best_lr": float(best_lr)}
 
 
 def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
