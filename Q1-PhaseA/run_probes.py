@@ -106,7 +106,10 @@ def main():
 
     rows = []
     for run_dir in args.runs:
-        if not os.path.exists(os.path.join(run_dir, "params.eqx")):
+        # The random:<seed> reference has no params.eqx by definition, so this
+        # branch must come BEFORE the missing-weights guard below.
+        if not run_dir.startswith("random:") and \
+                not os.path.exists(os.path.join(run_dir, "params.eqx")):
             print(f"[skip] {run_dir}: no params.eqx", flush=True)
             continue
         if run_dir.startswith("random:"):
