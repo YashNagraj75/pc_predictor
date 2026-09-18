@@ -9,3 +9,13 @@ data/
 # Notebook checkpoints, OS junk
 .ipynb_checkpoints/
 .DS_Store
+
+# Scratch and duplicated outputs -- canonical probe outputs live in
+# Q1-PhaseA/runs/<run>/; these top-level copies were byte-identical strays.
+_*.py
+*.pre_fix_bak
+*.prepatch
+*.prefigpatch
+/probes_*.json
+/recon_*.png
+/tsne_*.png
