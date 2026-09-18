@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import metrics as M
 import numpy as np
+import pcalm as PA
 import optax
 import sigreg as S
 from config import RunCfg
@@ -64,65 +65,31 @@ def grad_update(params,g, opt_state,opt):
     return eqx.apply_updates(params,upd), opt_state
 
 def pc_relax(params, Zin, A, cfg, key):
-    V = Zin.shape[0]
+    """Relaxation.  Delegates to pcalm.relax, which is a strict generalisation.
 
-    # init, z_0 is clamped to Zin[v]
-    acts0 = []
-    for v in range(V):
-        z,hs = E.forward(params,Zin[v], cfg.enc)
-        acts0.append([*hs, z])
+    The PC arm is the `cfg.pc.alpha == 0` special case of PC-ALM: the duals stay
+    zero and the augmented Lagrangian collapses to the PC energy, so there is
+    ONE relaxation implementation rather than two that can drift apart.  The
+    alpha=0 equivalence is pinned by test_pcalm.py.
 
-    def loss_z(Zv):
-        return S.lejepa_loss(Zv,A,cfg.data.n_global_views,cfg.sig.lambd,cfg.use_sigreg,projector=cfg.projector,t_max=cfg.sig.t_max,n_points=cfg.sig.n_points, scale_by_n=cfg.sig.scale_by_n)[0]
-
-
-    def out_stack(acts):
-        return jnp.stack([acts[v][-1] for v in range(V)])
-
-    def F_int(acts):
-        return sum(E.energy(params,acts[v],Zin[v],cfg.enc) for v in range(V))
-
-    g0 = jax.grad(loss_z)(out_stack(acts0)) if cfg.pc.output_drive == "frozen" else None
-    dF = jax.grad(F_int)
-    dL = jax.grad(lambda a: loss_z(out_stack(a)))
-
-    # 3. Eq. A.  The two variants differ only in the second term.
-    def step(acts, _):
-        g = dF(acts)
-        if cfg.pc.output_drive == "coupled":
-            gL = dL(acts)                                   # recomputed each t
-            g = [[gi + gj for gi, gj in zip(g[v], gL[v])] for v in range(V)]
-        else:
-            g = [[*g[v][:-1], g[v][-1] + g0[v]] for v in range(V)]   # cached
-        new = [[z - cfg.pc.activity_lr * gz for z, gz in zip(acts[v], g[v])]
-               for v in range(V)]
-        return new, (F_int(new), loss_z(out_stack(new)))
-
-    acts_T, (F_hist, L_hist) = jax.lax.scan(step, acts0, None, length=cfg.pc.T)
-    return acts_T, {"F":F_hist, "L": L_hist}
-
-
+    Returns (acts, hist) -- the duals are dropped here to keep the old
+    two-value contract that diag_inference.py depends on.  Use pcalm.relax
+    directly if you need them.
+    """
+    acts, _duals, hist = PA.relax(params, Zin, A, cfg, key)
+    return acts, hist
 
 
 @eqx.filter_jit
 def pc_grads(params, Zin, A, cfg, key):
-    """TODO -- weight gradients from the relaxed activities.
+    """Weight gradients from the relaxed primal-dual state.
 
-    Once relaxed, each weight's gradient is LOCAL:
-        dF/dW_l = -eps_l * dphi(z_{l-1})/dW_l
-    i.e. the prediction error at layer l times the local input.  No
-    backward pass through the network.
+    Once relaxed, each weight's gradient is LOCAL: layer l sees only its own
+    composite credit (rho * r_l + lam_l) and the activity below it.  No
+    backward pass through the network.  At alpha=0 the lam_l term vanishes and
+    this is the plain PC update.
     """
-    acts_T, hist = pc_relax(params,Zin,A,cfg,key)
-    acts_T = jax.lax.stop_gradient(acts_T)
-    V = Zin.shape[0]
-
-    def F_tot(p):
-        return sum(E.energy(p,acts_T[v], Zin[v],cfg.enc) for v in range(V))
-
-    g = eqx.filter_grad(F_tot)(params)
-    return g, {"F_final": hist["F"][-1],"L_final": hist["L"][-1],
-               "F_hist": hist["F"], "L_hist": hist["L"]}
+    return PA.grads(params, Zin, A, cfg, key)
 
 
 def _global_norm(g):

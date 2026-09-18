@@ -6,7 +6,7 @@ Defaults for the encoder block mirror the mu_pc.ipynb notebook so the existing
 muPC machinery transfers unchanged.
 """
 from dataclasses import dataclass, field, asdict
-from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 import json
 
 
@@ -68,7 +68,22 @@ class PCCfg:
     """Predictive-coding inference (relaxation) settings."""
     T: int = 16                     # inference steps per weight update.
                                     # THE independent variable of this study.
-    activity_lr: float = 0.5
+    # PER-SAMPLE activity step (the paper's eta_h).  Replaces the old
+    # `activity_lr`, which was applied straight to jpc's BATCH-MEAN energy
+    # gradient and so realised eta_h/B per sample: at activity_lr=0.5,
+    # batch_size=256 the realised step was 0.002 against a stable optimum near
+    # 0.25, and the relaxation never left its initialisation.  pcalm.relax
+    # multiplies this by the batch size.  Set it from diag_inference.py.
+    eta_h: float = 0.25
+    # --- augmented Lagrangian (PC-ALM) ---------------------------------
+    # alpha = 0 is plain PC: the duals stay zero and the energy collapses to
+    # the PC energy, so the PC arm is the alpha=0 special case of the PC-ALM
+    # code path rather than a separate implementation.
+    alpha: float = 0.0              # dual rate
+    rho: float = 1.0                # penalty strength; rho=1 == jpc's energy
+    out_scale: Optional[float] = None   # output-layer precision (jpc's
+                                        # output_energy_scaling); None == 1
+    weight_credit_timing: Literal["pre_dual", "post_dual"] = "pre_dual"
     init: Literal["feedforward", "zeros"] = "feedforward"
     # How the output node is driven when the loss is not a per-sample target.
     #   "coupled" : eps_out = dL/dz_out recomputed every relaxation step from the
