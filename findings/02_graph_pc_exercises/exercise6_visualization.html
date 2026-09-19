@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exercise 6 — the error wave and the inference floor</title>
+<style>
+  :root {
+    --bg: #fafafa; --panel: #ffffff; --ink: #1c1c1c; --muted: #6b6b6b;
+    --line: #dcdcdc; --accent: #2f5fa6; --accent2: #c1553f;
+    --zero: #e7e7e7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
+  h1 { font-size: 22px; font-weight: 650; margin: 0 0 4px; }
+  h1 .eq { color: var(--muted); font-weight: 450; }
+  .subtitle { color: var(--muted); margin: 0 0 22px; font-size: 14.5px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 22px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; font-weight: 650; margin: 0 0 10px; text-transform: none; }
+  .card h2 .letter {
+    display: inline-block; width: 20px; height: 20px; border-radius: 5px;
+    background: #eef2f8; color: var(--accent); text-align: center; line-height: 20px;
+    font-size: 12.5px; font-weight: 700; margin-right: 8px;
+  }
+  p { margin: 0 0 10px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab {
+    padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+    cursor: pointer; font-size: 13.5px; color: var(--muted); user-select: none;
+  }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  svg { width: 100%; height: auto; display: block; }
+  .controls { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
+  button.ctl {
+    border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 7px 12px;
+    cursor: pointer; font-size: 13.5px; color: var(--ink);
+  }
+  button.ctl:hover { background: #f2f2f2; }
+  button.ctl.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.ctl.primary:hover { background: #274d87; }
+  input[type=range] { flex: 1; min-width: 160px; }
+  .step-label { font-size: 13.5px; color: var(--muted); min-width: 92px; text-align: right; }
+  .legend { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .legend .grad {
+    width: 160px; height: 10px; border-radius: 4px;
+    background: linear-gradient(to right, #e7e7e7 0%, #cfe0f5 12%, #6f9bd6 45%, #2f5fa6 70%, #c1553f 100%);
+    border: 1px solid var(--line);
+  }
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.cmp th, table.cmp td { text-align: center; padding: 5px 4px; border-bottom: 1px solid var(--line); }
+  table.cmp th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  table.cmp td.match { color: #1e7a3c; font-weight: 700; }
+  table.cmp td.pending { color: var(--muted); }
+  .side-note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .callout {
+    background: #fbf6ea; border: 1px solid #ecdfb8; border-radius: 8px;
+    padding: 10px 14px; font-size: 13.5px; margin-top: 12px;
+  }
+  .callout b { color: #8a6414; }
+  code { background: #f1f1f1; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+  .floor-plot { margin-top: 4px; }
+  .floor-plot text { font-size: 10.5px; fill: var(--muted); }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Exercise 6 <span class="eq">— the error wave and the inference floor</span></h1>
+  <p class="subtitle">
+    Step through the relaxation and watch each node's error switch on. The step at which it switches on
+    is exactly its distance to the output node — a pure graph-theory number predicting a numerical one.
+  </p>
+
+  <div class="card">
+    <h2><span class="letter">1</span>Pick a graph</h2>
+    <div class="tabs" id="tabs"></div>
+    <p id="graphDesc" class="side-note" style="margin-top:-4px;"></p>
+
+    <div class="layout">
+      <div>
+        <svg id="graphSvg" viewBox="0 0 900 260" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="controls">
+          <button class="ctl" id="btnReset">⟲ reset</button>
+          <button class="ctl" id="btnBack">◀ step</button>
+          <button class="ctl primary" id="btnPlay">▶ play</button>
+          <button class="ctl" id="btnFwd">step ▶</button>
+          <input type="range" id="stepSlider" min="0" max="8" value="0" step="1">
+          <div class="step-label" id="stepLabel">t = 0 (feedforward)</div>
+        </div>
+        <div class="legend">
+          <span>node error |ε<sub>i</sub>|:</span>
+          <span class="grad"></span>
+          <span>zero → large</span>
+          <span style="margin-left:14px;">◎ = just switched on this step</span>
+        </div>
+      </div>
+
+      <div>
+        <h2 style="font-size:14px;">Distance vs. arrival step</h2>
+        <table class="cmp" id="cmpTable"></table>
+        <p class="side-note">
+          "distance" is computed once from the graph's wiring, before any relaxation runs.
+          "first nonzero step" is read off the simulation as you step through it. Watch them
+          land on the same row.
+        </p>
+      </div>
+    </div>
+
+    <div class="callout" id="foldedCallout" style="display:none;">
+      <b>Compare this to the plain chain.</b> resid_folded computes the exact same function as
+      resid_explicit — same weights, same output — but its skip connection is hidden inside one
+      node's formula instead of being a real edge. The graph never sees the shortcut, so the wave
+      still has to cross all 6 nodes one at a time, same as the plain chain. Switch tabs to see it.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="letter">2</span>Why "distance" is a hard floor, not a suggestion</h2>
+    <p>
+      Run only <code>T</code> relaxation steps and any node farther than <code>T</code> from the output
+      has an error of <em>exactly</em> zero — not small, zero — because the wave hasn't reached it yet.
+      A zero error gives a zero weight gradient (Exercise 7), so that node receives no update at all.
+    </p>
+    <p>
+      Reaching a node is necessary but not sufficient: the plot below shows how far the PC gradient
+      still is from the true (backprop) gradient at each step count, for the two 6-hop-vs-3-hop graphs.
+      The dotted lines mark each graph's floor — the error is only <em>nonzero</em> there, not yet
+      <em>correct</em>.
+    </p>
+    <svg id="floorSvg" class="floor-plot" viewBox="0 0 900 300" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <footer>Generated from your own <code>graph_pc_walkthrough.ipynb</code> graphs — chain(6), resid_folded(6), resid_explicit(3) — all run with the same input/target/seed.</footer>
+</div>
+
+<script>
+const DATA = {"chain": {"label": "Chain (plain 6-layer network)", "parents": [[], [0], [1], [2], [3], [4], [5]], "children": [[[1, 0]], [[2, 0]], [[3, 0]], [[4, 0]], [[5, 0]], [[6, 0]], []], "dist_to_output": [6, 5, 4, 3, 2, 1, 0], "n_nodes": 7, "N": 6, "mags": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.2056297063827515], [0.0, 0.0, 0.0, 0.0, 0.0, 0.07058261334896088, 1.2056297063827515], [0.0, 0.0, 0.0, 0.0, 0.002762243151664734, 0.13763608038425446, 1.2056297063827515], [0.0, 0.0, 0.0, 0.000161781907081604, 0.00801050290465355, 0.20133689045906067, 1.2056297063827515], [0.0, 0.0, 7.936730980873108e-06, 0.0006228536367416382, 0.015489276498556137, 0.2618526816368103, 1.2056297063827515], [0.0, 2.980232238769531e-07, 3.809481859207153e-05, 0.001498892903327942, 0.024962391704320908, 0.3193426728248596, 1.2056297063827515], [0.0, 1.7210841178894043e-06, 0.00010972097516059875, 0.002885960042476654, 0.03621171787381172, 0.37395814061164856, 1.2056297063827515], [0.0, 5.774199962615967e-06, 0.00024581141769886017, 0.004862524569034576, 0.049035947769880295, 0.42584285140037537, 1.2056297063827515], [0.0, 1.4759600162506104e-05, 0.0004720613360404968, 0.007491357624530792, 0.06324946880340576, 0.47513332962989807, 1.2056297063827515]], "first_lit": [null, 5, 4, 3, 2, 1, 0], "has_theta": [false, true, true, true, true, true, true], "depth": [0, 1, 2, 3, 4, 5, 6]}, "resid_folded": {"label": "Residual, folded (skip hidden inside the edge function)", "parents": [[], [0], [1], [2], [3], [4], [5]], "children": [[[1, 0]], [[2, 0]], [[3, 0]], [[4, 0]], [[5, 0]], [[6, 0]], []], "dist_to_output": [6, 5, 4, 3, 2, 1, 0], "n_nodes": 7, "N": 6, "mags": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.2424988746643066], [0.0, 0.0, 0.0, 0.0, 0.0, 0.214638352394104, 3.2424988746643066], [0.0, 0.0, 0.0, 0.0, 0.014822900295257568, 0.4185447692871094, 3.2424988746643066], [0.0, 0.0, 0.0, 0.0008247792720794678, 0.04298633337020874, 0.612255871295929, 3.2424988746643066], [0.0, 0.0, 9.745359420776367e-05, 0.00317537784576416, 0.08311927318572998, 0.7962813973426819, 3.2424988746643066], [0.0, 6.213784217834473e-06, 0.0004677623510360718, 0.00764155387878418, 0.13395428657531738, 0.971105694770813, 3.2424988746643066], [0.0, 3.5703182220458984e-05, 0.0013472437858581543, 0.01471295952796936, 0.1943209171295166, 1.1371886730194092, 3.2424988746643066], [0.0, 0.00011976063251495361, 0.0030182451009750366, 0.0247897207736969, 0.2631388306617737, 1.2949676513671875, 3.2424988746643066], [0.0, 0.0003060847520828247, 0.005796283483505249, 0.03819182515144348, 0.33941203355789185, 1.4448575973510742, 3.2424988746643066]], "first_lit": [null, 5, 4, 3, 2, 1, 0], "has_theta": [false, true, true, true, true, true, true], "depth": [0, 1, 2, 3, 4, 5, 6]}, "resid_explicit": {"label": "Residual, explicit (skip is a real graph edge)", "parents": [[], [0], [0, 1], [2], [2, 3], [4], [4, 5]], "children": [[[1, 0], [2, 0]], [[2, 1]], [[3, 0], [4, 0]], [[4, 1]], [[5, 0], [6, 0]], [[6, 1]], []], "dist_to_output": [3, 3, 2, 2, 1, 1, 0], "n_nodes": 7, "N": 6, "mags": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.5007294416427612], [0.0, 0.0, 0.0, 0.0, 0.07503648102283478, 0.07503647357225418, 1.5007294416427612], [0.0, 0.0, 0.0037518292665481567, 0.0037518246099352837, 0.14658723771572113, 0.1463211178779602, 1.5007294416427612], [0.0, 0.00018759071826934814, 0.01092560589313507, 0.010893595404922962, 0.2148132622241974, 0.21404153108596802, 1.5007294416427612], [0.0, 0.0007244907319545746, 0.02121618390083313, 0.0210895799100399, 0.27986815571784973, 0.27837592363357544, 1.5007294416427612], [0.0, 0.0017490759491920471, 0.0343412309885025, 0.03402850776910782, 0.34189844131469727, 0.33949360251426697, 1.5007294416427612], [0.0, 0.003378685563802719, 0.05003952980041504, 0.0494220070540905, 0.40104395151138306, 0.3975553810596466, 1.5007294416427612], [0.0, 0.0057117268443107605, 0.06806938350200653, 0.06700310111045837, 0.4574381113052368, 0.45271408557891846, 1.5007294416427612], [0.0, 0.00882960855960846, 0.08820715546607971, 0.0865248516201973, 0.511208176612854, 0.5051148533821106, 1.5007294416427612]], "first_lit": [null, 3, 2, 2, 1, 1, 0], "has_theta": [false, true, false, true, false, true, false], "depth": [0, 1, 2, 3, 4, 5, 6]}};
+const ORDER = ["chain", "resid_folded", "resid_explicit"];
+
+let current = "chain";
+let step = 0;
+let playing = false;
+let playTimer = null;
+
+const svgNS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, children) {
+  const e = document.createElementNS(svgNS, tag);
+  for (const k in (attrs||{})) e.setAttribute(k, attrs[k]);
+  (children||[]).forEach(c => e.appendChild(c));
+  return e;
+}
+function htmlEl(tag, attrs, text) {
+  const e = document.createElement(tag);
+  for (const k in (attrs||{})) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// ---- color scale for |eps| ----
+function magColor(m) {
+  if (m <= 1e-14) return "#e7e7e7";
+  const lo = -6, hi = 0.6;                       // log10 range we care about
+  let t = (Math.log10(Math.max(m, 1e-12)) - lo) / (hi - lo);
+  t = Math.max(0, Math.min(1, t));
+  const stops = [
+    [0.00, [207,224,245]],
+    [0.45, [111,155,214]],
+    [0.70, [47,95,166]],
+    [1.00, [193,85,63]],
+  ];
+  for (let i=0;i<stops.length-1;i++){
+    const [t0,c0]=stops[i], [t1,c1]=stops[i+1];
+    if (t>=t0 && t<=t1){
+      const f=(t-t0)/(t1-t0);
+      const r=Math.round(c0[0]+f*(c1[0]-c0[0]));
+      const g=Math.round(c0[1]+f*(c1[1]-c0[1]));
+      const b=Math.round(c0[2]+f*(c1[2]-c0[2]));
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  return "rgb(193,85,63)";
+}
+
+const DESCS = {
+  chain: "A plain 6-layer chain. Every node has exactly one child, so the wave crosses one node per step — no shortcuts.",
+  resid_folded: "Same function as resid_explicit, but the skip connection is folded inside the edge function's formula. The graph itself is still a plain chain.",
+  resid_explicit: "The skip connection is a real second parent on each merge node. That gives the wave a shortcut, so it needs only 3 steps instead of 6.",
+};
+
+function buildTabs() {
+  const tabs = document.getElementById("tabs");
+  tabs.innerHTML = "";
+  ORDER.forEach(name => {
+    const t = htmlEl("div", {class: "tab" + (name===current?" active":"")}, DATA[name].label.split(" (")[0]);
+    t.onclick = () => { current = name; step = 0; stopPlay(); render(); };
+    tabs.appendChild(t);
+  });
+}
+
+function nodePositions(d) {
+  const n = d.n_nodes;
+  const W = 900, H = 260, marginX = 60, topY = 130;
+  const xs = [];
+  for (let i=0;i<n;i++) xs.push(marginX + (W - 2*marginX) * (d.depth[i] / (n-1)));
+  return xs.map(x => [x, topY]);
+}
+
+function drawGraph() {
+  const d = DATA[current];
+  const svg = document.getElementById("graphSvg");
+  svg.innerHTML = "";
+  const pos = nodePositions(d);
+  const n = d.n_nodes;
+
+  // edges
+  for (let i=0;i<n;i++) {
+    d.parents[i].forEach((p, slot) => {
+      const [x1,y1] = pos[p], [x2,y2] = pos[i];
+      const isSkip = d.parents[i].length > 1 && slot === 0; // the "skip" parent on a merge
+      const curve = isSkip ? 46 : 0;
+      const midx = (x1+x2)/2, midy = y1 - curve;
+      const path = `M ${x1} ${y1} Q ${midx} ${midy} ${x2} ${y2}`;
+      svg.appendChild(el("path", {
+        d: path, fill: "none",
+        stroke: isSkip ? "#b8b8b8" : "#9b9b9b",
+        "stroke-width": isSkip ? 1.6 : 1.4,
+        "stroke-dasharray": isSkip ? "4,3" : "none",
+        "marker-end": "url(#arrow)"
+      }));
+    });
+  }
+
+  // arrow marker
+  const defs = el("defs", {}, [
+    el("marker", {id:"arrow", viewBox:"0 0 10 10", refX:"8", refY:"5",
+                  markerWidth:"6", markerHeight:"6", orient:"auto-start-reverse"},
+      [el("path", {d:"M0,0 L10,5 L0,10 z", fill:"#9b9b9b"})])
+  ]);
+  svg.appendChild(defs);
+
+  const mags = d.mags[step];
+  const firstLit = d.first_lit;
+
+  for (let i=0;i<n;i++) {
+    const [x,y] = pos[i];
+    const isInput = i===0, isOutput = i===n-1;
+    const m = mags[i];
+    const r = isInput || isOutput ? 22 : 20;
+    const fill = isInput ? "#f4f4f4" : (isOutput ? "#333" : magColor(m));
+
+    const g = el("g", {});
+    const justLit = (firstLit[i] === step) && step > 0 && !isOutput;
+
+    if (justLit) {
+      g.appendChild(el("circle", {cx:x, cy:y, r:r+9, fill:"none", stroke:"#c1553f",
+                                   "stroke-width":2, opacity:0.75}));
+    }
+    g.appendChild(el("circle", {
+      cx:x, cy:y, r:r, fill: fill,
+      stroke: isOutput ? "#111" : "#8b8b8b", "stroke-width": isOutput ? 1.6 : 1
+    }));
+    const labelColor = (isOutput || (!isInput && m > 0.25)) ? "#fff" : "#333";
+    g.appendChild(el("text", {x:x, y:y+4, "text-anchor":"middle",
+                               "font-size":"12", "font-weight":"600", fill: labelColor},
+                      [document.createTextNode("v"+i)]));
+    // sub label under node: role
+    let role = isInput ? "input" : isOutput ? "output (clamped)" : (d.has_theta[i] ? "weighted" : "merge");
+    g.appendChild(el("text", {x:x, y:y+38, "text-anchor":"middle", "font-size":"10.5", fill:"#8a8a8a"},
+                      [document.createTextNode(role)]));
+    // magnitude value
+    if (!isInput) {
+      g.appendChild(el("text", {x:x, y:y-32, "text-anchor":"middle", "font-size":"10", fill:"#666"},
+                        [document.createTextNode(m<=1e-14 ? "0" : m.toExponential(1))]));
+    }
+    svg.appendChild(g);
+  }
+
+  document.getElementById("graphDesc").textContent = DESCS[current];
+  document.getElementById("foldedCallout").style.display = (current==="resid_folded") ? "block" : "none";
+}
+
+function drawTable() {
+  const d = DATA[current];
+  const n = d.n_nodes;
+  const tbl = document.getElementById("cmpTable");
+  let html = "<tr><th>node</th>";
+  for (let i=1;i<n;i++) html += `<th>v${i}</th>`;
+  html += "</tr><tr><td>graph distance</td>";
+  for (let i=1;i<n;i++) html += `<td>${d.dist_to_output[i]}</td>`;
+  html += "</tr><tr><td>first nonzero step</td>";
+  for (let i=1;i<n;i++) {
+    const fl = d.first_lit[i];
+    const known = fl !== null && fl <= step;
+    const val = known ? fl : "…";
+    const cls = known ? (fl === d.dist_to_output[i] ? "match" : "") : "pending";
+    html += `<td class="${cls}">${val}</td>`;
+  }
+  html += "</tr>";
+  tbl.innerHTML = html;
+}
+
+function updateControls() {
+  const d = DATA[current];
+  document.getElementById("stepSlider").max = d.N + 2;
+  document.getElementById("stepSlider").value = step;
+  document.getElementById("stepLabel").textContent = step === 0 ? "t = 0 (feedforward)" : `t = ${step}`;
+}
+
+function render() {
+  buildTabs();
+  drawGraph();
+  drawTable();
+  updateControls();
+}
+
+document.getElementById("stepSlider").addEventListener("input", (e) => {
+  step = parseInt(e.target.value, 10);
+  stopPlay();
+  drawGraph(); drawTable(); updateControls();
+});
+document.getElementById("btnFwd").onclick = () => {
+  const d = DATA[current];
+  step = Math.min(step+1, d.N+2);
+  stopPlay();
+  drawGraph(); drawTable(); updateControls();
+};
+document.getElementById("btnBack").onclick = () => {
+  step = Math.max(step-1, 0);
+  stopPlay();
+  drawGraph(); drawTable(); updateControls();
+};
+document.getElementById("btnReset").onclick = () => {
+  step = 0; stopPlay();
+  drawGraph(); drawTable(); updateControls();
+};
+document.getElementById("btnPlay").onclick = () => {
+  if (playing) { stopPlay(); return; }
+  playing = true;
+  document.getElementById("btnPlay").textContent = "⏸ pause";
+  playTimer = setInterval(() => {
+    const d = DATA[current];
+    step += 1;
+    if (step > d.N + 2) { step = 0; }
+    drawGraph(); drawTable(); updateControls();
+  }, 700);
+};
+function stopPlay() {
+  playing = false;
+  document.getElementById("btnPlay").textContent = "▶ play";
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+}
+
+// ---- floor plot: PC-vs-backprop error decay for chain vs resid_explicit ----
+// (Ts and max-abs-error curves, precomputed to match the notebook's equivalence sweep)
+const FLOOR = {"Ts": [1, 2, 3, 5, 10, 20, 50, 100, 200, 400], "series": {"chain": {"errs": [1.3410695791244507, 1.2942430973052979, 1.2940813302993774, 1.2927441596984863, 1.2793546915054321, 1.2496366500854492, 0.9655879139900208, 0.417605996131897, 0.02533203363418579, 1.2934207916259766e-05]}, "resid_explicit": {"errs": [2.4013073444366455, 2.4013073444366455, 2.4011197090148926, 2.3995583057403564, 2.383636474609375, 2.280877113342285, 1.5691620111465454, 0.5994075536727905, 0.02553999423980713, 1.1324882507324219e-05]}}};
+
+function drawFloorPlot() {
+  const svg = document.getElementById("floorSvg");
+  svg.innerHTML = "";
+  const W=900, H=300, ml=70, mr=30, mt=24, mb=44;
+  const plotW = W-ml-mr, plotH = H-mt-mb;
+  const Ts = FLOOR.Ts;
+  const series = FLOOR.series;
+  const xMin = Math.log10(Ts[0]), xMax = Math.log10(Ts[Ts.length-1]);
+  let yMin=1e9, yMax=-1e9;
+  Object.values(series).forEach(s => s.errs.forEach(v => {
+    const lv = Math.log10(Math.max(v,1e-6));
+    yMin = Math.min(yMin, lv); yMax = Math.max(yMax, lv);
+  }));
+  yMin -= 0.3; yMax += 0.3;
+  const X = t => ml + (Math.log10(t)-xMin)/(xMax-xMin) * plotW;
+  const Y = v => mt + plotH - (Math.log10(Math.max(v,1e-6))-yMin)/(yMax-yMin) * plotH;
+
+  // axes
+  svg.appendChild(el("line", {x1:ml,y1:mt+plotH,x2:ml+plotW,y2:mt+plotH, stroke:"#bbb"}));
+  svg.appendChild(el("line", {x1:ml,y1:mt,x2:ml,y2:mt+plotH, stroke:"#bbb"}));
+  Ts.forEach(t => {
+    const x = X(t);
+    svg.appendChild(el("line", {x1:x,y1:mt+plotH,x2:x,y2:mt+plotH+4, stroke:"#bbb"}));
+    svg.appendChild(el("text", {x:x,y:mt+plotH+16,"text-anchor":"middle"}, [document.createTextNode(t)]));
+  });
+  svg.appendChild(el("text", {x:ml+plotW/2, y:H-6, "text-anchor":"middle", "font-size":"11", fill:"#666"},
+                     [document.createTextNode("inference steps T")]));
+  svg.appendChild(el("text", {x:16, y:mt+plotH/2, "text-anchor":"middle",
+                               transform:`rotate(-90 16 ${mt+plotH/2})`, "font-size":"11", fill:"#666"},
+                     [document.createTextNode("max |PC grad − true grad|")]));
+
+  const colors = {chain: "#2f5fa6", resid_explicit: "#c1553f"};
+  const floors = {chain: 6, resid_explicit: 3};
+  Object.keys(series).forEach(name => {
+    const errs = series[name].errs;
+    let d = "";
+    Ts.forEach((t,i) => { d += (i===0?"M":"L") + X(t) + " " + Y(errs[i]) + " "; });
+    svg.appendChild(el("path", {d, fill:"none", stroke:colors[name], "stroke-width":2}));
+    Ts.forEach((t,i) => {
+      svg.appendChild(el("circle", {cx:X(t), cy:Y(errs[i]), r:3.2, fill:colors[name]}));
+    });
+    // floor line
+    const fx = X(floors[name]);
+    svg.appendChild(el("line", {x1:fx,y1:mt,x2:fx,y2:mt+plotH, stroke:colors[name],
+                                 "stroke-dasharray":"3,3", "stroke-width":1.2, opacity:0.6}));
+    svg.appendChild(el("text", {x:fx+4, y:mt+12, "font-size":"10.5", fill:colors[name]},
+                       [document.createTextNode(`floor T=${floors[name]}`)]));
+    svg.appendChild(el("text", {x:X(Ts[Ts.length-1])-4, y:Y(errs[errs.length-1])-8,
+                                 "text-anchor":"end", "font-size":"11", fill:colors[name], "font-weight":"600"},
+                       [document.createTextNode(name)]));
+  });
+}
+
+render();
+drawFloorPlot();
+</script>
+</body>
+</html>

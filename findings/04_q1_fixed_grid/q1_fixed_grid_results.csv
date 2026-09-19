@@ -1,0 +1,5 @@
+arm,knn_pre,knn_post,rank_pre,rank_post,twonn_pre,twonn_post,std_pre,std_post,hid_knn_post,dims95_post
+bp_sigreg,0.1335,0.3605,2.0702,21.0528,0.11,20.9192,0.0,0.0594,0.3985,46
+bp_nosigreg,0.128,0.2905,1.8228,1.0246,0.11,12.736,0.0,0.7239,0.368,1
+pc_sigreg_T16_coupled,0.298,0.338,21.543,23.1358,20.32,20.7257,0.0193,0.0454,0.3935,41
+pc_nosigreg_T16_coupled,0.28,0.297,23.072,1.3552,20.09,20.6599,0.0157,0.1423,0.3935,1
