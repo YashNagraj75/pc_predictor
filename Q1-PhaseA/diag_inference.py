@@ -118,7 +118,7 @@ def main():
     ap.add_argument("--batch", type=int, default=256,
                     help="sweep at the batch size you will TRAIN at")
     ap.add_argument("--lrs", type=float, nargs="+",
-                    default=[0.03, 0.0625, 0.125, 0.25, 0.375, 0.5, 1.0])
+                    default=[0.0156, 0.03125, 0.0625, 0.09375, 0.125, 0.1875, 0.25, 0.375])
     ap.add_argument("--csv", default="diag_inference.csv")
     args = ap.parse_args()
 
@@ -152,13 +152,30 @@ def main():
               f"{r['F_final']:11.4g} {r['L_final']:10.4g} "
               f"{str(r['L_monotone']):>9} {r['n_layers_moved']:>4}/{r['n_layers']}{flag}")
 
+    # SELECTION RULE.  Not "the largest stable step" -- that picks the edge of
+    # stability, and at B=256 the edge is measurably worse than a smaller step
+    # (eta_h=0.25 lands at objective 0.644 while 0.0625 reaches 0.557).  What
+    # we actually want is the relaxation that gets FURTHEST DOWN the objective
+    # within the T budget, among the steps that descend cleanly.  Monotonicity
+    # stays as a filter because a step that oscillates leaves erratic residuals,
+    # and the residuals are what the weight update is built from.
     usable = [r for r in rows if r["L_monotone"] and not r["diverged"]]
+    if not usable:
+        usable = [r for r in rows if not r["diverged"]]
+        print("\n   WARNING: no step descended monotonically; "
+              "falling back to non-diverged steps only")
     if usable:
-        best = max(usable, key=lambda r: r["eta_h"])
-        print(f"\n   largest monotone step: eta_h={best['eta_h']:g} "
-              f"(per-sample {best['eta_h']:.4g}), "
-              f"{best['n_layers_moved']}/{best['n_layers']} layers moving, "
-              f"objective {L_ff:.4f} -> {best['L_final']:.4f}")
+        best = min(usable, key=lambda r: r["L_final"])
+        print(f"\n   SELECTED eta_h={best['eta_h']:g}  -- best objective among "
+              f"{len(usable)} clean steps: {L_ff:.4f} -> {best['L_final']:.4f}, "
+              f"{best['n_layers_moved']}/{best['n_layers']} layers moving")
+        widest = max(usable, key=lambda r: (r["n_layers_moved"], -r["L_final"]))
+        if widest["eta_h"] != best["eta_h"]:
+            print(f"   (note: eta_h={widest['eta_h']:g} moves more layers, "
+                  f"{widest['n_layers_moved']}/{widest['n_layers']}, but only "
+                  f"reaches {widest['L_final']:.4f})")
+        with open("eta_h_selected.txt", "w") as f:
+            f.write(f"{best['eta_h']:g}\n")
 
     keys = sorted({k for r in rows for k in r})
     keys = ["eta_h"] + [k for k in keys if k != "eta_h"]
