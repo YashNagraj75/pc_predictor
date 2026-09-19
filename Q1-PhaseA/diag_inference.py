@@ -85,20 +85,19 @@ def batch_invariance(params, Xtr, A, cfg, key, sizes=(2, 8, 32)):
 
 
 def stability_sweep(params, Xtr, A, cfg, key, lrs, batch=64):
-    """-> list of row dicts, one per candidate activity_lr."""
+    """-> list of row dicts, one per candidate eta_h (PER-SAMPLE step)."""
     Zin, _ = D.make_views(key, jnp.asarray(Xtr[:batch]), cfg.data)
     ffl = _feedforward_layers(params, Zin[0], cfg.enc)
     rows = []
     for lr in lrs:
-        cfg2 = dataclasses.replace(cfg, pc=dataclasses.replace(cfg.pc, activity_lr=lr))
+        cfg2 = dataclasses.replace(cfg, pc=dataclasses.replace(cfg.pc, eta_h=lr))
         acts, hist = T.pc_relax(params, Zin, A, cfg2, key)
         Fh, Lh = np.asarray(hist["F"]), np.asarray(hist["L"])
         per = [float(jnp.linalg.norm(acts[0][i] - ffl[i]) / (jnp.linalg.norm(ffl[i]) + 1e-12))
                for i in range(len(ffl))]
         diverged = (not np.isfinite(Fh[-1])) or Fh[-1] > 1e4
         rows.append({
-            "activity_lr": lr,
-            "per_sample_step": lr / batch,
+            "eta_h": lr,
             "F_final": float(Fh[-1]),
             "L_final": float(Lh[-1]),
             # monotone objective is the practical stability test: the relaxation
@@ -116,9 +115,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="runs/pc_sigreg_T16_coupled_e400",
                     help="run dir to read config.json from")
-    ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--batch", type=int, default=256,
+                    help="sweep at the batch size you will TRAIN at")
     ap.add_argument("--lrs", type=float, nargs="+",
-                    default=[0.5, 2.0, 8.0, 16.0, 32.0, 64.0, 128.0])
+                    default=[0.03, 0.0625, 0.125, 0.25, 0.375, 0.5, 1.0])
     ap.add_argument("--csv", default="diag_inference.csv")
     args = ap.parse_args()
 
@@ -128,7 +128,7 @@ def main():
     kv, ka, _ = jax.random.split(jax.random.PRNGKey(0), 3)
     A = S.sample_directions(ka, cfg.enc.embed_dim, cfg.sig.num_slices)
 
-    print(f"config: activity_lr={cfg.pc.activity_lr}  T={cfg.pc.T}  "
+    print(f"config: eta_h={cfg.pc.eta_h}  T={cfg.pc.T}  "
           f"train batch_size={cfg.opt.batch_size}  output_drive={cfg.pc.output_drive}")
 
     print("\n-- batch invariance (movement of sample 0; should be CONSTANT in B) --")
@@ -144,24 +144,24 @@ def main():
                       A, cfg)
     print(f"   objective at the feedforward embedding = {L_ff:.6f}")
     rows = stability_sweep(params, Xtr, A, cfg, kv, args.lrs, batch=args.batch)
-    print(f"   {'lr':>8} {'per-sample':>11} {'F_final':>11} {'L_final':>10} "
+    print(f"   {'eta_h':>8} {'per-sample':>11} {'F_final':>11} {'L_final':>10} "
           f"{'monotone':>9} {'moved':>7}")
     for r in rows:
         flag = "  DIVERGED" if r["diverged"] else ""
-        print(f"   {r['activity_lr']:8.3g} {r['per_sample_step']:11.4g} "
+        print(f"   {r['eta_h']:8.3g} {r['eta_h']:11.4g} "
               f"{r['F_final']:11.4g} {r['L_final']:10.4g} "
               f"{str(r['L_monotone']):>9} {r['n_layers_moved']:>4}/{r['n_layers']}{flag}")
 
     usable = [r for r in rows if r["L_monotone"] and not r["diverged"]]
     if usable:
-        best = max(usable, key=lambda r: r["activity_lr"])
-        print(f"\n   largest monotone step: activity_lr={best['activity_lr']:g} "
-              f"(per-sample {best['per_sample_step']:.4g}), "
+        best = max(usable, key=lambda r: r["eta_h"])
+        print(f"\n   largest monotone step: eta_h={best['eta_h']:g} "
+              f"(per-sample {best['eta_h']:.4g}), "
               f"{best['n_layers_moved']}/{best['n_layers']} layers moving, "
               f"objective {L_ff:.4f} -> {best['L_final']:.4f}")
 
     keys = sorted({k for r in rows for k in r})
-    keys = ["activity_lr"] + [k for k in keys if k != "activity_lr"]
+    keys = ["eta_h"] + [k for k in keys if k != "eta_h"]
     with open(args.csv, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()

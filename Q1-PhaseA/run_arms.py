@@ -37,6 +37,12 @@ def main():
     ap.add_argument("--tag", default="",
                     help="suffix for the run name; the seed is appended to it")
     ap.add_argument("--T", type=int, default=16, help="PC inference budget")
+    ap.add_argument("--eta-h", type=float, default=PCCfg.eta_h,
+                    help="PER-SAMPLE activity step; pcalm.relax multiplies by "
+                         "the batch size.  Set it from diag_inference.py at "
+                         "the batch size you are actually training at.")
+    ap.add_argument("--alpha", type=float, default=0.0,
+                    help="PC-ALM dual rate; 0 = plain PC")
     ap.add_argument("--force", action="store_true",
                     help="permit overwriting a run directory that has weights")
     args = ap.parse_args()
@@ -46,7 +52,8 @@ def main():
         for arm in args.arms:
             tag = f"{args.tag}_s{seed}" if args.tag else f"s{seed}"
             cfg = RunCfg(arm=arm, use_sigreg=True, out_dir=args.out, tag=tag,
-                         pc=PCCfg(T=args.T),
+                         pc=PCCfg(T=args.T, eta_h=args.eta_h,
+                                  alpha=args.alpha),
                          opt=OptCfg(n_steps=args.steps,
                                     eval_every=args.eval_every, seed=seed))
             planned.append(cfg)
