@@ -1,0 +1,7 @@
+,class_linear,class_mlp,knn,decode_ssim,decode_floor,arm
+bp_sigreg_etafix_s0,0.449,0.4705,0.3915,0.8106,0.7033,BP
+bp_sigreg_etafix_s1,0.4495,0.462,0.388,0.8039,0.7033,BP
+bp_sigreg_etafix_s2,0.4435,0.456,0.39,0.8093,0.7033,BP
+pc_sigreg_T16_coupled_etafix_s0,0.3495,0.352,0.331,0.7984,0.7033,PC
+pc_sigreg_T16_coupled_etafix_s1,0.3505,0.393,0.341,0.799,0.7033,PC
+pc_sigreg_T16_coupled_etafix_s2,0.367,0.4015,0.3545,0.8017,0.7033,PC

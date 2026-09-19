@@ -152,3 +152,31 @@ Assembled write-ups. Q1_PhaseA_report.pdf is the presentable one.
 - Trained weights (`params.eqx`) -- they live in `Q1-PhaseA/runs/<run>/` and are too
   large to duplicate.
 - Raw per-step training logs -- `Q1-PhaseA/runs/<run>/log.json`.
+
+---
+
+## Update: the corrected-step re-run (folder 14)
+
+`14_corrected_step_rerun` supersedes the "read this first" caveat above for the
+step-size question specifically. The fix was applied (`eta_h = 0.125`, selected
+by sweep at the real training batch of 256) and both arms re-trained at the full
+17,200-step budget, 3 seeds each.
+
+Outcome, in one line: **the bug was real and fixing it repaired the depth
+starvation, but the representation still did not improve.**
+
+- Frozen layers in the PC arm went from 7 of 10 to 1 of 10. At the corrected
+  step PC displaces its middle and upper layers MORE than backprop does.
+- Probe scores did not follow. PC sits at or below the untrained-encoder floor
+  on kNN and decoder SSIM, and only ~1.9 sd above it on the linear class probe,
+  against backprop's ~8.9 sd.
+- So the PC-side results in folders 04-09 remain superseded as *explanations*,
+  but their headline conclusion survives: predictive coding as an encoder does
+  not clear its own random initialisation on this task, and the reason is not
+  the step size.
+
+Caveat on comparability: the untrained floor was probed with an earlier probe
+version. `class_linear`, `knn` and `decode_ssim` are unaffected by that
+difference (closed-form ridge, kNN, and a fixed-schedule decoder); `class_mlp`
+IS affected, so the floor's MLP value is a lower bound and is excluded from the
+figure.
