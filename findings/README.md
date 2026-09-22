@@ -180,3 +180,34 @@ version. `class_linear`, `knn` and `decode_ssim` are unaffected by that
 difference (closed-form ridge, kNN, and a fixed-schedule decoder); `class_mlp`
 IS affected, so the floor's MLP value is a lower bound and is excluded from the
 figure.
+
+---
+
+## Update: PC-ALM (folder 15)
+
+`15_pcalm` is the augmented-Lagrangian arm: one Lagrange multiplier per layer
+added to the PC relaxation, `alpha = 0` recovering plain PC exactly. Selected
+`eta_h = 0.0625, alpha = 1.0` by sweeping both at the real training batch and
+ranking on mean per-layer cosine against the backprop weight gradient.
+
+Outcome: **the mechanism works exactly as advertised, and the representation
+does not move.**
+
+- Credit assignment is solved. Per-layer cosine against the backprop gradient
+  at the input layer goes from 0.066 (essentially uncorrelated) to 0.992, and
+  every one of ten layers clears 0.94.
+- Learning improves measurably. kNN best-minus-first goes from +0.0035 (plain
+  PC, indistinguishable from zero) to +0.0170.
+- Probe scores do not follow. PC-ALM is within 0.9 pooled sd of plain PC on all
+  four probes, and still below the untrained floor on kNN and decoder SSIM.
+
+So the remaining gap to backprop is NOT a credit-assignment problem -- credit
+assignment is now demonstrably solved at initialisation. Gradient alignment
+turns out not to be sufficient for representation quality on this task, which
+is the most useful thing this arm established.
+
+One measured lead for the follow-up: at T=16 the per-layer gradient DIRECTIONS
+are right but the global cosine is only 0.594, rising to 0.910 at T=64. The
+relative magnitudes across layers are still mis-scaled at our budget. T was
+held at 16 deliberately so PC-ALM and plain PC differed in one variable only;
+a T=32/64 arm is the justified next step.

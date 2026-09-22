@@ -1,0 +1,10 @@
+arm,seed,knn_best_minus_first
+PC alpha=0,0,0.0
+PC alpha=0,1,0.0025
+PC alpha=0,2,0.008
+PC-ALM alpha=1,0,0.0205
+PC-ALM alpha=1,1,0.021
+PC-ALM alpha=1,2,0.0095
+backprop,0,0.057
+backprop,1,0.045
+backprop,2,0.0425

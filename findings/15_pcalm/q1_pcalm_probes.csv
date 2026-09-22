@@ -1,0 +1,4 @@
+,class_linear,class_mlp,knn,decode_ssim
+pc_sigreg_T16_coupled_alm_s0,0.329,0.3805,0.324,0.7862
+pc_sigreg_T16_coupled_alm_s1,0.3665,0.379,0.358,0.7969
+pc_sigreg_T16_coupled_alm_s2,0.369,0.3765,0.3595,0.8014
