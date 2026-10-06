@@ -97,6 +97,28 @@ class PCCfg:
 
 
 @dataclass(frozen=True)
+class SparseCfg:
+    """Sparse prior on one layer.  Spec: wiki 'Method - Sparse PC-ALM arms spec'.
+
+    case "none" is the original encoder and must reproduce it bit for bit
+    (pinned by test_sparse.py against golden_pcalm_alpha*.npz).
+      "B": L1 prior on z_s, multiplier at s removed; deployed z_s = S_{beta/rho}(f_s)
+      "C": multiplier at s removed + top-down dictionary head
+           (beta_g/2)||z_s - D a||^2 + gamma ||a||_1, deployed via t ISTA steps
+    Both B and C make layer s NON-residual and rescale W_s by sqrt(L) at init.
+    """
+    case: Literal["none", "B", "C"] = "none"
+    layer: int = 5                  # s: index into the activity list (interior)
+    beta: float = 0.0               # case B L1 weight; threshold beta/rho
+    gamma: float = 0.0              # case C L1 weight on the code a
+    beta_g: float = 1.0             # case C top-down coupling
+    dict_mult: int = 2              # m = dict_mult * width (overcomplete)
+    T_test: int = 16                # case C deployed ISTA steps
+    step_frac: float = 0.9          # ISTA step = step_frac / Lipschitz
+    below_hard: bool = True         # keep the multipliers on layers below s (D3)
+
+
+@dataclass(frozen=True)
 class OptCfg:
     param_lr: float = 1e-3
     batch_size: int = 256           # Table 1(c): 256-512 best
@@ -127,6 +149,7 @@ class RunCfg:
     sig: SIGRegCfg = field(default_factory=SIGRegCfg)
     pc: PCCfg = field(default_factory=PCCfg)
     opt: OptCfg = field(default_factory=OptCfg)
+    sparse: SparseCfg = field(default_factory=SparseCfg)
 
     @property
     def name(self) -> str:

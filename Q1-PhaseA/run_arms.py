@@ -22,7 +22,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import OptCfg, PCCfg, RunCfg
+from config import OptCfg, PCCfg, RunCfg, SparseCfg
 from train import train
 
 
@@ -43,9 +43,34 @@ def main():
                          "the batch size you are actually training at.")
     ap.add_argument("--alpha", type=float, default=0.0,
                     help="PC-ALM dual rate; 0 = plain PC")
+    # ---- sparse prior (spec: 'Method - Sparse PC-ALM arms spec') ----------
+    ap.add_argument("--sparse-case", choices=["none", "B", "C"], default="none")
+    ap.add_argument("--sparse-layer", type=int, default=SparseCfg.layer)
+    ap.add_argument("--beta", type=float, default=0.0, help="case B L1 weight")
+    ap.add_argument("--gamma", type=float, default=0.0, help="case C L1 weight on a")
+    ap.add_argument("--beta-g", type=float, default=SparseCfg.beta_g)
+    ap.add_argument("--dict-mult", type=int, default=SparseCfg.dict_mult)
+    ap.add_argument("--T-test", type=int, default=SparseCfg.T_test)
+    ap.add_argument("--below-soft", action="store_true",
+                    help="drop the multipliers below s too (D3 alternative)")
+    ap.add_argument("--init-only", action="store_true",
+                    help="write config.json + params.eqx at INITIALISATION and "
+                         "stop: the untrained floor for this architecture")
     ap.add_argument("--force", action="store_true",
                     help="permit overwriting a run directory that has weights")
     args = ap.parse_args()
+    if args.sparse_case != "none" and not args.tag:
+        # RunCfg.name does not encode the sparse settings; only the tag
+        # separates these runs, so an untagged sparse run would collide.
+        ap.error("--tag is required with --sparse-case B/C")
+    if args.sparse_case == "B" and args.beta <= 0:
+        ap.error("case B needs --beta > 0")
+    if args.sparse_case == "C" and args.gamma <= 0:
+        ap.error("case C needs --gamma > 0")
+    sparse = SparseCfg(case=args.sparse_case, layer=args.sparse_layer,
+                       beta=args.beta, gamma=args.gamma, beta_g=args.beta_g,
+                       dict_mult=args.dict_mult, T_test=args.T_test,
+                       below_hard=not args.below_soft)
 
     planned = []
     for seed in args.seeds:
@@ -55,7 +80,8 @@ def main():
                          pc=PCCfg(T=args.T, eta_h=args.eta_h,
                                   alpha=args.alpha),
                          opt=OptCfg(n_steps=args.steps,
-                                    eval_every=args.eval_every, seed=seed))
+                                    eval_every=args.eval_every, seed=seed),
+                         sparse=sparse)
             planned.append(cfg)
 
     # Refuse the whole batch before training anything, rather than discovering
@@ -69,6 +95,19 @@ def main():
         print("Pass --force only if you are certain they are disposable.",
               flush=True)
         sys.exit(1)
+
+    if args.init_only:
+        import jax, equinox as eqx, sparse as SP
+        for cfg in planned:
+            out = os.path.join(cfg.out_dir, cfg.name)
+            os.makedirs(out, exist_ok=True)
+            with open(os.path.join(out, "config.json"), "w") as f:
+                f.write(cfg.to_json())
+            p = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg,
+                               cfg.data.input_dim)
+            eqx.tree_serialise_leaves(os.path.join(out, "params.eqx"), p)
+            print("init-only:", out, flush=True)
+        return
 
     print(f"training {len(planned)} runs x {args.steps} steps", flush=True)
     for cfg in planned:

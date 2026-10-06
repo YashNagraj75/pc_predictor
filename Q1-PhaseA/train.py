@@ -14,6 +14,7 @@ import numpy as np
 import pcalm as PA
 import optax
 import sigreg as S
+import sparse as SP
 from config import RunCfg
 
 import data as D
@@ -24,7 +25,7 @@ def loss_from_views(params, Zin, A, cfg: RunCfg):
 
     Both arms optimise this.  Only the gradient mechanism differs.
     """
-    Zv = jnp.stack([E.forward(params, Zin[v], cfg.enc)[0] for v in range(Zin.shape[0])])
+    Zv = jnp.stack([SP.forward(params, Zin[v], cfg)[0] for v in range(Zin.shape[0])])
     return S.lejepa_loss(Zv, A, cfg.data.n_global_views, cfg.sig.lambd,
                          cfg.use_sigreg, projector=cfg.projector,
                          t_max=cfg.sig.t_max,
@@ -35,8 +36,22 @@ def loss_from_views(params, Zin, A, cfg: RunCfg):
 def bp_grads(params, Zin, A, cfg):
     """TODO -- reverse-mode gradient of `loss_from_views`.  One jax.grad call.
     This arm is the reference; it should be ~5 lines."""
-    (loss, aux),g = eqx.filter_value_and_grad(loss_from_views, has_aux=True) (params,Zin,A,cfg)
+    (loss, aux),g = eqx.filter_value_and_grad(bp_objective, has_aux=True) (params,Zin,A,cfg)
     return g, {**aux, "loss": loss}
+
+
+def bp_objective(params, Zin, A, cfg):
+    """What the BP arm differentiates.  == loss_from_views except for the
+    case-C control C2, which adds the deployed LASSO energy so that D is trained
+    as a dictionary (spec: 'Method - Sparse PC-ALM arms spec').  loss_ff in the
+    log stays the task loss alone, so it remains comparable across arms."""
+    loss, aux = loss_from_views(params, Zin, A, cfg)
+    if cfg.sparse.case == "C":
+        h = sum(SP.deployed_head_energy(params, Zin[v], cfg)
+                for v in range(Zin.shape[0])) / Zin.shape[0]
+        loss = loss + h
+        aux = {**aux, "head_energy": h}
+    return loss, aux
 
 
 def optim(cfg): # Optimizer for both the arms
@@ -53,10 +68,18 @@ def optim(cfg): # Optimizer for both the arms
         )
     else:
         sched = cfg.opt.param_lr
-    return optax.chain(
-        optax.clip_by_global_norm(cfg.opt.grad_clip),
-        optax.adamw(sched, weight_decay=cfg.opt.weight_decay)
-    )
+    def base():
+        return optax.chain(
+            optax.clip_by_global_norm(cfg.opt.grad_clip),
+            optax.adamw(sched, weight_decay=cfg.opt.weight_decay)
+        )
+    if cfg.sparse.case != "C":
+        return base()
+    # Case C (PC-C and C2 alike): the dictionary is its OWN clipping group.
+    # At init |dF/dD| ~ 1.5 against ~0.35 for the whole encoder, so one global
+    # clip would let the dictionary's gradient scale throttle the encoder's
+    # step on most iterations -- the confound that broke the T=64 screen.
+    return optax.multi_transform({"enc": base(), "dict": base()}, SP.param_labels)
 
 @eqx.filter_jit
 def grad_update(params,g, opt_state,opt):
@@ -112,7 +135,7 @@ def train(cfg: RunCfg, verbose=True):
     Zprobe, _ = D.make_views(probe_key, Xtr_j[:2], cfg.data)   # shape only
     input_dim = Zprobe.shape[-1]
 
-    params = E.init(jax.random.PRNGKey(cfg.opt.seed), cfg.enc, input_dim)
+    params = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, input_dim)
     opt = optim(cfg)
     opt_state = opt.init(eqx.filter(params, eqx.is_inexact_array))
 
@@ -135,7 +158,10 @@ def train(cfg: RunCfg, verbose=True):
             g, aux = pc_grads(params, Zin, A, cfg, kg)
 
         gnorm = _global_norm(g)                    # BEFORE clipping
+        if cfg.sparse.case == "C":                 # clipped as separate groups
+            gn_enc, gn_dict = _global_norm((g[0], g[1])), _global_norm(g[2])
         params, opt_state = grad_update(params, g, opt_state, opt)
+        params = SP.project(params, cfg)          # case C: unit-norm D columns
 
         # common yardstick: the objective at the FEEDFORWARD embeddings,
         # identically defined for both arms.  PC's own L_final/F_final are
@@ -146,6 +172,8 @@ def train(cfg: RunCfg, verbose=True):
         L_ff, _ = loss_from_views(params, Zin, A, cfg)
 
         row = {"step": step, "grad_norm_preclip": gnorm, "loss_ff": float(L_ff)}
+        if cfg.sparse.case == "C":
+            row.update({"grad_norm_enc": gn_enc, "grad_norm_dict": gn_dict})
         row.update({k: float(v) for k, v in aux.items() if jnp.ndim(v) == 0})
         log.append(row)
 
@@ -183,7 +211,7 @@ def evaluate(params, Xtr, ytr, Xte, yte, cfg: RunCfg, n_probe=4000, seed=0):
 
     def embed(X):
         xb = D.eval_batch(jnp.asarray(X), cfg.data)
-        z, hs = E.forward(params, xb, cfg.enc)
+        z, hs = SP.forward(params, xb, cfg)        # == E.forward for case none
         return np.asarray(z), [np.asarray(h) for h in hs]
 
     ztr, htr = embed(Xtr[itr])
@@ -191,6 +219,9 @@ def evaluate(params, Xtr, ytr, Xte, yte, cfg: RunCfg, n_probe=4000, seed=0):
     ytr_, yte_ = np.asarray(ytr)[itr], np.asarray(yte)[ite]
 
     out = {"embedding": {}, "hidden": []}
+    if SP.active(cfg):     # rescaling cheat / sparsity / dictionary health
+        out["sparse"] = SP.health(params, D.eval_batch(jnp.asarray(Xtr[itr[:1024]]),
+                                                       cfg.data), cfg)
 
     # embedding layer: kNN and collapse are valid; spectrum only as a
     # constraint-satisfaction diagnostic (SIGReg regularises it directly).

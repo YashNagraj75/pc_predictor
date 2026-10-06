@@ -85,7 +85,7 @@ def forward(params, x,cfg) :
     evaluated by this same function, and the entire difference between arms
     lives in the learned weights -- not in any relaxation at test time.
     """
-    model, skip = params
+    model, skip = params[0], params[1]   # case-C params carry a 3rd entry, D
     acts = jpc.init_activities_with_ffwd(model,x,skip_model=skip,param_type=cfg.parameterisation,gamma=gamma_for(cfg))
     return acts[-1], list(acts[:-1])
 
@@ -100,6 +100,6 @@ def energy(params, activities, x,cfg:EncoderCfg,y=None, out_scale=None) -> jnp.n
     Note there is NO output term here.  The loss enters through the output
     node's activity gradient, not through the energy -- see train.py.
     """
-    model, skip = params
+    model, skip = params[0], params[1]   # case-C params carry a 3rd entry, D
     return jpc.pc_energy_fn((model,skip),activities,activities[-1] if y is None else y, x = x,param_type=cfg.parameterisation,gamma=gamma_for(cfg),output_energy_scaling=out_scale)
 

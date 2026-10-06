@@ -63,6 +63,7 @@ from jax import vmap
 
 import encoder as E
 import sigreg as S
+import sparse as SP
 from config import EncoderCfg, RunCfg
 
 
@@ -77,7 +78,7 @@ def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg):
     `x` and not included, which is the order `encoder.forward` returns and the
     order the relaxation carries.
     """
-    model, skip = params
+    model, skip = params[0], params[1]   # case-C params carry a 3rd entry, D
     scalings = jpc._get_param_scalings(
         model=model,
         input=x,
@@ -169,10 +170,23 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     # the *B that turns cfg.pc.eta_h into a per-sample step -- see module docstring
     eff_lr = cfg.pc.eta_h * B
 
-    acts0 = []
-    for v in range(V):
-        z, hs = E.forward(params, Zin[v], cfg.enc)
-        acts0.append([*hs, z])
+    sparse_on = SP.active(cfg)
+    acts0, a0 = [], None
+    if not sparse_on:
+        for v in range(V):
+            z, hs = E.forward(params, Zin[v], cfg.enc)
+            acts0.append([*hs, z])
+    else:
+        # sparse arms start from the DEPLOYED forward pass (case C at t = 0)
+        assert cfg.pc.init == "feedforward", "sparse arms need feedforward init"
+        a0 = []
+        for v in range(V):
+            acts_v, a_v = SP.relax_init(params, Zin[v], cfg)
+            acts0.append(acts_v)
+            a0.append(a_v)
+        if cfg.sparse.case != "C":
+            a0 = None
+    alphas = SP.layer_alphas(cfg, len(acts0[0]))
     duals0 = zero_duals(acts0)
 
     loss_z = _objective(cfg, A)
@@ -184,43 +198,81 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         return sum(al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
                              cfg.pc.out_scale) for v in range(V))
 
+    # smooth part (differentiated) and reported energy (+ the L1 terms)
+    def F_smooth(acts, duals, a):
+        if not sparse_on:
+            return F_total(acts, duals)
+        return F_total(acts, duals) + sum(
+            SP.head_smooth(params, acts[v], None if a is None else a[v], cfg)
+            for v in range(V))
+
+    def F_report(acts, duals, a):
+        if not sparse_on:
+            return F_total(acts, duals)
+        return F_smooth(acts, duals, a) + sum(
+            SP.nonsmooth(acts[v], None if a is None else a[v], cfg) for v in range(V))
+
     # "frozen" caches the output drive from the feedforward embeddings; "coupled"
     # recomputes it every step.  Unchanged from the previous implementation.
     g0 = jax.grad(loss_z)(out_stack(acts0)) if cfg.pc.output_drive == "frozen" else None
-    dF = jax.grad(F_total, argnums=0)
+    dF = jax.grad(F_total, argnums=0) if not sparse_on else jax.grad(F_smooth, argnums=0)
     dL = jax.grad(lambda a: loss_z(out_stack(a)))
 
-    def primal(acts, duals):
-        g = dF(acts, duals)
+    def primal(acts, duals, a=None):
+        g = dF(acts, duals) if not sparse_on else dF(acts, duals, a)
         if cfg.pc.output_drive == "coupled":
             gL = dL(acts)
             g = [[gi + gj for gi, gj in zip(g[v], gL[v])] for v in range(V)]
         else:
             g = [[*g[v][:-1], g[v][-1] + g0[v]] for v in range(V)]
-        return [[z - eff_lr * gz for z, gz in zip(acts[v], g[v])]
-                for v in range(V)]
+        new = [[z - eff_lr * gz for z, gz in zip(acts[v], g[v])]
+               for v in range(V)]
+        if not sparse_on:
+            return new
+        new = [SP.prox_zs(new[v], cfg) for v in range(V)]          # case B
+        if a is None:
+            return new, None
+        # case C: Jacobi -- the code steps at the PRE-step activities
+        return new, [SP.a_step(params, acts[v], a[v], cfg) for v in range(V)]
 
     def dual(acts, duals):
-        if alpha == 0.0:
+        if all(al == 0.0 for al in alphas):
             return duals
         r = [residuals(params, acts[v], Zin[v], cfg.enc) for v in range(V)]
-        return [[lam + alpha * ri for lam, ri in zip(duals[v], r[v])]
+        return [[lam + al * ri for lam, al, ri in zip(duals[v], alphas, r[v])]
                 for v in range(V)]
 
-    def body(carry, _):
-        acts, duals = carry
-        acts = primal(acts, duals)
-        duals = dual(acts, duals)
-        return (acts, duals), (F_total(acts, duals), loss_z(out_stack(acts)))
+    if not sparse_on:
+        def body(carry, _):
+            acts, duals = carry
+            acts = primal(acts, duals)
+            duals = dual(acts, duals)
+            return (acts, duals), (F_total(acts, duals), loss_z(out_stack(acts)))
 
-    if T > 1:
-        (acts, duals), (F_h, L_h) = jax.lax.scan(
-            body, (acts0, duals0), xs=None, length=T - 1)
+        if T > 1:
+            (acts, duals), (F_h, L_h) = jax.lax.scan(
+                body, (acts0, duals0), xs=None, length=T - 1)
+        else:
+            acts, duals, F_h, L_h = acts0, duals0, None, None
+
+        acts = primal(acts, duals)                   # Algorithm 1 line 10
+        a = None
+        F_last = F_total(acts, duals)
     else:
-        acts, duals, F_h, L_h = acts0, duals0, None, None
+        def body_sp(carry, _):
+            acts, duals, a = carry
+            acts, a = primal(acts, duals, a)
+            duals = dual(acts, duals)
+            return (acts, duals, a), (F_report(acts, duals, a), loss_z(out_stack(acts)))
 
-    acts = primal(acts, duals)                       # Algorithm 1 line 10
-    F_last = F_total(acts, duals)
+        if T > 1:
+            (acts, duals, a), (F_h, L_h) = jax.lax.scan(
+                body_sp, (acts0, duals0, a0), xs=None, length=T - 1)
+        else:
+            acts, duals, a, F_h, L_h = acts0, duals0, a0, None, None
+
+        acts, a = primal(acts, duals, a)             # Algorithm 1 line 10
+        F_last = F_report(acts, duals, a)
     L_last = loss_z(out_stack(acts))
     duals_final = dual(acts, duals)
 
@@ -234,7 +286,22 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     # actually saw (paper Algorithm 1); "post_dual" folds in one more dual
     # update.  pc-alm defaults to pre_dual.
     duals_w = duals if cfg.pc.weight_credit_timing == "pre_dual" else duals_final
-    return acts, duals_w, {"F": F_hist, "L": L_hist}
+    hist = {"F": F_hist, "L": L_hist}
+    if sparse_on:
+        hist["F0"] = F_report(acts0, duals0, a0)
+        # pilot stability gate: the largest activity norm at the end, relative to
+        # the largest activity norm at the start (per view).  NOT F_T / F_0 -- the
+        # completed-square energy grows with the multipliers by design -- and NOT a
+        # per-layer ratio: layers at and above s can START near zero (thresholded
+        # code; s is non-residual), which made a per-layer ratio read 505x with
+        # nothing unstable.  A genuine blow-up anywhere exceeds the start scale.
+        hist["act_growth"] = jnp.max(jnp.stack([
+            jnp.max(jnp.stack([jnp.linalg.norm(z) for z in acts[v]]))
+            / (jnp.max(jnp.stack([jnp.linalg.norm(z) for z in acts0[v]])) + 1e-12)
+            for v in range(V)]))
+        if a is not None:
+            hist["a"] = a
+    return acts, duals_w, hist
 
 
 def grads(params, Zin, A, cfg: RunCfg, key):
@@ -252,13 +319,23 @@ def grads(params, Zin, A, cfg: RunCfg, key):
     acts = jax.lax.stop_gradient(acts)
     duals = jax.lax.stop_gradient(duals)
     V = Zin.shape[0]
+    a = jax.lax.stop_gradient(hist["a"]) if "a" in hist else None
 
     def F_of_params(p):
-        return sum(al_energy(p, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
-                             cfg.pc.out_scale) for v in range(V))
+        F = sum(al_energy(p, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
+                          cfg.pc.out_scale) for v in range(V))
+        if a is not None:            # case C: D's gradient from the head energy
+            F = F + sum(SP.head_smooth(p, acts[v], a[v], cfg) for v in range(V))
+        return F
 
     g = eqx.filter_grad(F_of_params)(params)
-    return g, {"F_final": hist["F"][-1], "L_final": hist["L"][-1],
-               "F_hist": hist["F"], "L_hist": hist["L"],
-               "dual_norm": jnp.sqrt(sum(jnp.sum(l ** 2)
-                                         for dv in duals for l in dv))}
+    aux = {"F_final": hist["F"][-1], "L_final": hist["L"][-1],
+           "F_hist": hist["F"], "L_hist": hist["L"],
+           "dual_norm": jnp.sqrt(sum(jnp.sum(l ** 2)
+                                     for dv in duals for l in dv))}
+    if SP.active(cfg):
+        aux["F_first"] = hist["F0"]
+        aux["act_growth"] = hist["act_growth"]
+        aux["active_frac"] = sum(SP.active_fraction(acts[v], None if a is None else a[v], cfg)
+                                 for v in range(V)) / V
+    return g, aux

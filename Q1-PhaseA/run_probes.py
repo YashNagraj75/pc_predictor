@@ -26,7 +26,8 @@ import numpy as np
 import data as D
 import encoder as E
 import probes as P
-from config import DataCfg, EncoderCfg, OptCfg, PCCfg, RunCfg, SIGRegCfg
+import sparse as SP
+from config import DataCfg, EncoderCfg, OptCfg, PCCfg, RunCfg, SIGRegCfg, SparseCfg
 
 
 def cfg_from_dict(d):
@@ -41,15 +42,16 @@ def cfg_from_dict(d):
             kw[k] = tuple(v) if isinstance(v, list) else v
         return kls(**kw)
     top = {k: v for k, v in d.items()
-           if k not in ("data", "enc", "sig", "pc", "opt")}
+           if k not in ("data", "enc", "sig", "pc", "opt", "sparse")}
+    # runs written before SparseCfg existed have no "sparse" block -> case none
     return RunCfg(**top, data=mk(DataCfg, d["data"]), enc=mk(EncoderCfg, d["enc"]),
                   sig=mk(SIGRegCfg, d["sig"]), pc=mk(PCCfg, d["pc"]),
-                  opt=mk(OptCfg, d["opt"]))
+                  opt=mk(OptCfg, d["opt"]), sparse=mk(SparseCfg, d.get("sparse", {})))
 
 
 def load_run(run_dir):
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
-    skeleton = E.init(jax.random.PRNGKey(cfg.opt.seed), cfg.enc, cfg.data.input_dim)
+    skeleton = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     params = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"),
                                          skeleton)
     return cfg, params
@@ -64,7 +66,7 @@ def embed_split(params, cfg, X, n, seed=0):
     """
     idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
     xb = D.eval_batch(jax.numpy.asarray(X[idx]), cfg.data)
-    z, _ = E.forward(params, xb, cfg.enc)
+    z, _ = SP.forward(params, xb, cfg)      # deployed net; == E.forward for case none
     c = 1 if cfg.data.grayscale else 3
     imgs = np.asarray(xb).reshape(-1, cfg.data.img_size, cfg.data.img_size, c)
     return np.asarray(z), imgs, idx
@@ -88,7 +90,7 @@ def embed_augmented(params, cfg, X, n, seed=0):
     key = jax.random.PRNGKey(10_000 + seed)
     views, boxes, prms = D.make_views_labeled(
         key, jax.numpy.asarray(X[idx]), cfg.data)
-    z, _ = E.forward(params, views[0], cfg.enc)
+    z, _ = SP.forward(params, views[0], cfg)
     return np.asarray(z), np.asarray(boxes[0]), np.asarray(prms[0])
 
 

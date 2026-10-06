@@ -40,6 +40,7 @@ import jax
 import numpy as np
 
 import encoder as E
+import sparse as SP
 from run_probes import cfg_from_dict
 
 
@@ -56,7 +57,7 @@ def weight_displacement(run_dir):
     finished long before this diagnostic existed.
     """
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
-    init = E.init(jax.random.PRNGKey(cfg.opt.seed), cfg.enc, cfg.data.input_dim)
+    init = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     trained = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"), init)
     A, B = _arrays(init), _arrays(trained)
     per = [float(np.linalg.norm(b - a) / (np.linalg.norm(a) + 1e-12))
