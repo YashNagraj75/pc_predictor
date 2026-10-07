@@ -22,7 +22,7 @@ cd "$P/Q1-PhaseA" || exit 2
 PY=../.venv/bin/python
 export JAX_PLATFORMS=cuda
 CLEAN='cuda_|plugin|xla_bridge|versions_helpers|cuStreamGetGreenCtx|decoder step|^\s*File |^\s*~|^\s*\^'
-STEPS=${STEPS:-17200}; PILOT=${PILOT:-2000}; BUDGET=${BUDGET:-27000}   # s of training before K screens stop
+STEPS=${STEPS:-17200}; PILOT=${PILOT:-2000}; PILOT_ONLY=${PILOT_ONLY:-0}; REUSE_PILOTS=${REUSE_PILOTS:-0}; BUDGET=${BUDGET:-27000}   # s of training before K screens stop
 OP="--T 16 --eta-h 0.0625 --alpha 1"
 REUSED="runs/pc_sigreg_T16_coupled_alm_s0 runs/pc_sigreg_T16_coupled_alm_s1 runs/pc_sigreg_T16_coupled_alm_s2 runs/bp_sigreg_etafix_s0 runs/bp_sigreg_etafix_s1 runs/bp_sigreg_etafix_s2"
 STATUS=heads_status.txt; : > $STATUS
@@ -38,7 +38,7 @@ complete() {   # params.eqx, no DIVERGED, log reaches the last step
 collect() {
   tar czf "$JOBDIR/q1_heads.tar.gz" heads_status.txt heads_selected.json \
       gates_heads.log select_heads.log train_heads*.log gate_D*.json gate_D*.err gate_full_*.json \
-      agree_*.json agree_*.log probes_heads.log probes_heads_summary.csv \
+      agree_*.json agree_*.log runs/*hK*pilot*/params.eqx probes_heads.log probes_heads_summary.csv \
       diag_heads*.csv diag_heads*.log diag_learning_heads.csv diag_learning_heads.log config_diff.txt \
       runs/*hK*/DIVERGED runs/*hK*/config.json runs/*hK*/log.json runs/*hK*/probes.json runs/*hK*/params.eqx \
       runs/*randD*/config.json runs/*randD*/probes.json runs/*randD*/params.eqx \
@@ -50,9 +50,13 @@ trap collect EXIT
 echo "##### 0. preflight"
 $PY -c "import jax;print('backend', jax.default_backend(), jax.devices(), 'matmul_precision', jax.config.jax_default_matmul_precision)" 2>&1 | tail -1 | tee -a $STATUS
 for r in $REUSED; do [ -f "$r/params.eqx" ] || { note "FATAL: reused run $r missing"; exit 6; }; done
-if ls -d runs/*_hK*_s* runs/*randD_s* >/dev/null 2>&1; then
+# PILOT_ONLY=1: stop after stage 3.  REUSE_PILOTS=1 (the later full job): keep the
+# pilot dirs and their gate files, skip selection + pilots, refuse only full-run dirs.
+if [ "$REUSE_PILOTS" = 1 ]; then EXIST=$(ls -d runs/*_hK[1-5]_s* runs/*randD_s* 2>/dev/null)
+else EXIST=$(ls -d runs/*_hK*_s* runs/*randD_s* 2>/dev/null); fi
+if [ -n "$EXIST" ]; then
   note "FATAL: case-D run dirs already exist (stale smoke or an earlier attempt) -- move them aside first:"
-  ls -d runs/*_hK*_s* runs/*randD_s* | tee -a $STATUS; exit 7
+  echo "$EXIST" | tee -a $STATUS; exit 7
 fi
 for r in $REUSED; do [ -f "$r/probes.json" ] && [ ! -f "$r/probes.json.pre_caseD" ] && cp "$r/probes.json" "$r/probes.json.pre_caseD"; done
 
@@ -61,6 +65,15 @@ echo "##### 1. gates (CPU: golden reference regenerated and checked bit for bit)
   || { grep FAIL gates_heads.log; note "GATES FAILED"; exit 3; }
 grep -cE "\[PASS\]" gates_heads.log | xargs -I{} note "gates: {} PASS, 0 FAIL"
 
+if [ "$REUSE_PILOTS" = 1 ]; then
+  [ -s heads_selected.json ] || { note "FATAL: REUSE_PILOTS but no heads_selected.json"; exit 4; }
+  PASSED=""
+  for K in 1 2 3 4 5; do
+    $PY -c "import json,sys;sys.exit(0 if json.load(open('gate_D$K.json')).get('pass') is True else 1)" 2>/dev/null \
+      && PASSED="$PASSED $K"
+  done
+  note "reusing pilots; passed:$PASSED"
+else
 echo "##### 2. selection (training images only, at initialisation)"
 $PY -W ignore select_heads.py --out heads_selected.json > select_heads.log 2>&1 \
   || { tail -5 select_heads.log; note "SELECTION FAILED"; exit 4; }
@@ -82,6 +95,8 @@ for K in 1 2 3 4 5; do
   else note "pilot K=$K: GATE ERROR (rc=$rc, see gate_D$K.err) -- full runs SKIPPED"; fi
   $PY -c "import json;d=json.load(open('gate_D$K.json'));print('  ',{k:d.get(k) for k in ('reasons','error')})" 2>&1 | tee -a $STATUS
 done
+fi   # REUSE_PILOTS
+if [ "$PILOT_ONLY" = 1 ]; then note "PILOT_ONLY: stopping after the pilots (passed:${PASSED:- none})"; exit 0; fi
 [ -n "$PASSED" ] || { note "no K passed its pilot"; exit 5; }
 
 NEW=""; FLOORS="runs/pc_sigreg_T16_coupled_randD_s0 runs/pc_sigreg_T16_coupled_randD_s1 runs/pc_sigreg_T16_coupled_randD_s2"
