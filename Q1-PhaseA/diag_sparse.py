@@ -96,7 +96,10 @@ def batched(fn, X, bs=1000):
 
 def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), seed=0):
     """Closed-form ridge on one-hot labels; lambda on a 20% split of TRAIN."""
-    mu, sd = Ztr.mean(0), Ztr.std(0) + 1e-6
+    # floor the per-dimension scale: a near-constant dimension would otherwise
+    # be amplified up to 1e6x on corrupted inputs (review)
+    mu, sd = Ztr.mean(0), Ztr.std(0)
+    sd = np.maximum(sd, 1e-3 * np.median(sd) + 1e-12)
     A, B = (Ztr - mu) / sd, (Zte - mu) / sd
     K = int(max(ytr.max(), yte.max())) + 1
     Y = np.eye(K)[ytr]
@@ -137,6 +140,8 @@ def corrupt(xflat, cfg, kind, level, seed=CORRUPT_SEED):
         for i in range(len(x)):
             r0, c0 = rng.integers(0, s - side + 1, 2)
             x[i, r0:r0 + side, c0:c0 + side, :] = 0.0     # sky is dark
+        # position is UNIFORM, so the square often covers the centred galaxy;
+        # identical seeds for every arm (spec wording corrected after review)
     return jnp.asarray(x.reshape(len(x), -1))
 
 
@@ -162,62 +167,70 @@ def lasso_curve(params, x, cfg):
 
 
 def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0):
-    """Proximal-gradient mapping norm at the end of the TRAINING relaxation.
+    """Is the TRAINING relaxation at its fixed point?  Sparse PC arms only.
 
-    G_l = (z_l - prox_l(z_l - eta * grad_l)) / eta, grad_l the per-sample gradient
-    of the smooth relaxation objective (B * dF_smooth/dz_l plus the output drive
-    at the top), prox_l the identity except S_{eta beta} at s for case B.
-    Reported relative to the same mapping norm at the relaxation's START
-    (deployed forward, zero duals), per layer, so a value -> 0 as T grows means
-    the relaxation converges to its fixed point.  Sparse PC arms only.
+    Per layer l, at the relaxed state for each budget T (same batch every T):
+      step_rel_l = ||z_l - prox_l(z_l - eta * grad_l)|| / ||z_l||
+          the relative change ONE more relaxation step would make; grad_l is the
+          per-sample gradient the relaxation itself uses (B * dF_smooth/dz_l plus
+          the coupled output drive), prox_l = S_{eta beta} at s for case B.
+          -> 0 means stationary.  Normalised by the STATE, not by the mapping at
+          the relaxation start: that start mapping is exactly 0 on every
+          feasible layer, which made the first version read 1e12 (review).
+      resid_rel_l = ||r_l|| / ||z_l||      primal feasibility
+      dual_step_rel_l = alpha_l ||r_l|| / ||lambda_l||   how fast lambda still moves
+    and, for case B, the spec's own fixed-point residual at s:
+      fp_B = ||z_s - S_{beta/rho}(f_s + g_s/rho)|| / ||z_s||,
+    using f_s + g_s/rho = z_s - grad_s/rho (grad_s = rho(z_s - f_s) - g_s with
+    lambda_s = 0).  Coupled output drive only; other runs are skipped.
     """
+    if cfg.pc.output_drive != "coupled":
+        print("   [A] skipped: fixed-point check implemented for the coupled drive only")
+        return []
     key = jax.random.PRNGKey(seed)
     kb, kv, ka, kg = jax.random.split(key, 4)
     idx = np.random.default_rng(seed).choice(len(Xtr), B, replace=False)
     Zin, _ = D.make_views(kv, jnp.asarray(Xtr[idx]), cfg.data)
     A = S.sample_directions(ka, cfg.enc.embed_dim, cfg.sig.num_slices)
     loss_z = PA._objective(cfg, A)
-    V, eta = Zin.shape[0], cfg.pc.eta_h
+    V, eta, rho, s = Zin.shape[0], cfg.pc.eta_h, cfg.pc.rho, cfg.sparse.layer
+    alphas = SP.layer_alphas(cfg, len(params[0]))
 
-    def mapping(acts, duals, a):
+    def measures(acts, duals, a):
         def Fs(acts):
-            F = sum(PA.al_energy(params, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
+            F = sum(PA.al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
                                  cfg.pc.out_scale) for v in range(V))
             if a is not None:
                 F = F + sum(SP.head_smooth(params, acts[v], a[v], cfg) for v in range(V))
             return F
         g = jax.grad(Fs)(acts)
         gL = jax.grad(lambda ac: loss_z(jnp.stack([ac[v][-1] for v in range(V)])))(acts)
-        per = []
+        r = [PA.residuals(params, acts[v], Zin[v], cfg.enc) for v in range(V)]
+        nrm = lambda xs: float(np.sqrt(sum(float(jnp.sum(x ** 2)) for x in xs)))
+        out = {"step_rel": [], "resid_rel": [], "dual_step_rel": []}
+        fpB = None
         for l in range(len(acts[0])):
-            num, den = 0.0, 0.0
-            for v in range(V):
-                grad = B * g[v][l] + B * gL[v][l]
-                step = acts[v][l] - eta * grad
-                if cfg.sparse.case == "B" and l == cfg.sparse.layer:
-                    step = SP.soft_threshold(step, eta * cfg.sparse.beta)
-                G = (acts[v][l] - step) / eta
-                num += float(jnp.sum(G ** 2))
-                den += float(jnp.sum(grad ** 2))
-            per.append((num, den))
-        return per
+            grads = [B * g[v][l] + B * gL[v][l] for v in range(V)]
+            steps = [acts[v][l] - eta * grads[v] for v in range(V)]
+            if cfg.sparse.case == "B" and l == s:
+                steps = [SP.soft_threshold(x, eta * cfg.sparse.beta) for x in steps]
+                tgt = [SP.soft_threshold(acts[v][l] - grads[v] / rho, cfg.sparse.beta / rho)
+                       for v in range(V)]
+                fpB = nrm([acts[v][l] - tgt[v] for v in range(V)]) / (nrm([acts[v][l] for v in range(V)]) + 1e-12)
+            zn = nrm([acts[v][l] for v in range(V)]) + 1e-12
+            out["step_rel"].append(nrm([acts[v][l] - steps[v] for v in range(V)]) / zn)
+            rn = nrm([r[v][l] for v in range(V)])
+            out["resid_rel"].append(rn / zn)
+            ln = nrm([duals[v][l] for v in range(V)])
+            out["dual_step_rel"].append(alphas[l] * rn / ln if ln > 0 else float("nan"))
+        out["fp_B"] = fpB
+        return out
 
     rows = []
     for T in Ts:
         c2 = dataclasses.replace(cfg, pc=dataclasses.replace(cfg.pc, T=T))
         acts, duals, hist = PA.relax(params, Zin, A, c2, kg)
-        a = hist.get("a")
-        per = mapping(acts, duals, a)
-        rows.append({"T": T, "per_layer_G": [float(np.sqrt(n)) for n, _ in per],
-                     "per_layer_grad": [float(np.sqrt(d)) for _, d in per]})
-    # normalise by the mapping norm at the START of relaxation (deployed forward,
-    # zero duals), so per_layer_rel -> 0 with T means convergence to the fixed point
-    init = [SP.relax_init(params, Zin[v], cfg) for v in range(V)]
-    acts0 = [i[0] for i in init]
-    a0 = [i[1] for i in init] if cfg.sparse.case == "C" else None
-    base = mapping(acts0, PA.zero_duals(acts0), a0)
-    for r in rows:
-        r["per_layer_rel"] = [g / (np.sqrt(b[0]) + 1e-12) for g, b in zip(r["per_layer_G"], base)]
+        rows.append({"T": T, **measures(acts, duals, hist.get("a"))})
     return rows
 
 
@@ -281,7 +294,8 @@ def analyse(run_dir, n_train, n_test, fast=False):
             res[lab] = pr
             for k, v in pr.items():
                 add("C", f"probe_{k}", v, cname, lab)
-            if zs_te is not None and kind != "clean":
+            # kappa at t=0 for B is identically 1 (z_s = f_s there): not reported
+            if zs_te is not None and kind != "clean" and not (sp.case == "B" and lab == "0"):
                 zs0, fs0 = clean_te[lab][1], clean_te[lab][2]
                 kap = float(np.mean(np.linalg.norm(zs_te - zs0, axis=1))
                             / (np.mean(np.linalg.norm(fs_te - fs0, axis=1)) + 1e-12))
@@ -340,8 +354,11 @@ def analyse(run_dir, n_train, n_test, fast=False):
     # ---- A: training-relaxation fixed point; D: gradient agreement (PC arms)
     if cfg.arm == "pc" and not fast:
         for r in relax_fixed_point_residual(params, cfg, Xtr):
-            for l, v in enumerate(r["per_layer_rel"]):
-                add("A", "relax_fixed_point_rel", v, "train_batch", r["T"], layer=l)
+            for k in ("step_rel", "resid_rel", "dual_step_rel"):
+                for l, v in enumerate(r[k]):
+                    add("A", f"relax_{k}", v, "train_batch", r["T"], layer=l)
+            if r["fp_B"] is not None:
+                add("A", "relax_fixed_point_B_at_s", r["fp_B"], "train_batch", r["T"])
     if not fast:
         for l, c in enumerate(grad_cosines(params, cfg, Xtr)):
             add("D", "cos_pc_vs_bp_same_net", c, "train_batch", "", layer=l)

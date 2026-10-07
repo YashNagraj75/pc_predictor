@@ -59,11 +59,19 @@ def weight_displacement(run_dir):
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
     init = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     trained = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"), init)
-    A, B = _arrays(init), _arrays(trained)
+    # encoder layers only: a case-C dictionary (params[2]) is NOT a layer -- it
+    # is re-normalised every step, so its displacement has another scale and
+    # would set the floor / shift n_frozen (found in review).  -> dict_disp.
+    A, B = _arrays((init[0], init[1])), _arrays((trained[0], trained[1]))
     per = [float(np.linalg.norm(b - a) / (np.linalg.norm(a) + 1e-12))
            for a, b in zip(A, B)]
     num = float(np.sqrt(sum(((b - a) ** 2).sum() for a, b in zip(A, B))))
     den = float(np.sqrt(sum((a ** 2).sum() for a in A))) + 1e-12
+    if len(init) > 2:
+        d0, d1 = np.asarray(init[2]), np.asarray(trained[2])
+        weight_displacement.dict_disp = float(np.linalg.norm(d1 - d0) / np.linalg.norm(d0))
+    else:
+        weight_displacement.dict_disp = None
     return per, num / den, [a.shape for a in A]
 
 
@@ -107,6 +115,8 @@ def report(run_dir, verbose=True):
     row = {"tag": tag, "overall_disp": overall, "disp_floor": floor,
            "n_layers": len(per), "n_frozen": n_frozen, **traj}
     row.update({f"L{i}_disp": v for i, v in enumerate(per)})
+    if weight_displacement.dict_disp is not None:
+        row["dict_disp"] = weight_displacement.dict_disp
     if verbose:
         print(f"\n=== {tag} ===")
         print(f"  overall displacement {overall:.5f}   "

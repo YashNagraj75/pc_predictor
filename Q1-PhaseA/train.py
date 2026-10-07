@@ -41,17 +41,33 @@ def bp_grads(params, Zin, A, cfg):
 
 
 def bp_objective(params, Zin, A, cfg):
-    """What the BP arm differentiates.  == loss_from_views except for the
-    case-C control C2, which adds the deployed LASSO energy so that D is trained
-    as a dictionary (spec: 'Method - Sparse PC-ALM arms spec').  loss_ff in the
-    log stays the task loss alone, so it remains comparable across arms."""
+    """What the BP arm differentiates.  == loss_from_views for case none.
+
+    For the sparse controls it adds the DEPLOYED energy of the sparse layer --
+    the energy the PC arm minimises over z_s, evaluated at the deployed z_s:
+      C1-B: Huber_{beta,rho}(f_s) = rho/2||f_s - S(f_s)||^2 + beta||S(f_s)||_1
+            (the Moreau envelope of beta||.||_1 that PC-B's weight gradient follows)
+      C2  : mu/2||f_s - D a^(T)||^2 + gamma||a^(T)||_1
+    SUMMED over views, exactly as the PC energy is (pcalm sums the batch-mean
+    energies over the V views while the task loss enters as one term).  A mean
+    over views made C2's prior 4x weaker than PC-C's -- found in review.
+    Spec: 'Method - Sparse PC-ALM arms spec'.  loss_ff in the log stays the
+    task loss alone, so it remains comparable across arms."""
     loss, aux = loss_from_views(params, Zin, A, cfg)
-    if cfg.sparse.case == "C":
+    if SP.active(cfg):
         h = sum(SP.deployed_head_energy(params, Zin[v], cfg)
-                for v in range(Zin.shape[0])) / Zin.shape[0]
+                for v in range(Zin.shape[0]))
         loss = loss + h
         aux = {**aux, "head_energy": h}
     return loss, aux
+
+
+@eqx.filter_jit
+def loss_ff_fn(params, Zin, A, cfg):
+    """Jitted task loss at the deployed network, for the per-step log.  Eager
+    calls re-traced and re-compiled the ISTA loop every step (~0.2 s/step for
+    case C on CPU) -- found in review."""
+    return loss_from_views(params, Zin, A, cfg)[0]
 
 
 def optim(cfg): # Optimizer for both the arms
@@ -75,11 +91,14 @@ def optim(cfg): # Optimizer for both the arms
         )
     if cfg.sparse.case != "C":
         return base()
-    # Case C (PC-C and C2 alike): the dictionary is its OWN clipping group.
-    # At init |dF/dD| ~ 1.5 against ~0.35 for the whole encoder, so one global
-    # clip would let the dictionary's gradient scale throttle the encoder's
-    # step on most iterations -- the confound that broke the T=64 screen.
-    return optax.multi_transform({"enc": base(), "dict": base()}, SP.param_labels)
+    # Case C (PC-C and C2 alike): the encoder keeps its usual clip; the
+    # dictionary is a separate group with NO clip.  At init |dF/dD| ~ 1.5 vs
+    # ~0.35 for the whole encoder, so one global clip would let D throttle the
+    # encoder (the T=64 confound).  D is unclipped rather than clipped on its
+    # own because Adam is invariant to the gradient's scale, and a D clip would
+    # fire at different rates in the two arms of a pair -- found in review.
+    dict_opt = optax.adamw(sched, weight_decay=cfg.opt.weight_decay)
+    return optax.multi_transform({"enc": base(), "dict": dict_opt}, SP.param_labels)
 
 @eqx.filter_jit
 def grad_update(params,g, opt_state,opt):
@@ -169,9 +188,19 @@ def train(cfg: RunCfg, verbose=True):
         # the right diagnostic for whether inference is converging, but
         # not comparable across arms or across T.  loss_ff is what makes
         # the two arms' training curves plottable on the same axes.
-        L_ff, _ = loss_from_views(params, Zin, A, cfg)
+        L_ff = loss_ff_fn(params, Zin, A, cfg)
 
         row = {"step": step, "grad_norm_preclip": gnorm, "loss_ff": float(L_ff)}
+        if not (np.isfinite(gnorm) and np.isfinite(float(L_ff))):
+            # stop a diverged run instead of training on NaNs for hours; no
+            # params.eqx is written, so downstream probes skip it loudly
+            row["DIVERGED"] = True
+            log.append(row)
+            with open(os.path.join(out, "log.json"), "w") as f:
+                json.dump(log, f)
+            open(os.path.join(out, "DIVERGED"), "w").write(f"step {step}\n")
+            print(f"[{cfg.name}] DIVERGED at step {step} -- stopping this run", flush=True)
+            return params, log
         if cfg.sparse.case == "C":
             row.update({"grad_norm_enc": gn_enc, "grad_norm_dict": gn_dict})
         row.update({k: float(v) for k, v in aux.items() if jnp.ndim(v) == 0})
@@ -243,12 +272,14 @@ def evaluate(params, Xtr, ytr, Xte, yte, cfg: RunCfg, n_probe=4000, seed=0):
     return out
 
 
-def compare_arms(eval_a, params_a, eval_b, params_b, Xte, cfg, n=4000, seed=0):
+def compare_arms(eval_a, params_a, eval_b, params_b, Xte, cfg, n=4000, seed=0, cfg_b=None):
     """COMPLETE -- cross-arm comparison: layer-wise CKA and the projected
     two-sample test.  Needs both arms' parameters and MATCHED inputs."""
     xb = D.eval_batch(jnp.asarray(Xte[:n]), cfg.data)
-    za, hsa = E.forward(params_a, xb, cfg.enc)
-    zb, hsb = E.forward(params_b, xb, cfg.enc)
+    # the DEPLOYED networks (E.forward would silently drop the threshold / ISTA
+    # of sparse arms -- found in review).  cfg_b defaults to cfg.
+    za, hsa = SP.forward(params_a, xb, cfg)
+    zb, hsb = SP.forward(params_b, xb, cfg_b or cfg)
     A = np.asarray(S.sample_directions(jax.random.PRNGKey(seed),
                                        za.shape[1], cfg.sig.num_slices))
     return {

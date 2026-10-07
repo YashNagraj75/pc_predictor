@@ -37,11 +37,11 @@ def main():
     ap.add_argument("--tag", default="",
                     help="suffix for the run name; the seed is appended to it")
     ap.add_argument("--T", type=int, default=16, help="PC inference budget")
-    ap.add_argument("--eta-h", type=float, default=PCCfg.eta_h,
+    ap.add_argument("--eta-h", type=float, default=None,
                     help="PER-SAMPLE activity step; pcalm.relax multiplies by "
                          "the batch size.  Set it from diag_inference.py at "
                          "the batch size you are actually training at.")
-    ap.add_argument("--alpha", type=float, default=0.0,
+    ap.add_argument("--alpha", type=float, default=None,
                     help="PC-ALM dual rate; 0 = plain PC")
     # ---- sparse prior (spec: 'Method - Sparse PC-ALM arms spec') ----------
     ap.add_argument("--sparse-case", choices=["none", "B", "C"], default="none")
@@ -63,6 +63,16 @@ def main():
         # RunCfg.name does not encode the sparse settings; only the tag
         # separates these runs, so an untagged sparse run would collide.
         ap.error("--tag is required with --sparse-case B/C")
+    if args.sparse_case != "none" and (args.alpha is None or args.eta_h is None
+                                       or args.alpha <= 0):
+        # the defaults (alpha=0, eta_h=0.25) would silently run PLAIN PC at the
+        # wrong step and the run name would not show it (found in review)
+        ap.error("--sparse-case B/C needs explicit --alpha > 0 and --eta-h "
+                 "(spec operating point: --alpha 1 --eta-h 0.0625)")
+    if args.eta_h is None:
+        args.eta_h = PCCfg.eta_h
+    if args.alpha is None:
+        args.alpha = 0.0
     if args.sparse_case == "B" and args.beta <= 0:
         ap.error("case B needs --beta > 0")
     if args.sparse_case == "C" and args.gamma <= 0:

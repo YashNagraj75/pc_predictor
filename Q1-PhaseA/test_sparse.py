@@ -338,9 +338,10 @@ def test_bp_controls():
         gWs = float(jnp.linalg.norm(g[0][s].layers[1].weight))
         extra = ""
         ok = finite and gWs > 0
+        ok = ok and "head_energy" in aux
         if case == "C":
             gD = float(jnp.linalg.norm(g[2]))
-            ok = ok and gD > 0 and "head_energy" in aux
+            ok = ok and gD > 0
             extra = f" |dD|={gD:.2e} head={float(aux['head_energy']):.4f}"
         check(f"{'C1-B' if case == 'B' else 'C2'}: BP through the deployed net is finite and "
               f"reaches W_s", ok, f"|dW_s|={gWs:.2e}{extra}")
@@ -357,6 +358,30 @@ def test_pc_grads_finite_and_logged():
               f"active={float(aux['active_frac']):.3f} act_growth={float(aux['act_growth']):.3f}")
 
 
+def test_pc_agrees_with_its_bp_control_below_s():
+    """At a long relaxation the PC weight gradient on the layers BELOW s must
+    point the same way as backprop through the control's objective (task loss
+    + deployed sparse-layer energy, summed over views).  Measured 2026-10-06:
+    0.83-0.85 (B) and 0.78-0.84 (C) with the corrected objective, 0.43-0.45 (B)
+    and 0.37-0.51 (C) with the first version (head energy averaged over views /
+    no Huber term for C1-B) -- so this test catches that bug class.
+    Layers at and ABOVE s are not asserted: PC computes their gradient at the
+    relaxed z_s (which carries task credit, g_s/rho) while the control's runs at
+    the deployed z_s = S(f_s), a structural difference of removing the
+    multiplier at s, not a bug."""
+    def cos(a, b):
+        a, b = np.ravel(a), np.ravel(b)
+        return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    for case in ("B", "C"):
+        params, Zin, A, cfg = small(case=case, alpha=1.0, T=100, eta=0.0625, B=8)
+        gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+        gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+        s = cfg.sparse.layer
+        cs = [cos(gp[0][l].layers[1].weight, gb[0][l].layers[1].weight) for l in range(s)]
+        check(f"PC-{case} vs its BP control: per-layer cosine > 0.7 on layers below s (T=100)",
+              min(cs) > 0.7, " ".join(f"L{l}={c:.3f}" for l, c in enumerate(cs)))
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -368,7 +393,8 @@ if __name__ == "__main__":
                test_ista_vs_fista_and_kkt, test_ista_t0_is_one_step_from_zero,
                test_blend_is_the_z_minimiser, test_C_relax_descends_at_alpha0,
                test_C_D_gradient_matches_analytic, test_project_and_serialise,
-               test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged):
+               test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged,
+               test_pc_agrees_with_its_bp_control_below_s):
         try:
             fn()
         except Exception as exc:

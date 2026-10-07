@@ -63,8 +63,24 @@ def normalise_dict(D, eps=1e-8):
 
 
 def spectral_sq(D):
-    """||D||_2^2, exact."""
-    return jnp.linalg.norm(D, ord=2) ** 2
+    """||D||_2^2, exact.  The step size is a solver constant, never a gradient
+    path: stop_gradient is applied to D itself, so no SVD derivative is built
+    (stopping only the OUTPUT still built the JVP -- found in review)."""
+    return jnp.linalg.norm(jax.lax.stop_gradient(D), ord=2) ** 2
+
+
+def code_step(params, cfg):
+    """Case-C relaxation code step eta_g = step_frac / (beta_g ||D||^2).
+    D is constant within one relaxation, so this is computed ONCE per relax."""
+    return cfg.sparse.step_frac / (cfg.sparse.beta_g * spectral_sq(get_D(params)))
+
+
+def huber_energy(f, beta, rho):
+    """Per-sample Moreau envelope of beta||.||_1 at f:
+    min_z rho/2||z - f||^2 + beta||z||_1 = rho/2||f - S(f)||^2 + beta||S(f)||_1,
+    S = S_{beta/rho}.  -> (B,)"""
+    zs = soft_threshold(f, beta / rho)
+    return 0.5 * rho * jnp.sum((f - zs) ** 2, -1) + beta * jnp.sum(jnp.abs(zs), -1)
 
 
 def lasso_mu(cfg):
@@ -219,9 +235,8 @@ def deploy(params, x, cfg, t=None, beta_g=None):
                 else:
                     D = get_D(params)
                     mu = rho * bg / (rho + bg)
-                    # the step size is a constant of the solver, not a path for
-                    # gradients (matters only for C2's backprop through ISTA)
-                    eta = jax.lax.stop_gradient(sp.step_frac / (mu * spectral_sq(D)))
+                    # solver constant; spectral_sq stops the gradient at D
+                    eta = sp.step_frac / (mu * spectral_sq(D))
                     a = ista(f, D, sp.gamma, mu, tt, eta)
                     extras["a"], extras["eta"] = a, eta
                     f = (rho * f + bg * (a @ D.T)) / (rho + bg)
@@ -237,12 +252,19 @@ def forward(params, x, cfg, t=None):
 
 
 def deployed_head_energy(params, x, cfg):
-    """C2's head term: batch mean of mu/2||f_s - D a^(T)||^2 + gamma||a^(T)||_1."""
-    if cfg.sparse.case != "C":
+    """The deployed energy of the sparse layer, batch mean, for ONE view.
+
+    The energy the PC arm minimises over z_s, at the deployed z_s:
+      B (C1-B): Huber_{beta,rho}(f_s), the Moreau envelope of beta||.||_1
+      C (C2)  : mu/2||f_s - D a^(T)||^2 + gamma||a^(T)||_1
+    train.bp_objective SUMS this over views, as the PC energy does."""
+    sp = cfg.sparse
+    if sp.case == "none":
         return 0.0
     _, ex = deploy(params, x, cfg)
-    return jnp.mean(lasso_energy(ex["f_s"], get_D(params), ex["a"],
-                                 cfg.sparse.gamma, lasso_mu(cfg)))
+    if sp.case == "B":
+        return jnp.mean(huber_energy(ex["f_s"], sp.beta, cfg.pc.rho))
+    return jnp.mean(lasso_energy(ex["f_s"], get_D(params), ex["a"], sp.gamma, lasso_mu(cfg)))
 
 
 # --------------------------------------------------- relaxation hooks
@@ -293,16 +315,16 @@ def prox_zs(acts, cfg):
     return out
 
 
-def a_step(params, acts, a, cfg):
+def a_step(params, acts, a, cfg, eta):
     """Case C proximal-gradient step on the code, at the PRE-step activities.
 
     a <- S_{eta_g gamma}(a - eta_g beta_g D^T (D a - z_s)),
-    eta_g = step_frac / (beta_g ||D||^2).  The gradient is per sample (no B).
+    eta = eta_g from code_step(), computed once per relaxation.  The gradient
+    is per sample (no B).
     """
     sp = cfg.sparse
     D = get_D(params)
     zs = acts[sp.layer]
-    eta = sp.step_frac / (sp.beta_g * spectral_sq(D))
     grad = sp.beta_g * ((a @ D.T - zs) @ D)
     return soft_threshold(a - eta * grad, eta * sp.gamma)
 

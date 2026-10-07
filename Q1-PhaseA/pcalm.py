@@ -187,6 +187,8 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         if cfg.sparse.case != "C":
             a0 = None
     alphas = SP.layer_alphas(cfg, len(acts0[0]))
+    # case C code step, once per relaxation (D is constant within it)
+    eta_g = SP.code_step(params, cfg) if cfg.sparse.case == "C" else None
     duals0 = zero_duals(acts0)
 
     loss_z = _objective(cfg, A)
@@ -233,7 +235,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         if a is None:
             return new, None
         # case C: Jacobi -- the code steps at the PRE-step activities
-        return new, [SP.a_step(params, acts[v], a[v], cfg) for v in range(V)]
+        return new, [SP.a_step(params, acts[v], a[v], cfg, eta_g) for v in range(V)]
 
     def dual(acts, duals):
         if all(al == 0.0 for al in alphas):

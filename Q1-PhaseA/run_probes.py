@@ -123,6 +123,10 @@ def main():
             # was kNN-only and the two probes disagree.
             sd = int(run_dir.split(":", 1)[1])
             cfg = RunCfg(opt=OptCfg(seed=sd))
+            # ORIGINAL architecture only.  Sparse arms (B/C) need their own floor
+            # from `run_arms.py --init-only` (skip at s removed, W_s rescaled, D).
+            print(f"[floor] random:{sd} = untrained ORIGINAL-architecture encoder; "
+                  f"not a floor for sparse arms", flush=True)
             params = E.init(jax.random.PRNGKey(sd), cfg.enc, cfg.data.input_dim)
             run_dir = os.path.join("runs", f"random_init_seed{sd}")
             os.makedirs(run_dir, exist_ok=True)

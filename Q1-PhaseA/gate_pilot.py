@@ -1,14 +1,23 @@
-"""Pilot gate for a sparse PC arm (rule D5).  Exit 0 = pass, 1 = fail.
+"""Pilot gate for one sparse PAIR (PC arm + its BP control), rule D5.
 
-    ./.venv/bin/python gate_pilot.py runs/<pilot_run_dir>
+    ./.venv/bin/python gate_pilot.py runs/<pc_pilot_dir> runs/<bp_pilot_dir>
+    exit 0 = pass, 1 = fail
 
-Criteria (spec: 'Method - Sparse PC-ALM arms spec'):
-  * active fraction of the sparse variable, mean over the last 200 steps, in [0.1, 0.3]
-  * gradient clipping fired on < 5 % of all steps
-  * everything finite, and act_growth = max_l ||z_l^(T)|| / ||z_l^(0)|| <= 10 over the
-    last 200 steps.  (Not F_T / F_0: the completed-square energy grows with the
-    multipliers by design.)
-A failing arm is skipped and reported -- never re-tuned against the pilot.
+Criteria (spec: 'Method - Sparse PC-ALM arms spec'), applied to BOTH arms:
+  * every logged value finite, no DIVERGED marker
+  * encoder gradient clipping fired on < 5 % of steps (for case C the encoder
+    group; the dictionary group is unclipped by design)
+  * DEPLOYED active fraction (eval rows, SP.health) at the last eval in [0.1, 0.3]
+    -- the deployed network is what is probed, so that is what is gated
+PC arm only:
+  * act_growth = max_l ||z_l^(T)|| / max_k ||z_k^(0)|| <= 10 over the last 200 steps
+Pair:
+  * the two config.json files differ ONLY in `arm`, and the PC arm has alpha > 0
+A failing pair is skipped and reported -- never re-tuned against the pilot.
+
+Review history: the first version gated the PC arm alone and on the RELAXED
+sparse variable; three reviewers flagged that the past clipping confound could
+recur on the BP control and that relaxed != deployed sparsity.
 """
 import json
 import math
@@ -16,47 +25,81 @@ import os
 import sys
 
 LAST = 200
+BAND = (0.1, 0.3)
 
 
-def gate(run_dir):
+def _load(run_dir):
     log = json.load(open(os.path.join(run_dir, "log.json")))
     cfg = json.load(open(os.path.join(run_dir, "config.json")))
+    return log, cfg
+
+
+def _flat(d, prefix=""):
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            out.update(_flat(v, f"{prefix}{k}."))
+        else:
+            out[f"{prefix}{k}"] = v
+    return out
+
+
+def arm_report(run_dir, is_pc):
+    log, cfg = _load(run_dir)
     clip = cfg["opt"]["grad_clip"]
-    tail = log[-LAST:]
-    reasons, info = [], {}
-
-    def col(rows, k):
-        return [r[k] for r in rows if k in r]
-
-    af = col(tail, "active_frac")
-    # case C clips encoder and dictionary as separate groups: the confound we
-    # gate on is the ENCODER being clipped; the dictionary's rate is reported.
     is_C = cfg.get("sparse", {}).get("case") == "C"
-    g = col(log, "grad_norm_enc") if is_C else col(log, "grad_norm_preclip")
-    if is_C:
-        gd = col(log, "grad_norm_dict")
-        info["clip_frac_dict"] = sum(v > clip for v in gd) / max(len(gd), 1)
-    ag = col(tail, "act_growth")
-    lf = col(log, "loss_ff")
-    if not af or not g or not ag:
-        return False, ["log is missing active_frac / grad_norm_preclip / act_growth"], info
-    info["active_frac_last200"] = sum(af) / len(af)
-    info["clip_frac"] = sum(v > clip for v in g) / len(g)
-    info["act_growth_max_last200"] = max(ag)
-    info["n_steps"] = len(log)
-    finite = all(math.isfinite(v) for v in g + ag + lf + af)
-    if not 0.1 <= info["active_frac_last200"] <= 0.3:
-        reasons.append(f"active fraction {info['active_frac_last200']:.3f} outside [0.1, 0.3]")
-    if info["clip_frac"] >= 0.05:
-        reasons.append(f"clipping fired on {100 * info['clip_frac']:.1f}% of steps (>= 5%)")
-    if not finite:
+    key = "grad_norm_enc" if is_C else "grad_norm_preclip"
+    g = [r[key] for r in log if key in r]
+    lf = [r["loss_ff"] for r in log if "loss_ff" in r]
+    dep = [(r["step"], r["eval"]["sparse"]["active_frac"]) for r in log
+           if isinstance(r.get("eval"), dict) and "sparse" in r["eval"]]
+    info = {"run": run_dir, "n_steps": len(log),
+            "clip_frac_enc": (sum(v > clip for v in g) / len(g)) if g else None,
+            "deployed_active_frac": [round(v, 4) for _, v in dep],
+            "deployed_active_steps": [s for s, _ in dep]}
+    reasons = []
+    if os.path.exists(os.path.join(run_dir, "DIVERGED")) or any(r.get("DIVERGED") for r in log):
+        reasons.append("run diverged")
+    vals = g + lf
+    if is_pc:
+        ag = [r["act_growth"] for r in log[-LAST:] if "act_growth" in r]
+        rf = [r["active_frac"] for r in log[-LAST:] if "active_frac" in r]
+        info["act_growth_max_last200"] = max(ag) if ag else None
+        info["relaxed_active_frac_last200"] = (sum(rf) / len(rf)) if rf else None
+        vals += ag
+        if not ag:
+            reasons.append("PC log has no act_growth")
+        elif max(ag) > 10:
+            reasons.append(f"activity growth {max(ag):.2f} > 10")
+    if not g:
+        reasons.append(f"log has no {key}")
+    elif info["clip_frac_enc"] >= 0.05:
+        reasons.append(f"encoder clipping fired on {100 * info['clip_frac_enc']:.1f}% of steps (>= 5%)")
+    if not all(math.isfinite(v) for v in vals):
         reasons.append("non-finite values in the log")
-    if info["act_growth_max_last200"] > 10:
-        reasons.append(f"activity growth {info['act_growth_max_last200']:.2f} > 10")
-    return not reasons, reasons, info
+    if not dep:
+        reasons.append("no deployed active fraction in eval rows")
+    elif not BAND[0] <= dep[-1][1] <= BAND[1]:
+        reasons.append(f"deployed active fraction {dep[-1][1]:.3f} outside {list(BAND)}")
+    return reasons, info, cfg
+
+
+def gate(pc_dir, bp_dir):
+    r_pc, i_pc, c_pc = arm_report(pc_dir, is_pc=True)
+    r_bp, i_bp, c_bp = arm_report(bp_dir, is_pc=False)
+    reasons = [f"PC: {x}" for x in r_pc] + [f"BP: {x}" for x in r_bp]
+    if c_pc.get("arm") != "pc" or c_bp.get("arm") != "bp":
+        reasons.append(f"arms are {c_pc.get('arm')}/{c_bp.get('arm')}, expected pc/bp")
+    if not c_pc.get("pc", {}).get("alpha", 0) > 0:
+        reasons.append("PC arm has alpha <= 0 (would be plain PC)")
+    fa, fb = _flat(c_pc), _flat(c_bp)
+    diff = sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k) and k != "arm")
+    if diff:
+        reasons.append(f"pair configs differ beyond `arm`: {diff}")
+    return not reasons, reasons, {"pc": i_pc, "bp": i_bp}
 
 
 if __name__ == "__main__":
-    ok, reasons, info = gate(sys.argv[1])
-    print(json.dumps({"run": sys.argv[1], "pass": ok, "reasons": reasons, **info}, indent=2))
+    ok, reasons, info = gate(sys.argv[1], sys.argv[2])
+    print(json.dumps({"pass": ok, "reasons": reasons, **info}, indent=2))
     sys.exit(0 if ok else 1)
