@@ -1,0 +1,21 @@
+finding,raised_by,severity,outcome,resolution
+C2 head energy averaged over views; PC-C sums it (C2's prior 4x weaker),"Math F1, Design F2, Numerics F3",major,fixed,"summed over views; new PC-vs-control agreement gate test (0.43->0.83 B, 0.37->0.78 C below s)"
+C1-B lacks the Huber energy PC-B's weight gradient follows,"Math F3, Design F9",design,fixed,"deployed Huber energy of layer s added to C1-B, mirroring C2"
+Group-A fixed-point metric divided by ~0 (1e12 values),"Math F2, Design F1, Numerics F2",major,fixed,state-relative step residual + primal residual + dual step + spec's case-B residual
+Clip/sparsity gates applied to PC arms only,"Math F8, Design F3, Numerics F8",major,fixed,pilot gates the PC/BP pair; configs must differ only in arm
+"Gate measured relaxed, not deployed, sparsity","Design F4, Numerics F7",design,fixed,gate on deployed active fraction; relaxed reported alongside
+Dictionary clip group fires at different rates per arm,Numerics F3,major,fixed,D group unclipped (Adam is scale-invariant); encoder clip unchanged
+Eager per-step loss_ff recompiles the ISTA loop,Numerics F1,major,fixed,jitted loss_ff_fn
+"compare_arms ran the dense network, not the deployed one",Design F5,major,fixed,uses SP.forward per arm
+"Sparse runs default to alpha=0, eta_h=0.25 silently","Math F4, Design F7, Numerics F5",minor,fixed,run_arms refuses without explicit --alpha>0 and --eta-h; gate checks alpha>0
+Spectral norm (SVD) recomputed inside the relaxation scan; JVP built,"Math F5, Numerics F4",minor,fixed,once per relaxation; stop_gradient on D itself
+Dictionary counted as a layer in displacement floor,"Math F6, Numerics F9",minor,fixed,encoder layers only; D reported as dict_disp
+No abort on non-finite values,Numerics F6,minor,fixed,"run stops, writes DIVERGED, no params.eqx"
+Fixed-point check ignores output_drive; primal-only,Math F7,minor,fixed,coupled-only guard; dual step reported
+Occlusion called 'centre-free' but position is uniform,"Math F9, Design F11, Numerics F10",minor,spec corrected,"uniform position, identical seeds for all arms"
+Delta_inf for B is thresholding; kappa(t=0)=1 for B,"Math F10, Design F8",design,documented,kappa at t=0 for B dropped; interpretation note in spec
+random: floor is the original architecture,Design F6,minor,fixed,warning printed; sparse floors only from --init-only
+Ridge sd floor 1e-6; two probe protocols,Design F10,minor,fixed,sd floored at 1e-3 x median; all table rows from diag_sparse.py
+beta/gamma selected on seed-0 init only,Math F11,note,deferred,step-0 deployed active fraction is logged per seed
+W_s x sqrt(L) lowers its relative learning rate,Design F12,note,accepted,symmetric within each PC/BP pair
+act_growth is a weak blow-up detector,Numerics F11,note,accepted,dual_norm and F_final also logged

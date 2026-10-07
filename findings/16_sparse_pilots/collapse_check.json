@@ -1,0 +1,50 @@
+[
+ {
+  "run": "pc_sigreg_T16_coupled_spBpilot_s0",
+  "width": 128,
+  "units_ever_active": 1,
+  "mean_active_per_sample": 1.0,
+  "distinct_supports": 1,
+  "top_unit_share": 1.0,
+  "embed_std_over_inputs": 0.0,
+  "embed_norm_mean": 0.0,
+  "f_s_cos_to_mean_median": 0.9999246001243591,
+  "majority_class_rate": 0.171
+ },
+ {
+  "run": "bp_sigreg_spBpilot_s0",
+  "width": 128,
+  "units_ever_active": 10,
+  "mean_active_per_sample": 5.04,
+  "distinct_supports": 115,
+  "top_unit_share": 1.0,
+  "embed_std_over_inputs": 0.005809279624372721,
+  "embed_norm_mean": 0.09589195251464844,
+  "f_s_cos_to_mean_median": 0.9966010451316833,
+  "majority_class_rate": 0.171
+ },
+ {
+  "run": "pc_sigreg_T16_coupled_spCpilot_s0",
+  "width": 256,
+  "units_ever_active": 182,
+  "mean_active_per_sample": 181.001,
+  "distinct_supports": 2,
+  "top_unit_share": 0.366,
+  "embed_std_over_inputs": 0.0019264634465798736,
+  "embed_norm_mean": 1.1802337169647217,
+  "f_s_cos_to_mean_median": 0.999936580657959,
+  "majority_class_rate": 0.171
+ },
+ {
+  "run": "bp_sigreg_spCpilot_s0",
+  "width": 256,
+  "units_ever_active": 77,
+  "mean_active_per_sample": 26.98,
+  "distinct_supports": 914,
+  "top_unit_share": 0.576,
+  "embed_std_over_inputs": 0.006821546703577042,
+  "embed_norm_mean": 0.7549163699150085,
+  "f_s_cos_to_mean_median": 0.9958628416061401,
+  "majority_class_rate": 0.171
+ }
+]

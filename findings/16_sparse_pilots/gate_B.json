@@ -1,0 +1,63 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: deployed active fraction 0.008 outside [0.1, 0.3]",
+    "BP: deployed active fraction 0.039 outside [0.1, 0.3]"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_spBpilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2002,
+      0.0156,
+      0.0156,
+      0.0156,
+      0.0078,
+      0.0078,
+      0.0078,
+      0.0078,
+      0.0078
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000008344650269,
+    "relaxed_active_frac_last200": 0.007831649780273437
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_spBpilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2003,
+      0.0738,
+      0.0613,
+      0.0491,
+      0.0434,
+      0.0404,
+      0.0389,
+      0.0392,
+      0.0391
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ]
+  }
+}

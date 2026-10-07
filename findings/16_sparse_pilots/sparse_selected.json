@@ -1,0 +1,11 @@
+{
+  "rule": "active fraction 0.2 at init, seed 0, training centre views",
+  "layer": 5,
+  "T_test": 16,
+  "n_images": 1024,
+  "beta": 0.2364998757839203,
+  "active_frac_B": 0.20000457763671875,
+  "gamma": 0.0820469610902499,
+  "beta_g": 1.0,
+  "active_frac_C": 0.201934814453125
+}
