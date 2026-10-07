@@ -30,7 +30,12 @@ BAND = (0.1, 0.3)
 # collapse guards that cases B/C lacked
 BAND_D = (0.05, 0.4)
 SUPPORTS_MIN_FRAC = 0.5          # distinct active patterns >= 50 % of eval rows, every head
-SPREAD_MIN_RATIO = 0.5           # embedding input spread >= 0.5 x its value at step 0
+SPREAD_MIN_RATIO = 0.5           # embedding / head-layer spread >= 0.5 x its MAX over the log
+FNORM_MIN_RATIO = 0.5            # raw head-layer norm >= 0.5 x its value at step 0
+# Review 2026-10-07: supports alone is near-vacuous at 20 % of 256 atoms (1024/1024
+# distinct even when variation is low); spread rises fast in training, so the
+# guard is against the running max, not step 0; the scale guard catches the
+# shrink-to-sparsify route (head_in removes it from the objective; this checks it).
 
 
 def _load(run_dir):
@@ -109,9 +114,25 @@ def _gate_D(log, info):
         if last[f"h{l}_supports"] < SUPPORTS_MIN_FRAC * last["n_rows"]:
             out.append(f"head {l}: {last[f'h{l}_supports']} distinct supports < "
                        f"{SUPPORTS_MIN_FRAC:.0%} of {last['n_rows']} rows (collapse)")
-    if last["embed_spread"] < SPREAD_MIN_RATIO * first["embed_spread"]:
+    mx = max(e["embed_spread"] for e in ev)
+    if last["embed_spread"] < SPREAD_MIN_RATIO * mx:
         out.append(f"embedding spread {last['embed_spread']:.4g} < {SPREAD_MIN_RATIO} x "
-                   f"initial {first['embed_spread']:.4g} (collapse)")
+                   f"its max {mx:.4g} (collapse)")
+    for l in heads:
+        mx = max(e[f"h{l}_input_spread"] for e in ev)
+        if last[f"h{l}_input_spread"] < SPREAD_MIN_RATIO * mx:
+            out.append(f"layer {l} input spread {last[f'h{l}_input_spread']:.4g} < {SPREAD_MIN_RATIO} x its max {mx:.4g}")
+        if last[f"h{l}_fnorm"] < FNORM_MIN_RATIO * first[f"h{l}_fnorm"]:
+            out.append(f"layer {l} norm {last[f'h{l}_fnorm']:.3f} < {FNORM_MIN_RATIO} x initial {first[f'h{l}_fnorm']:.3f} (scale shrink)")
+    info["head_fnorm_first_last"] = {l: (round(first[f"h{l}_fnorm"], 3), round(last[f"h{l}_fnorm"], 3)) for l in heads}
+    info["head_spread_last"] = {l: round(last[f"h{l}_input_spread"], 4) for l in heads}
+    info["head_subopt_last"] = {l: round(last[f"h{l}_subopt"], 4) for l in heads}
+    lf = [r["loss_ff"] for r in log if "loss_ff" in r]
+    info["head_task_ratio_first_last"] = (round(first["head_energy_obj"] / lf[0], 4),
+                                          round(last["head_energy_obj"] / lf[-1], 4))
+    hr = [r["head_resid"] for r in log if "head_resid" in r]
+    if hr:
+        info["head_resid_first_last"] = (round(hr[0], 4), round(hr[-1], 4))
     return out
 
 
@@ -131,6 +152,13 @@ def gate(pc_dir, bp_dir):
 
 
 if __name__ == "__main__":
-    ok, reasons, info = gate(sys.argv[1], sys.argv[2])
-    print(json.dumps({"pass": ok, "reasons": reasons, **info}, indent=2))
+    # exit 0 = pass, 1 = gate FAIL, 2 = the gate itself crashed (never a FAIL)
+    try:
+        ok, reasons, info = gate(sys.argv[1], sys.argv[2])
+    except Exception as exc:                                   # review D13
+        import traceback
+        traceback.print_exc()
+        print(json.dumps({"pass": None, "error": f"{type(exc).__name__}: {exc}"}))
+        sys.exit(2)
+    print(json.dumps({"pass": ok, "reasons": reasons, **info}, indent=2, default=str))
     sys.exit(0 if ok else 1)

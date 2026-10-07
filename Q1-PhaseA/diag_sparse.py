@@ -94,12 +94,12 @@ def batched(fn, X, bs=1000):
 
 # --------------------------------------------------------------- probes
 
-def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), seed=0):
+def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), seed=0, sd_floor=1e-3):
     """Closed-form ridge on one-hot labels; lambda on a 20% split of TRAIN."""
     # floor the per-dimension scale: a near-constant dimension would otherwise
     # be amplified up to 1e6x on corrupted inputs (review)
     mu, sd = Ztr.mean(0), Ztr.std(0)
-    sd = np.maximum(sd, 1e-3 * np.median(sd) + 1e-12)
+    sd = np.maximum(sd, sd_floor * np.median(sd) + 1e-12)
     A, B = (Ztr - mu) / sd, (Zte - mu) / sd
     K = int(max(ytr.max(), yte.max())) + 1
     Y = np.eye(K)[ytr]
@@ -118,8 +118,8 @@ def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), see
     return acc(fit(A, Y, best), B, yte), best
 
 
-def probe_pair(Ztr, ytr, Zte, yte):
-    lin, lam = ridge_classifier(Ztr, ytr, Zte, yte)
+def probe_pair(Ztr, ytr, Zte, yte, sd_floor=1e-3):
+    lin, lam = ridge_classifier(Ztr, ytr, Zte, yte, sd_floor=sd_floor)
     return {"linear": lin, "knn": float(M.knn_accuracy(Ztr, ytr, Zte, yte))}
 
 

@@ -350,6 +350,16 @@ def grads(params, Zin, A, cfg: RunCfg, key):
     if SP.active(cfg):
         aux["F_first"] = hist["F0"]
         aux["act_growth"] = hist["act_growth"]
+        if SP.is_D(cfg):
+            # relaxation convergence at the head layers: mean ||r_l|| / ||f_l|| over
+            # heads and views (review D-M7; z_l -> f_l is what makes the deployed
+            # code the counterpart of the relaxed one)
+            rr = []
+            for v in range(V):
+                pr = layer_predictions(params, acts[v], Zin[v], cfg.enc)
+                rr += [jnp.linalg.norm(acts[v][l] - pr[l]) / (jnp.linalg.norm(pr[l]) + 1e-12)
+                       for l in cfg.sparse.heads]
+            aux["head_resid"] = sum(rr) / len(rr)
         aux["active_frac"] = sum(SP.active_fraction(acts[v], None if a is None else a[v], cfg)
                                  for v in range(V)) / V
     return g, aux

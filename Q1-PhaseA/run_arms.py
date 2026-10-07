@@ -96,6 +96,10 @@ def main():
                     head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
         if args.beta_g != SparseCfg.beta_g or args.T_test != SparseCfg.T_test:
             ap.error("case D takes beta_g and T_test from --heads-json only")
+        if args.T != sel["T_test"]:
+            # the relaxed code takes a0 + T steps and the deployed one a0 + T_test:
+            # they are the same quantity only if T == T_test (review D-M9)
+            ap.error(f"case D needs --T == T_test ({sel['T_test']})")
     sparse = SparseCfg(case=args.sparse_case, layer=args.sparse_layer,
                        beta=args.beta, gamma=args.gamma,
                        beta_g=D_kw.pop("beta_g", args.beta_g),

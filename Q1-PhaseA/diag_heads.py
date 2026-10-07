@@ -1,34 +1,38 @@
 """Case D analysis: are the sparse side-head codes useful and robust?
 
-    ./.venv/bin/python diag_heads.py runs/<run> [...] --csv diag_heads.csv
+    ./.venv/bin/python diag_heads.py runs/<run> [...] --heads-json heads_selected.json --csv diag_heads.csv
 
-Spec: wiki 'Method - Sparse side-head arm plan', Analysis.  For every run:
+Spec: wiki 'Method - Sparse side-head arm plan', Analysis.  Every row has a ROLE
+(review D-M2/D8/N6), so trained, floor and reference rows can never pool:
 
-  embedding   linear (closed-form ridge) and kNN probes, clean and under test-time
-              corruption (Gaussian noise, random-square occlusion; shared seed).
-              Runs on reference arms too (case none: PC-ALM, BP), one protocol.
-  codes       (case D, and case-none runs given --heads-json, which attaches the
-              K=5 heads' dictionaries at their INITIAL draw so the code probe has an
-              untrained-dictionary reference on a trained encoder)
-              per head l, a_l^(t) for t in {0, T_test}: probes on each code and on
-              the concatenation of all heads' codes; active fraction; distinct
-              supports; relative reconstruction error; dead atoms.
-              delta_inf = probe(a^(T)) - probe(a^(0)) per condition.
-  spread      input spread (1 - median cosine to the mean) of every layer's
-              activity and of the embedding -- does stacking priors erase input
-              variation as cases B and C did?
+  trained_D            a trained case-D run (K = number of heads)
+  trained_enc_init_D   the same trained encoder with its dictionaries put back to
+                       the initial draw: code(trained D) - code(init D) on the SAME
+                       encoder is the headline dictionary-learning effect (D7)
+  floor_init           untrained encoder + initial K=5 heads; also probes every nested
+                       head subset so K<5 runs have a matched floor (D7)
+  reused_headfree      reused PC-ALM / BP runs (K = 0): embedding only
+  reused_enc_init_D    the same reused encoders with the initial K=5 heads attached
 
-Probes are fit on CLEAN training features and evaluated on (possibly corrupted)
-test features.  Corruption is applied only at test time.
+Metrics: embed_* (embedding, written once), f_* (the head layer's own activity f_l
+and the concatenation over heads -- the layer-matched reference for codes, D6),
+code_* per head and per concatenation at t = 0 and t = T_test, code_active /
+supports / dead atoms, delta_inf_code_* = code(T) - code(0), input_spread and
+layer_norm per layer.  Probes are fit on CLEAN training features and evaluated on
+(possibly corrupted) test features; codes use a per-feature scale floor of
+0.1 x median (D10).  Probe differences on 2000 test rows carry a binomial SE of
+about 1 pp -- read small deltas accordingly (D9).
 """
 import argparse
 import csv
+
 import dataclasses
 import json
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -37,8 +41,12 @@ import data as D
 import encoder as E
 import sparse as SP
 from config import SparseCfg
-from diag_sparse import NOISE, OCCL, batched, corrupt, probe_pair
+from diag_sparse import NOISE, OCCL, corrupt, probe_pair
 from run_probes import load_run
+
+
+CODE_SD_FLOOR = 0.1       # ridge per-feature scale floor for sparse codes (review D10)
+ORDER = (5, 4, 6, 3, 7)   # nested head sets, as select_heads.ORDER
 
 
 def _spread(v):
@@ -48,96 +56,130 @@ def _spread(v):
     return float(1.0 - np.median(c))
 
 
-def attach_init_heads(cfg, params, heads_json):
-    """Case-none run + the K=5 head set at the dictionaries' INITIAL draw."""
+def k5_sparse(heads_json):
     sel = json.load(open(heads_json))
     st = sel["sets"]["5"]
-    sp = SparseCfg(case="D", heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
-                   head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
-    c2 = dataclasses.replace(cfg, sparse=sp)
-    fresh = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), c2, cfg.data.input_dim)
-    return c2, (params[0], params[1], fresh[2])
+    return SparseCfg(case="D", heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
+                     head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
 
 
+def init_D(cfg):
+    """The INITIAL dictionaries of cfg's heads (same key folds as init_params)."""
+    return SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)[2]
+
+
+@eqx.filter_jit
 def readout(params, x, cfg, t):
-    """-> [embedding, all activities stacked per layer..., codes per head...]"""
+    """-> (embedding, activities per layer, codes per head)."""
     if cfg.sparse.case == "D":
         acts, ex = SP.deploy(params, x, cfg, t=t)
-        return [acts[-1]] + list(acts) + list(ex["a"])
+        return acts[-1], tuple(acts), tuple(ex["a"])
     z, hs = E.forward(params, x, cfg.enc)
-    return [z] + [*hs, z]
+    return z, tuple([*hs, z]), ()
 
 
-def analyse(run_dir, n_train, n_test, heads_json=None):
-    cfg, params = load_run(run_dir)
-    tag = os.path.basename(run_dir.rstrip("/"))
-    if cfg.sparse.case == "none" and heads_json:
-        cfg, params = attach_init_heads(cfg, params, heads_json)
-        tag += "+init_heads"
+def _feats(params, cfg, X, t):
+    outs = [readout(params, X[i:i + 1000], cfg, t) for i in range(0, len(X), 1000)]
+    z = np.concatenate([np.asarray(o[0]) for o in outs])
+    acts = [np.concatenate([np.asarray(o[1][l]) for o in outs]) for l in range(len(outs[0][1]))]
+    codes = [np.concatenate([np.asarray(o[2][h]) for o in outs]) for h in range(len(outs[0][2]))]
+    return z, acts, codes
+
+
+def analyse_one(params, cfg, role, tag, data, rows, emb=True, subsets=None):
+    """One (params, cfg) under one role.  subsets: concatenation sets to probe
+    besides 'all' (the floor gets every nested prefix so K<5 runs have a match)."""
+    xtr, ytr_, xte, yte_ = data
     sp = cfg.sparse
-    Xtr, ytr, Xte, yte = D.load_dataset(cfg.data)
-    rtr = np.random.default_rng(0).choice(len(Xtr), min(n_train, len(Xtr)), replace=False)
-    rte = np.random.default_rng(1).choice(len(Xte), min(n_test, len(Xte)), replace=False)
-    xtr = D.eval_batch(jnp.asarray(Xtr[rtr]), cfg.data)
-    xte = D.eval_batch(jnp.asarray(Xte[rte]), cfg.data)
-    ytr_, yte_ = np.asarray(ytr)[rtr], np.asarray(yte)[rte]
-    L = len(params[0])
-    K = len(sp.heads) if sp.case == "D" else 0
-    rows = []
+    K = len(sp.heads) if (sp.case == "D" and role == "trained_D") else 0
 
     def add(metric, value, condition="clean", t="", head=""):
-        rows.append({"run": tag, "case": sp.case, "arm": cfg.arm, "seed": cfg.opt.seed,
-                     "K": K, "metric": metric, "condition": condition, "t": t,
-                     "head": head, "value": value})
+        rows.append({"run": tag, "role": role, "case": sp.case, "arm": cfg.arm, "seed": cfg.opt.seed,
+                     "K": K, "heads_attached": len(sp.heads) if sp.case == "D" else 0,
+                     "metric": metric, "condition": condition, "t": t, "head": head, "value": value})
 
-    ts = [("0", 0), ("T", sp.T_test)] if sp.case == "D" else [("ff", None)]
+    D_on = sp.case == "D"
+    ts = [("0", 0), ("T", sp.T_test)] if D_on else [("", None)]
     conds = [("clean", 0.0)] + [("noise", s) for s in NOISE] + [("occlusion", o) for o in OCCL]
-    ftr = {lab: batched(lambda xb, t=t: readout(params, xb, cfg, t), xtr) for lab, t in ts}
-
-    # spread of every layer (clean test) -- from the deployed / feedforward pass
-    te_clean = batched(lambda xb: readout(params, xb, cfg, ts[-1][1]), xte)
-    for l in range(L):
-        add("input_spread", _spread(te_clean[1 + l]), head=str(l))
-    add("embed_spread", _spread(te_clean[0]))
-    add("embed_norm", float(np.linalg.norm(te_clean[0], axis=1).mean()))
-
+    ftr = {lab: _feats(params, cfg, xtr, t) for lab, t in ts}
+    tr_T = ftr[ts[-1][0]]
+    if emb:
+        te = _feats(params, cfg, xte, ts[-1][1])
+        for l in range(len(te[1])):
+            add("input_spread", _spread(te[1][l]), head=str(l))
+            add("layer_norm", float(np.linalg.norm(te[1][l], axis=1).mean()), head=str(l))
+        add("embed_spread", _spread(te[0]))
+    groups = {}
+    if D_on:
+        hs = list(sp.heads)
+        groups["all"] = hs
+        for sub in (subsets or []):
+            groups["+".join(map(str, sub))] = list(sub)
     for kind, lvl in conds:
         xc = corrupt(xte, cfg, kind, lvl)
         cname = kind if kind == "clean" else f"{kind}={lvl:g}"
         got = {}
         for lab, t in ts:
-            fte = batched(lambda xb, t=t: readout(params, xb, cfg, t), xc)
-            for k, v in probe_pair(ftr[lab][0], ytr_, fte[0], yte_).items():
-                add(f"embed_{k}", v, cname, lab)
-            if sp.case != "D":
+            z_te, a_te, c_te = _feats(params, cfg, xc, t)
+            z_tr, a_tr, c_tr = ftr[lab]
+            if emb and lab == ts[-1][0]:             # embedding and f_l: t-independent, written once
+                for k, v in probe_pair(z_tr, ytr_, z_te, yte_).items():
+                    add(f"embed_{k}", v, cname)
+                for l in (sp.heads if D_on else []):
+                    for k, v in probe_pair(a_tr[l], ytr_, a_te[l], yte_).items():
+                        add(f"f_{k}", v, cname, head=str(l))
+                if D_on:
+                    for k, v in probe_pair(np.concatenate([a_tr[l] for l in hs], 1), ytr_,
+                                           np.concatenate([a_te[l] for l in hs], 1), yte_).items():
+                        add(f"f_{k}", v, cname, head="all")
+            if not D_on:
                 continue
-            codes_tr = ftr[lab][1 + L:]
-            codes_te = fte[1 + L:]
-            for l, ctr, cte in zip(sp.heads, codes_tr, codes_te):
-                pr = probe_pair(ctr, ytr_, cte, yte_)
-                got[(lab, l)] = pr
+            for h, l in enumerate(sp.heads):
+                pr = probe_pair(c_tr[h], ytr_, c_te[h], yte_, sd_floor=CODE_SD_FLOOR)
+                got[(lab, str(l))] = pr
                 for k, v in pr.items():
                     add(f"code_{k}", v, cname, lab, str(l))
                 if kind == "clean":
-                    on = cte != 0
+                    on = c_te[h] != 0
                     add("code_active", float(on.mean()), cname, lab, str(l))
                     add("code_supports", len({r.tobytes() for r in on}), cname, lab, str(l))
                     add("code_dead_atoms", float(np.mean(~on.any(0))), cname, lab, str(l))
-            cat_tr, cat_te = np.concatenate(codes_tr, 1), np.concatenate(codes_te, 1)
-            pr = probe_pair(cat_tr, ytr_, cat_te, yte_)
-            got[(lab, "all")] = pr
-            for k, v in pr.items():
-                add(f"code_{k}", v, cname, lab, "all")
-        if sp.case == "D":
-            for h in list(sp.heads) + ["all"]:
+            for gname, gl in groups.items():
+                idx = [sp.heads.index(l) for l in gl]
+                pr = probe_pair(np.concatenate([c_tr[i] for i in idx], 1), ytr_,
+                                np.concatenate([c_te[i] for i in idx], 1), yte_, sd_floor=CODE_SD_FLOOR)
+                got[(lab, gname)] = pr
+                for k, v in pr.items():
+                    add(f"code_{k}", v, cname, lab, gname)
+        if D_on:
+            for h in [str(l) for l in sp.heads] + list(groups):
                 for k in ("linear", "knn"):
-                    add(f"delta_inf_code_{k}", got[("T", h)][k] - got[("0", h)][k], cname, "T-0", str(h))
-    if sp.case == "D":
-        acts, ex = SP.deploy(params, xte[:1000], cfg)
-        for l, Dl, a in zip(sp.heads, SP.get_D(params), ex["a"]):
-            f = acts[l]
-            add("code_rel_recon", float(jnp.mean(jnp.linalg.norm(f - a @ Dl.T, axis=-1)
-                                                 / (jnp.linalg.norm(f, axis=-1) + 1e-12))), head=str(l))
+                    add(f"delta_inf_code_{k}", got[("T", h)][k] - got[("0", h)][k], cname, "T-0", h)
+    return rows
+
+
+def analyse(run_dir, n_train, n_test, heads_json=None):
+    cfg, params = load_run(run_dir)
+    tag = os.path.basename(run_dir.rstrip("/"))
+    Xtr, ytr, Xte, yte = D.load_dataset(cfg.data)
+    rtr = np.random.default_rng(0).choice(len(Xtr), min(n_train, len(Xtr)), replace=False)
+    rte = np.random.default_rng(1).choice(len(Xte), min(n_test, len(Xte)), replace=False)
+    data = (D.eval_batch(jnp.asarray(Xtr[rtr]), cfg.data), np.asarray(ytr)[rtr],
+            D.eval_batch(jnp.asarray(Xte[rte]), cfg.data), np.asarray(yte)[rte])
+    rows = []
+    nested = [tuple(sorted(ORDER[:k])) for k in range(1, len(ORDER))]
+    if cfg.sparse.case == "D":
+        floor = "randD" in tag
+        role = "floor_init" if floor else "trained_D"
+        analyse_one(params, cfg, role, tag, data, rows, subsets=nested if floor else None)
+        if not floor:      # same trained encoder, dictionaries put back to their initial draw
+            analyse_one((params[0], params[1], init_D(cfg)), cfg, "trained_enc_init_D", tag, data, rows, emb=False)
+    else:
+        analyse_one(params, cfg, "reused_headfree", tag, data, rows)
+        if heads_json:
+            c2 = dataclasses.replace(cfg, sparse=k5_sparse(heads_json))
+            analyse_one((params[0], params[1], init_D(c2)), c2, "reused_enc_init_D", tag, data, rows,
+                        emb=False, subsets=nested)
     return rows
 
 
@@ -160,9 +202,9 @@ def main():
         rows = analyse(rd, args.n_train, args.n_test, args.heads_json)
         allr += rows
         for r in rows:
-            if r["condition"] in ("clean", "noise=0.2") and r["metric"] in ("embed_linear", "code_linear") \
-                    and r["head"] in ("", "all"):
-                print(f"   {r['metric']:<13} {r['condition']:<10} t={r['t']:<3} {r['value']:.4f}", flush=True)
+            if r["condition"] in ("clean", "noise=0.2") and r["metric"] in ("embed_linear", "code_linear", "f_linear") \
+                    and r["head"] in ("", "all") and r["t"] in ("", "T"):
+                print(f"   {r['role']:<20} {r['metric']:<13} {r['condition']:<10} {r['value']:.4f}", flush=True)
         with open(args.csv, "w", newline="") as f:          # rewritten after every run
             w = csv.DictWriter(f, fieldnames=list(allr[0].keys()))
             w.writeheader(); w.writerows(allr)

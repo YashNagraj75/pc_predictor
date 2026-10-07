@@ -40,6 +40,7 @@ import math
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import jpc
 from jax import vmap
 
@@ -55,6 +56,16 @@ def active(cfg) -> bool:
 def is_D(cfg) -> bool:
     """Case D: side dictionary heads on the residual stream, all multipliers kept."""
     return cfg.sparse.case == "D"
+
+
+def head_in(v):
+    """What a case-D head explains: the per-sample NORMALISED activity
+    sqrt(n) v / ||v|| (safe norm, finite at v = 0).  Approved 2026-10-07 after a
+    smoke run showed the heads shrinking the residual stream to lower their
+    energy (layer 5 norm 2.35 -> 1.36 under PC with heads vs 2.26 without): with
+    a normalised input the head energy is scale-invariant, and the main path
+    keeps its own scale."""
+    return normalise_rows(v, float(np.sqrt(v.shape[-1])))
 
 
 def check_D(cfg, L):
@@ -80,7 +91,10 @@ def spectral_sq(D):
     """||D||_2^2, exact.  The step size is a solver constant, never a gradient
     path: stop_gradient is applied to D itself, so no SVD derivative is built
     (stopping only the OUTPUT still built the JVP -- found in review)."""
-    return jnp.linalg.norm(jax.lax.stop_gradient(D), ord=2) ** 2
+    Ds = jax.lax.stop_gradient(D)
+    # exact: lambda_max(D D^T) = sigma_max(D)^2, via a symmetric eigensolve of the
+    # n x n Gram, cheaper on GPU than the SVD behind norm(ord=2) (review D-M5/N7)
+    return jnp.linalg.eigvalsh(Ds @ Ds.T)[-1]
 
 
 def code_step(params, cfg):
@@ -280,12 +294,12 @@ def deploy(params, x, cfg, t=None, beta_g=None):
         acts = [*hs, z]
         tt = sp.T_test if t is None else t
         codes, steps = [], []
-        for l, Dl, gl in zip(sp.heads, get_D(params), sp.gammas):
+        fh = tuple(head_in(acts[l]) for l in sp.heads)
+        for f, Dl, gl in zip(fh, get_D(params), sp.gammas):
             eta = sp.step_frac / (sp.beta_g * spectral_sq(Dl))
-            codes.append(ista(acts[l], Dl, gl, sp.beta_g, tt, eta))
+            codes.append(ista(f, Dl, gl, sp.beta_g, tt, eta))
             steps.append(eta)
-        return acts, {"a": tuple(codes), "eta": tuple(steps),
-                      "f_heads": tuple(acts[l] for l in sp.heads)}
+        return acts, {"a": tuple(codes), "eta": tuple(steps), "f_heads": fh}
     rho = cfg.pc.rho
     sc = _scalings(params, x, cfg)
     L, s = len(params[0]), sp.layer
@@ -332,8 +346,11 @@ def deployed_head_energy(params, x, cfg):
         return 0.0
     _, ex = deploy(params, x, cfg)
     if sp.case == "D":
-        # BP-D: sum_l w_l [beta_g/2||f_l - D_l a_l^(T)||^2 + gamma_l||a_l^(T)||_1]
-        return sum(wl * jnp.mean(lasso_energy(f, Dl, a, gl, sp.beta_g))
+        # BP-D: sum_l w_l [beta_g/2||f~_l - D_l a_l||^2 + gamma_l||a_l||_1] with the
+        # code DETACHED (approved 2026-10-07, review N2): the gradient is the
+        # partial derivative at the code, exactly what PC-D's weight update uses,
+        # not a derivative through the 17 unrolled ISTA steps.
+        return sum(wl * jnp.mean(lasso_energy(f, Dl, jax.lax.stop_gradient(a), gl, sp.beta_g))
                    for f, Dl, a, gl, wl in zip(ex["f_heads"], get_D(params), ex["a"],
                                                sp.gammas, sp.head_ws))
     if sp.case == "B":
@@ -364,7 +381,7 @@ def head_smooth(params, acts, a, cfg):
     """Smooth head energy (case C), batch mean: beta_g/(2B) sum ||z_s - D a||^2."""
     if is_D(cfg):
         sp = cfg.sparse
-        return sum(wl * 0.5 * sp.beta_g * jnp.sum((acts[l] - al @ Dl.T) ** 2) / acts[l].shape[0]
+        return sum(wl * 0.5 * sp.beta_g * jnp.sum((head_in(acts[l]) - al @ Dl.T) ** 2) / acts[l].shape[0]
                    for l, Dl, al, wl in zip(sp.heads, get_D(params), a, sp.head_ws))
     if cfg.sparse.case != "C":
         return 0.0
@@ -407,7 +424,7 @@ def a_step(params, acts, a, cfg, eta):
     """
     sp = cfg.sparse
     if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
-        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - acts[l]) @ Dl), el * gl)
+        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - head_in(acts[l])) @ Dl), el * gl)
                      for l, Dl, al, el, gl in zip(sp.heads, get_D(params), a, eta, sp.gammas))
     D = get_D(params)
     zs = acts[sp.layer]
@@ -463,28 +480,43 @@ def _spread(v):
     return float(1.0 - jnp.median(c))
 
 
-def health_D(params, acts, ex, cfg):
-    """Case D log scalars: per head (sparsity, supports, dictionary) and the
-    collapse guards of the pilot gate (supports, embedding spread)."""
-    import numpy as np
+def health_D(params, acts, ex, cfg, n_fista=256):
+    """Case D log scalars per head, and the collapse guards of the pilot gate.
+
+    h{l}_fnorm        mean ||f_l|| of the RAW activity (scale guard; review D-M4/D1)
+    h{l}_input_spread angular spread of f_l (collapse guard; review N3)
+    h{l}_lasso        unweighted per-view head energy at the deployed code on f~_l
+    h{l}_wlasso       w_l * h{l}_lasso  (x V gives the head's share of the BP-D objective)
+    h{l}_subopt       relative LASSO suboptimality of a^(T_test) vs FISTA(500), first rows
+    h{l}_D_spec       ||D_l||_2^2 (conditioning sets the ISTA step)
+    """
     sp = cfg.sparse
     z = acts[-1]
     out = {"embed_spread": _spread(z), "embed_norm": float(jnp.mean(jnp.linalg.norm(z, axis=-1))),
            "embed_std": float(jnp.mean(jnp.std(z, 0))), "n_rows": int(z.shape[0])}
     fr, sup = [], []
-    for l, Dl, al, gl in zip(sp.heads, get_D(params), ex["a"], sp.gammas):
+    for l, Dl, al, gl, wl, ft in zip(sp.heads, get_D(params), ex["a"], sp.gammas, sp.head_ws, ex["f_heads"]):
         on = np.asarray(al != 0)
-        f = acts[l]
         G = jnp.abs(Dl.T @ Dl) - jnp.eye(Dl.shape[1])
+        e = float(jnp.mean(lasso_energy(ft, Dl, al, gl, sp.beta_g)))
+        k = min(n_fista, ft.shape[0])
+        e_star = float(jnp.mean(lasso_energy(ft[:k], Dl, fista(ft[:k], Dl, gl, sp.beta_g, 500), gl, sp.beta_g)))
+        e_k = float(jnp.mean(lasso_energy(ft[:k], Dl, al[:k], gl, sp.beta_g)))
         h = {f"h{l}_active": float(on.mean()), f"h{l}_supports": len({r.tobytes() for r in on}),
              f"h{l}_dead_atoms": float(np.mean(~on.any(0))), f"h{l}_coherence": float(jnp.max(G)),
-             f"h{l}_lasso": float(jnp.mean(lasso_energy(f, Dl, al, gl, sp.beta_g))),
-             f"h{l}_rel_recon": float(jnp.mean(jnp.linalg.norm(f - al @ Dl.T, axis=-1)
-                                               / (jnp.linalg.norm(f, axis=-1) + 1e-12))),
-             f"h{l}_input_spread": _spread(f)}
+             f"h{l}_lasso": e, f"h{l}_wlasso": float(wl) * e,
+             f"h{l}_rel_recon": float(jnp.mean(jnp.linalg.norm(ft - al @ Dl.T, axis=-1)
+                                               / (jnp.linalg.norm(ft, axis=-1) + 1e-12))),
+             f"h{l}_fnorm": float(jnp.mean(jnp.linalg.norm(acts[l], axis=-1))),
+             f"h{l}_input_spread": _spread(acts[l]),
+             f"h{l}_subopt": (e_k - e_star) / (abs(e_star) + 1e-12),
+             f"h{l}_D_spec": float(spectral_sq(Dl))}
         out.update(h)
         fr.append(h[f"h{l}_active"]); sup.append(h[f"h{l}_supports"])
     out["active_frac"] = float(np.mean(fr))
     out["active_min"], out["active_max"] = float(min(fr)), float(max(fr))
     out["supports_min"] = int(min(sup))
+    # summed weighted head energy as the BP-D objective counts it (x V views, clean
+    # centre rows): compare with loss_ff for the realised head/task ratio (review D5)
+    out["head_energy_obj"] = float(cfg.data.n_views * sum(out[f"h{l}_wlasso"] for l in sp.heads))
     return out

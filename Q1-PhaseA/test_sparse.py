@@ -502,11 +502,14 @@ def test_all_zero_view_gives_finite_gradients():
 def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=True,
            projector="bn", seed=0, eta=0.0625):
     """Tiny encoder (L = 6) with case-D side heads on residual layers."""
+    # defaults calibrated like production: gamma ~ 20 % active on the normalised
+    # head input, w small (head energy well below the task loss), T_test == T.
+    # An uncalibrated w (head energy 2.5x task) made the tiny relaxation unstable.
     K = len(heads)
-    ws = tuple(ws if ws is not None else [0.5 / K] * K)
-    gammas = tuple(gammas if gammas is not None else [0.05] * K)
+    ws = tuple(ws if ws is not None else [0.005] * K)
+    gammas = tuple(gammas if gammas is not None else [1.0] * K)
     enc = EncoderCfg(depth=4, width=16, embed_dim=16)
-    sp = SparseCfg(case="D", heads=tuple(heads), head_ws=ws, gammas=gammas, beta_g=1.0, T_test=8)
+    sp = SparseCfg(case="D", heads=tuple(heads), head_ws=ws, gammas=gammas, beta_g=1.0, T_test=T)
     cfg = RunCfg(arm="pc", use_sigreg=use_sigreg, projector=projector, enc=enc,
                  pc=PCCfg(T=T, alpha=alpha, eta_h=eta), opt=OptCfg(seed=seed), sparse=sp)
     params = SP.init_params(jax.random.PRNGKey(seed), cfg, cfg.data.input_dim)
@@ -562,8 +565,7 @@ def test_D_codes_solve_lasso():
     for t in (4, 64, 512):
         acts, ex = SP.deploy(pD, x, cD, t=t)
         gaps = []
-        for l, Dl, a, g in zip(cD.sparse.heads, SP.get_D(pD), ex["a"], cD.sparse.gammas):
-            f = acts[l]
+        for f, Dl, a, g in zip(ex["f_heads"], SP.get_D(pD), ex["a"], cD.sparse.gammas):
             astar = SP.fista(f, Dl, g, cD.sparse.beta_g, 3000)
             e = float(jnp.mean(SP.lasso_energy(f, Dl, a, g, cD.sparse.beta_g)))
             es = float(jnp.mean(SP.lasso_energy(f, Dl, astar, g, cD.sparse.beta_g)))
@@ -603,8 +605,12 @@ def test_D_control_objective_and_agreement():
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
     nrm = lambda x: float(jnp.linalg.norm(x))
+    # Long relaxation (T = T_test = 200): measured 2026-10-07 encoder ratio 1.0-1.4,
+    # cos 0.82-0.97, dictionary cos >= 0.99.  At the production T = 16 the head
+    # credit reaching the lower layers is much smaller -- that is measured, not
+    # gated, by diag_agree_heads.py in the job's pilot stage.
     for seed in (0, 1):
-        pD, Zin, A, cD = smallD(heads=(2, 3), T=60, use_sigreg=False, projector="none", seed=seed)
+        pD, Zin, A, cD = smallD(heads=(2, 3), T=200, use_sigreg=False, projector="none", seed=seed)
         Zin = jnp.stack([Zin[0]] * Zin.shape[0])
         gp, _ = pcalm.grads(pD, Zin, A, cD, jax.random.PRNGKey(0))
         gb, _ = TR.bp_grads(pD, Zin, A, dataclasses.replace(cD, arm="bp"))
@@ -612,11 +618,12 @@ def test_D_control_objective_and_agreement():
         cDs = [cos(a, b) for a, b in zip(gp[2], gb[2])]
         W = lambda g, l: g[0][l].layers[1].weight
         rW = [nrm(W(gp, l)) / (nrm(W(gb, l)) + 1e-30) for l in range(max(cD.sparse.heads) + 1)]
-        check(f"D: zero task drive, seed {seed}: dictionary cos > 0.9 and norm ratio in [0.5, 2]; "
-              f"encoder ratio in [0.5, 2] on layers <= max head",
-              min(cDs) > 0.9 and all(0.5 <= r <= 2 for r in rD + rW),
+        cW = [cos(W(gp, l), W(gb, l)) for l in range(max(cD.sparse.heads) + 1)]
+        check(f"D: zero task drive, T=200, seed {seed}: dictionary cos > 0.95; encoder cos > 0.75 and "
+              f"ratio in [0.7, 1.6] on layers <= max head",
+              min(cDs) > 0.95 and min(cW) > 0.75 and all(0.7 <= r <= 1.6 for r in rW) and all(0.7 <= r <= 1.4 for r in rD),
               "D cos " + " ".join(f"{c:.3f}" for c in cDs) + " ratio " + " ".join(f"{r:.2f}" for r in rD)
-              + " | W ratio " + " ".join(f"{r:.2f}" for r in rW))
+              + " | W cos " + " ".join(f"{c:.3f}" for c in cW) + " ratio " + " ".join(f"{r:.2f}" for r in rW))
 
 
 def test_D_batch_invariance_and_zero_view():
@@ -664,6 +671,30 @@ def test_D_train_project_serialise_and_gate():
     check("D: pair gate evaluates case-D criteria without schema errors", readable, str(reasons)[:300])
 
 
+def test_D_head_reads_normalised_copy():
+    """Heads explain sqrt(n) f/||f||: deployed codes and the head energy are
+    invariant to rescaling the head layer, so shrinking it cannot lower the
+    energy (the route the smoke run showed).  BP-D's code is detached."""
+    pD, Zin, A, cD = smallD(heads=(2,))
+    x = Zin[0]
+    acts, ex = SP.deploy(pD, x, cD)
+    f = acts[2]
+    nrm = np.linalg.norm(np.asarray(ex["f_heads"][0]), axis=1)
+    rows_ok = np.allclose(nrm, np.sqrt(f.shape[-1]), rtol=1e-4)
+    # rescaling: energy of the head at 0.5 f equals that at f
+    D0, g0 = SP.get_D(pD)[0], cD.sparse.gammas[0]
+    e = lambda v: float(jnp.mean(SP.lasso_energy(SP.head_in(v), D0, SP.ista(SP.head_in(v), D0, g0, 1.0, 16,
+                         0.9 / SP.spectral_sq(D0)), g0, 1.0)))
+    inv = abs(e(f) - e(0.5 * f)) < 1e-4 * abs(e(f))
+    # detached: the BP-D head gradient wrt D equals the partial derivative at fixed a
+    a = ex["a"][0]; ft = ex["f_heads"][0]
+    g_part = jax.grad(lambda Dm: cD.sparse.head_ws[0] * jnp.mean(SP.lasso_energy(ft, Dm, a, g0, 1.0)))(D0)
+    g_bp = jax.grad(lambda Dm: SP.deployed_head_energy((pD[0], pD[1], (Dm,)), x, cD))(D0)
+    det = maxrel(g_bp, g_part) < 1e-4
+    check("D: head input normalised per row; head energy scale-invariant; BP-D code detached",
+          rows_ok and inv and det, f"rows={rows_ok} invariant={inv} detached={det} ({maxrel(g_bp, g_part):.1e})")
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -680,7 +711,8 @@ if __name__ == "__main__":
                test_B_layer_s_step_converges, test_all_zero_view_gives_finite_gradients,
                test_D_init_and_nesting, test_D_zero_weight_equals_pcalm, test_D_codes_solve_lasso,
                test_D_relaxation_codes_track_layer, test_D_control_objective_and_agreement,
-               test_D_batch_invariance_and_zero_view, test_D_train_project_serialise_and_gate):
+               test_D_batch_invariance_and_zero_view, test_D_train_project_serialise_and_gate,
+               test_D_head_reads_normalised_copy):
         try:
             fn()
         except Exception as exc:
