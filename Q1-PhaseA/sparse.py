@@ -202,8 +202,15 @@ def norm_spec(cfg):
     return (sp.layer, sp.fs_norm)
 
 
+NORM_EPS = 1e-6
+
+
 def normalise_rows(f, c):
-    return c * f / (jnp.linalg.norm(f, axis=-1, keepdims=True) + 1e-8)
+    """c f / sqrt(||f||^2 + eps^2), per row.  The SAFE norm matters: an
+    all-black augmented view gives f_s = 0 exactly (the encoder has no biases),
+    and the gradient of f / ||f|| there is 0/0 -- that NaN stopped all four
+    pilot runs at step 68 of job b3c717c6 (one all-zero view in that batch)."""
+    return c * f / jnp.sqrt(jnp.sum(f * f, axis=-1, keepdims=True) + NORM_EPS ** 2)
 
 
 def _pred(params, scalings, l, prev, norm=None):

@@ -142,6 +142,9 @@ def _global_norm(g):
 def train(cfg: RunCfg, verbose=True):
     out = os.path.join(cfg.out_dir, cfg.name)
     os.makedirs(out, exist_ok=True)
+    stale = os.path.join(out, "DIVERGED")      # from an earlier failed attempt
+    if os.path.exists(stale):
+        os.remove(stale)
     with open(os.path.join(out, "config.json"), "w") as f:
         f.write(cfg.to_json())
 

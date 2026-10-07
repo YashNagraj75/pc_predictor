@@ -97,7 +97,7 @@ def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=
             pred = pred + vmap(skip[l])(prev)
         if norm is not None and l == norm[0]:
             # sparse arms: per-sample normalised prediction at layer s
-            pred = norm[1] * pred / (jnp.linalg.norm(pred, axis=-1, keepdims=True) + 1e-8)
+            pred = SP.normalise_rows(pred, norm[1])     # safe norm, finite grad at 0
         preds.append(pred)
     return preds
 

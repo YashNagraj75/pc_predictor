@@ -482,6 +482,21 @@ def test_B_layer_s_step_converges():
           f"shared eta_h: {res[0.0625]:.3f}  s_step=0.5: {res[0.5]:.3f}")
 
 
+def test_all_zero_view_gives_finite_gradients():
+    """An all-black augmented view (f_s = 0 exactly) must not produce NaN.
+    Regression for job b3c717c6: one such view at step 68 made every arm's
+    gradient NaN through f / ||f||."""
+    for case in ("B", "C"):
+        for arm in ("pc", "bp"):
+            params, Zin, A, cfg = small(case=case, alpha=1.0, T=4)
+            Zin = Zin.at[1, 3].set(0.0)                  # one view of one sample black
+            cfg = dataclasses.replace(cfg, arm=arm)
+            g, aux = (TR.pc_grads(params, Zin, A, cfg, jax.random.PRNGKey(0)) if arm == "pc"
+                      else TR.bp_grads(params, Zin, A, cfg))
+            ok = all(np.all(np.isfinite(x)) for x in leaves(g))
+            check(f"{case}/{arm}: gradients finite with an all-zero view in the batch", ok)
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -495,7 +510,7 @@ if __name__ == "__main__":
                test_C_D_gradient_matches_analytic, test_project_and_serialise,
                test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged,
                test_control_objective_composition, test_pc_agrees_with_its_bp_control_below_s, test_fs_normalisation,
-               test_B_layer_s_step_converges):
+               test_B_layer_s_step_converges, test_all_zero_view_gives_finite_gradients):
         try:
             fn()
         except Exception as exc:
