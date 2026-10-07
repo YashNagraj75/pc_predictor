@@ -1,0 +1,94 @@
+{
+  "arm": "bp",
+  "use_sigreg": true,
+  "projector": "bn",
+  "tag": "hK4pilot_s0",
+  "out_dir": "runs",
+  "data": {
+    "dataset": "galaxy10",
+    "root": "../data",
+    "img_size": 32,
+    "grayscale": false,
+    "n_train": -1,
+    "n_test": 2000,
+    "seed": 0,
+    "n_views": 4,
+    "n_global_views": 4,
+    "crop_area": [
+      0.4,
+      1.0
+    ],
+    "max_rotation": 3.14159265,
+    "hflip": true,
+    "brightness": 0.2,
+    "contrast": 0.2
+  },
+  "enc": {
+    "depth": 8,
+    "width": 128,
+    "embed_dim": 128,
+    "act": "relu",
+    "parameterisation": "mupc"
+  },
+  "sig": {
+    "num_slices": 256,
+    "t_max": 5.0,
+    "n_points": 17,
+    "scale_by_n": true,
+    "resample_directions": true,
+    "lambd": 0.05
+  },
+  "pc": {
+    "T": 16,
+    "eta_h": 0.0625,
+    "alpha": 1.0,
+    "rho": 1.0,
+    "out_scale": null,
+    "weight_credit_timing": "pre_dual",
+    "init": "feedforward",
+    "output_drive": "coupled"
+  },
+  "opt": {
+    "param_lr": 0.001,
+    "batch_size": 256,
+    "n_steps": 2000,
+    "eval_every": 250,
+    "grad_clip": 1.0,
+    "seed": 0,
+    "lr_schedule": "warmup_cosine",
+    "warmup_steps": 100,
+    "weight_decay": 0.0005
+  },
+  "sparse": {
+    "case": "D",
+    "layer": 5,
+    "beta": 0.0,
+    "gamma": 0.0,
+    "beta_g": 1.0,
+    "dict_mult": 2,
+    "T_test": 16,
+    "step_frac": 0.9,
+    "below_hard": true,
+    "normalise_fs": true,
+    "fs_norm": 2.0,
+    "s_step": 0.5,
+    "heads": [
+      3,
+      4,
+      5,
+      6
+    ],
+    "head_ws": [
+      0.0036318099866591833,
+      0.003769289040135864,
+      0.0037038672179736097,
+      0.003703991507226719
+    ],
+    "gammas": [
+      1.036632928437698,
+      0.881683066775571,
+      0.9560239010953077,
+      1.064985635350429
+    ]
+  }
+}

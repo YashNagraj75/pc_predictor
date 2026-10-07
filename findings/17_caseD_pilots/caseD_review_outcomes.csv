@@ -1,0 +1,23 @@
+finding,raised_by,severity,outcome,resolution
+Smoke run dirs could collide with full-run names; guard would silently skip K=1/K=5,Numerics N1,blocker,fixed,smoke ran in a separate local dir (no collision on host); job now fails fast if any case-D dir exists and only analyses completed runs
+Head energy lowered by shrinking the residual stream (scale cheat),"Math D-M4, Design D1",major,"fixed (design, user-approved)",measured: ||f_5|| 2.35->1.36 with heads vs 2.26 without; heads now read sqrt(n) f/||f||; scale guard added
+"BP-D differentiates through unrolled ISTA, PC-D uses a detached code","Numerics N2, Math D-M6",major,"fixed (design, user-approved)",BP-D code detached; unit test: BP-D D-gradient equals the fixed-code partial derivative exactly
+PC-D vs BP-D agreement never measured at production config,"Math D-M3, D-M7, Design D3",major,fixed + decision,diag_agree_heads.py in pilot (init and end); measured at T=16: head pull on lower layers 2-48% (K=1); user chose to keep T=16 and report
+Head influence on encoder small and unmeasured,Design D3,major,"fixed (design, user-approved)",measured 2-6% of task gradient; recalibrated by gradient to 0.25x
+Collapse guards scale-blind / near-vacuous,"Design D1, Numerics N3",major,fixed,per-head input spread and embedding spread >= 0.5x running max; ||f_l|| >= 0.5x initial; supports kept as report
+Pilot not a prefix of the full run; full runs never gated,Design D2,major,fixed (partly),same gate applied report-only to every full run; pilot remains a short-schedule screen (stated)
+Analysis rows of trained/floor/reference share labels,"Math D-M2, Design D8, Numerics N6",major,fixed,role column; K=0 for references; embedding rows once
+No layer-matched reference for code probes,"Math D-M8, Design D6",major,fixed,probes on f_l per head and concatenation; code(trained D) - code(init D) on the same encoder
+Floors incomplete for K<5; init heads only on reused encoders,Design D7,major,fixed,floor probes every nested head subset; init-D swap on every trained D run
+"K sweep confounds number, placement and strength","Design D5, Math D-M11",major,accepted (user decision),K reported as a package contrast; K=2-4 descriptive screens; outcome-based Stage-3 selection removed
+probes_summary.csv overwritten / reused stale; reused arms not probed,"Numerics N4, Design D11, Math D-M10",major,fixed,"tracked file restored; job removes it before probing, probes reused arms (old probes.json backed up)"
+All analysis after all training; one seed failure kills the K; no time guard,Numerics N5,major,fixed,"per-seed run_arms; decisive K=1,5 analysed immediately; time guard before K=2-4; nonzero exit if decisive pairs missing"
+SVD per head per call may be slow on GPU,"Math D-M5, Numerics N7",major/minor,fixed,spectral norm via eigvalsh of the n x n Gram (exact)
+Gate crash indistinguishable from gate FAIL,"Design D13, Math D-M10",minor,fixed,gate exits 2 on exceptions; stderr kept; job reports GATE ERROR separately
+Weights not collected,Design D12,minor,fixed,params.eqx tarred for case-D runs and floors
+Bisection without convergence check; T vs T_test unconstrained,Math D-M9,minor,fixed,assert |active-0.2|<0.01; run_arms refuses T != T_test
+Ridge standardisation amplifies rare code atoms,Design D10,minor,fixed,code probes use a 0.1 x median scale floor (default unchanged for other callers)
+delta_inf lacks intervals and is sparsity-confounded,Design D9,minor,deferred,binomial SE ~1 pp stated; active fraction at t=0 and T logged alongside
+GPU matmul precision untested,Numerics N8,note,partly addressed,printed at preflight; reused runs came from the same host and JAX
+Eager ISTA recompiles in analysis,Numerics N9,minor,fixed,diag_heads readouts jitted
+No pre-registered estimand / equivalence margin,"Design D3, D14, Numerics N10",design,fixed,paired DiD per seed pre-registered; no equivalence claim

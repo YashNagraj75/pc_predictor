@@ -1,0 +1,124 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: head 5 deployed active fraction 0.465 outside [0.05, 0.4]",
+    "PC: head 5: 3 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: embedding spread 0.0002658 < 0.5 x its max 0.03874 (collapse)",
+    "PC: layer 5 input spread 0.0001429 < 0.5 x its max 0.03772",
+    "BP: head 5 deployed active fraction 0.714 outside [0.05, 0.4]",
+    "BP: head 5: 105 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: layer 5 input spread 0.001141 < 0.5 x its max 0.03772"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_hK1pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0095,
+    "deployed_active_frac": [
+      0.2001,
+      0.4078,
+      0.4574,
+      0.4649,
+      0.4648,
+      0.4648,
+      0.4648,
+      0.4649,
+      0.4649
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000113248825073,
+    "relaxed_active_frac_last200": 0.46539051055908204,
+    "head_active_last": {
+      "5": 0.4649
+    },
+    "head_supports_last": {
+      "5": 3
+    },
+    "embed_spread_first_last": [
+      0.03874075412750244,
+      0.0002658367156982422
+    ],
+    "head_fnorm_first_last": {
+      "5": [
+        2.357,
+        28.584
+      ]
+    },
+    "head_spread_last": {
+      "5": 0.0001
+    },
+    "head_subopt_last": {
+      "5": 0.0067
+    },
+    "head_task_ratio_first_last": [
+      1.147,
+      0.3449
+    ],
+    "head_resid_first_last": [
+      0.0077,
+      0.0006
+    ]
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_hK1pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2001,
+      0.5384,
+      0.6594,
+      0.6798,
+      0.6995,
+      0.7072,
+      0.7086,
+      0.7136,
+      0.7143
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "head_active_last": {
+      "5": 0.7143
+    },
+    "head_supports_last": {
+      "5": 105
+    },
+    "embed_spread_first_last": [
+      0.038771748542785645,
+      0.10828447341918945
+    ],
+    "head_fnorm_first_last": {
+      "5": [
+        2.357,
+        13.158
+      ]
+    },
+    "head_spread_last": {
+      "5": 0.0011
+    },
+    "head_subopt_last": {
+      "5": 0.0275
+    },
+    "head_task_ratio_first_last": [
+      1.1479,
+      0.4503
+    ]
+  }
+}
