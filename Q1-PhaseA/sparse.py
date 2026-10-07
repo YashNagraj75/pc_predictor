@@ -52,6 +52,20 @@ def active(cfg) -> bool:
     return cfg.sparse.case != "none"
 
 
+def is_D(cfg) -> bool:
+    """Case D: side dictionary heads on the residual stream, all multipliers kept."""
+    return cfg.sparse.case == "D"
+
+
+def check_D(cfg, L):
+    sp = cfg.sparse
+    assert len(sp.heads) >= 1, "case D needs at least one head"
+    assert len(sp.head_ws) == len(sp.heads) == len(sp.gammas), \
+        f"heads/head_ws/gammas lengths differ: {sp.heads} {sp.head_ws} {sp.gammas}"
+    assert len(set(sp.heads)) == len(sp.heads), f"duplicate heads {sp.heads}"
+    assert all(0 < l < L - 1 for l in sp.heads), f"heads {sp.heads} must be interior (1..{L-2})"
+
+
 def soft_threshold(v, theta):
     """S_theta(v) = sign(v) max(|v| - theta, 0).  Derivative 1[|v| > theta]."""
     return jnp.sign(v) * jnp.maximum(jnp.abs(v) - theta, 0.0)
@@ -71,7 +85,13 @@ def spectral_sq(D):
 
 def code_step(params, cfg):
     """Case-C relaxation code step eta_g = step_frac / (beta_g ||D||^2).
-    D is constant within one relaxation, so this is computed ONCE per relax."""
+    D is constant within one relaxation, so this is computed ONCE per relax.
+    Case D: one step per head (tuple).  w_l cancels from the code dynamics:
+    the code energy is w_l [beta_g/2||z_l - D_l a||^2 + gamma_l||a||_1], whose
+    prox-gradient step at eta/w_l is the unweighted step at eta."""
+    if is_D(cfg):
+        return tuple(cfg.sparse.step_frac / (cfg.sparse.beta_g * spectral_sq(Dl))
+                     for Dl in get_D(params))
     return cfg.sparse.step_frac / (cfg.sparse.beta_g * spectral_sq(get_D(params)))
 
 
@@ -101,6 +121,14 @@ def init_params(key, cfg, input_dim):
     sp = cfg.sparse
     if sp.case == "none":
         return params
+    if sp.case == "D":
+        # encoder UNCHANGED (same draw as case none); one dictionary per head,
+        # each from its own fold so D_l is identical across nested head sets
+        check_D(cfg, len(params[0]))
+        n, m = cfg.enc.width, sp.dict_mult * cfg.enc.width
+        Ds = tuple(normalise_dict(jax.random.normal(jax.random.fold_in(key, 7919 + l), (n, m)))
+                   for l in sp.heads)
+        return (params[0], params[1], Ds)
     model, skip = params
     L, s = len(model), sp.layer
     assert 0 < s < L - 1, f"sparse.layer={s} must be interior (1..{L-2})"
@@ -118,6 +146,8 @@ def init_params(key, cfg, input_dim):
 
 def project(params, cfg):
     """Post-optimiser-step projection: re-normalise D's columns (case C)."""
+    if cfg.sparse.case == "D":
+        return (params[0], params[1], tuple(normalise_dict(Dl) for Dl in params[2]))
     if cfg.sparse.case != "C":
         return params
     return (params[0], params[1], normalise_dict(params[2]))
@@ -130,6 +160,8 @@ def get_D(params):
 def param_labels(params):
     """optax.multi_transform labels for case-C params: encoder vs dictionary."""
     enc = jax.tree_util.tree_map(lambda _: "enc", (params[0], params[1]))
+    if isinstance(params[2], tuple):                       # case D: one D per head
+        return (enc[0], enc[1], tuple("dict" for _ in params[2]))
     return (enc[0], enc[1], "dict")
 
 
@@ -197,7 +229,7 @@ def _scalings(params, x, cfg):
 def norm_spec(cfg):
     """(s, c) if the sparse layer's prediction is normalised, else None."""
     sp = cfg.sparse
-    if sp.case == "none" or not sp.normalise_fs:
+    if sp.case in ("none", "D") or not sp.normalise_fs:
         return None
     return (sp.layer, sp.fs_norm)
 
@@ -239,6 +271,21 @@ def deploy(params, x, cfg, t=None, beta_g=None):
     if sp.case == "none":
         z, hs = E.forward(params, x, cfg.enc)
         return [*hs, z], {}
+    if sp.case == "D":
+        # main path is the ORIGINAL encoder; the heads only read it.  With all
+        # multipliers kept, z_l is pinned to f_l at the fixed point, so each
+        # code solves  min_a beta_g/2||f_l - D_l a||^2 + gamma_l||a||_1
+        # (mu = beta_g, and w_l does not change the minimiser).
+        z, hs = E.forward(params, x, cfg.enc)
+        acts = [*hs, z]
+        tt = sp.T_test if t is None else t
+        codes, steps = [], []
+        for l, Dl, gl in zip(sp.heads, get_D(params), sp.gammas):
+            eta = sp.step_frac / (sp.beta_g * spectral_sq(Dl))
+            codes.append(ista(acts[l], Dl, gl, sp.beta_g, tt, eta))
+            steps.append(eta)
+        return acts, {"a": tuple(codes), "eta": tuple(steps),
+                      "f_heads": tuple(acts[l] for l in sp.heads)}
     rho = cfg.pc.rho
     sc = _scalings(params, x, cfg)
     L, s = len(params[0]), sp.layer
@@ -284,6 +331,11 @@ def deployed_head_energy(params, x, cfg):
     if sp.case == "none":
         return 0.0
     _, ex = deploy(params, x, cfg)
+    if sp.case == "D":
+        # BP-D: sum_l w_l [beta_g/2||f_l - D_l a_l^(T)||^2 + gamma_l||a_l^(T)||_1]
+        return sum(wl * jnp.mean(lasso_energy(f, Dl, a, gl, sp.beta_g))
+                   for f, Dl, a, gl, wl in zip(ex["f_heads"], get_D(params), ex["a"],
+                                               sp.gammas, sp.head_ws))
     if sp.case == "B":
         return jnp.mean(huber_energy(ex["f_s"], sp.beta, cfg.pc.rho))
     return jnp.mean(lasso_energy(ex["f_s"], get_D(params), ex["a"], sp.gamma, lasso_mu(cfg)))
@@ -294,7 +346,7 @@ def deployed_head_energy(params, x, cfg):
 def layer_alphas(cfg, L):
     """Per-layer dual rates.  case none: alpha everywhere (unchanged)."""
     a = cfg.pc.alpha
-    if not active(cfg):
+    if not active(cfg) or is_D(cfg):          # case D keeps every multiplier
         return [a] * L
     s = cfg.sparse.layer
     return [0.0 if (l == s or (not cfg.sparse.below_hard and l < s)) else a
@@ -310,6 +362,10 @@ def relax_init(params, x, cfg):
 
 def head_smooth(params, acts, a, cfg):
     """Smooth head energy (case C), batch mean: beta_g/(2B) sum ||z_s - D a||^2."""
+    if is_D(cfg):
+        sp = cfg.sparse
+        return sum(wl * 0.5 * sp.beta_g * jnp.sum((acts[l] - al @ Dl.T) ** 2) / acts[l].shape[0]
+                   for l, Dl, al, wl in zip(sp.heads, get_D(params), a, sp.head_ws))
     if cfg.sparse.case != "C":
         return 0.0
     zs = acts[cfg.sparse.layer]
@@ -319,6 +375,9 @@ def head_smooth(params, acts, a, cfg):
 def nonsmooth(acts, a, cfg):
     """The L1 terms, batch mean.  Reported in F; never differentiated."""
     sp = cfg.sparse
+    if sp.case == "D":
+        return sum(wl * gl * jnp.sum(jnp.abs(al)) / al.shape[0]
+                   for al, gl, wl in zip(a, sp.gammas, sp.head_ws))
     if sp.case == "B":
         zs = acts[sp.layer]
         return sp.beta * jnp.sum(jnp.abs(zs)) / zs.shape[0]
@@ -347,6 +406,9 @@ def a_step(params, acts, a, cfg, eta):
     is per sample (no B).
     """
     sp = cfg.sparse
+    if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
+        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - acts[l]) @ Dl), el * gl)
+                     for l, Dl, al, el, gl in zip(sp.heads, get_D(params), a, eta, sp.gammas))
     D = get_D(params)
     zs = acts[sp.layer]
     grad = sp.beta_g * ((a @ D.T - zs) @ D)
@@ -356,6 +418,8 @@ def a_step(params, acts, a, cfg, eta):
 def active_fraction(acts, a, cfg):
     """Fraction of nonzero units in the sparse variable (z_s for B, a for C)."""
     sp = cfg.sparse
+    if is_D(cfg):           # mean over heads
+        return sum(jnp.mean((al != 0).astype(jnp.float32)) for al in a) / len(a)
     v = acts[sp.layer] if sp.case == "B" else a
     return jnp.mean((v != 0).astype(jnp.float32))
 
@@ -368,6 +432,8 @@ def health(params, x, cfg):
         return {}
     sp = cfg.sparse
     acts, ex = deploy(params, x, cfg)
+    if is_D(cfg):
+        return health_D(params, acts, ex, cfg)
     s = sp.layer
     model = params[0]
     out = {
@@ -387,4 +453,38 @@ def health(params, x, cfg):
             "lasso_energy": float(jnp.mean(lasso_energy(ex["f_s"], D, a, sp.gamma,
                                                         lasso_mu(cfg)))),
         })
+    return out
+
+
+def _spread(v):
+    """1 - median cosine to the mean direction (0 = every row points the same way)."""
+    m = jnp.mean(v, 0)
+    c = (v @ m) / (jnp.linalg.norm(v, axis=1) * jnp.linalg.norm(m) + 1e-12)
+    return float(1.0 - jnp.median(c))
+
+
+def health_D(params, acts, ex, cfg):
+    """Case D log scalars: per head (sparsity, supports, dictionary) and the
+    collapse guards of the pilot gate (supports, embedding spread)."""
+    import numpy as np
+    sp = cfg.sparse
+    z = acts[-1]
+    out = {"embed_spread": _spread(z), "embed_norm": float(jnp.mean(jnp.linalg.norm(z, axis=-1))),
+           "embed_std": float(jnp.mean(jnp.std(z, 0))), "n_rows": int(z.shape[0])}
+    fr, sup = [], []
+    for l, Dl, al, gl in zip(sp.heads, get_D(params), ex["a"], sp.gammas):
+        on = np.asarray(al != 0)
+        f = acts[l]
+        G = jnp.abs(Dl.T @ Dl) - jnp.eye(Dl.shape[1])
+        h = {f"h{l}_active": float(on.mean()), f"h{l}_supports": len({r.tobytes() for r in on}),
+             f"h{l}_dead_atoms": float(np.mean(~on.any(0))), f"h{l}_coherence": float(jnp.max(G)),
+             f"h{l}_lasso": float(jnp.mean(lasso_energy(f, Dl, al, gl, sp.beta_g))),
+             f"h{l}_rel_recon": float(jnp.mean(jnp.linalg.norm(f - al @ Dl.T, axis=-1)
+                                               / (jnp.linalg.norm(f, axis=-1) + 1e-12))),
+             f"h{l}_input_spread": _spread(f)}
+        out.update(h)
+        fr.append(h[f"h{l}_active"]); sup.append(h[f"h{l}_supports"])
+    out["active_frac"] = float(np.mean(fr))
+    out["active_min"], out["active_max"] = float(min(fr)), float(max(fr))
+    out["supports_min"] = int(min(sup))
     return out

@@ -107,7 +107,7 @@ class SparseCfg:
            (beta_g/2)||z_s - D a||^2 + gamma ||a||_1, deployed via t ISTA steps
     Both B and C make layer s NON-residual and rescale W_s by sqrt(L) at init.
     """
-    case: Literal["none", "B", "C"] = "none"
+    case: Literal["none", "B", "C", "D"] = "none"
     layer: int = 5                  # s: index into the activity list (interior)
     beta: float = 0.0               # case B L1 weight; threshold beta/rho
     gamma: float = 0.0              # case C L1 weight on the code a
@@ -128,6 +128,12 @@ class SparseCfg:
     # 1.98 at T=16).  0.5, not 1: z_s also enters r_{s+1} with J ~ I, so the
     # local curvature is ~2 rho.
     s_step: float = 0.5
+    # ---- case D (wiki 'Method - Sparse side-head arm plan'): side dictionary
+    # heads on the RESIDUAL stream, every multiplier kept, encoder unchanged.
+    # Head l adds w_l [ beta_g/2 ||z_l - D_l a_l||^2 + gamma_l ||a_l||_1 ].
+    heads: Tuple[int, ...] = ()            # activity indices, e.g. (5,) .. (3,4,5,6,7)
+    head_ws: Tuple[float, ...] = ()        # w_l per head (fixed total, split equally)
+    gammas: Tuple[float, ...] = ()         # gamma_l per head (20% active at init)
 
 
 @dataclass(frozen=True)

@@ -44,7 +44,7 @@ def main():
     ap.add_argument("--alpha", type=float, default=None,
                     help="PC-ALM dual rate; 0 = plain PC")
     # ---- sparse prior (spec: 'Method - Sparse PC-ALM arms spec') ----------
-    ap.add_argument("--sparse-case", choices=["none", "B", "C"], default="none")
+    ap.add_argument("--sparse-case", choices=["none", "B", "C", "D"], default="none")
     ap.add_argument("--sparse-layer", type=int, default=SparseCfg.layer)
     ap.add_argument("--beta", type=float, default=0.0, help="case B L1 weight")
     ap.add_argument("--gamma", type=float, default=0.0, help="case C L1 weight on a")
@@ -53,6 +53,11 @@ def main():
     ap.add_argument("--T-test", type=int, default=SparseCfg.T_test)
     ap.add_argument("--below-soft", action="store_true",
                     help="drop the multipliers below s too (D3 alternative)")
+    # ---- case D: side heads (wiki 'Method - Sparse side-head arm plan') -----
+    ap.add_argument("--heads-json", default=None,
+                    help="case D: JSON from select_heads.py; with --K picks the nested "
+                         "head set, its gammas and its head weights")
+    ap.add_argument("--K", type=int, default=None, help="case D: number of heads")
     ap.add_argument("--init-only", action="store_true",
                     help="write config.json + params.eqx at INITIALISATION and "
                          "stop: the untrained floor for this architecture")
@@ -62,12 +67,12 @@ def main():
     if args.sparse_case != "none" and not args.tag:
         # RunCfg.name does not encode the sparse settings; only the tag
         # separates these runs, so an untagged sparse run would collide.
-        ap.error("--tag is required with --sparse-case B/C")
+        ap.error("--tag is required with --sparse-case B/C/D")
     if args.sparse_case != "none" and (args.alpha is None or args.eta_h is None
                                        or args.alpha <= 0):
         # the defaults (alpha=0, eta_h=0.25) would silently run PLAIN PC at the
         # wrong step and the run name would not show it (found in review)
-        ap.error("--sparse-case B/C needs explicit --alpha > 0 and --eta-h "
+        ap.error("--sparse-case B/C/D needs explicit --alpha > 0 and --eta-h "
                  "(spec operating point: --alpha 1 --eta-h 0.0625)")
     if args.eta_h is None:
         args.eta_h = PCCfg.eta_h
@@ -77,10 +82,25 @@ def main():
         ap.error("case B needs --beta > 0")
     if args.sparse_case == "C" and args.gamma <= 0:
         ap.error("case C needs --gamma > 0")
+    D_kw = {}
+    if args.sparse_case == "D":
+        if not args.heads_json or not args.K:
+            ap.error("case D needs --heads-json and --K")
+        import json as _json
+        sel = _json.load(open(args.heads_json))
+        k = str(args.K)
+        if k not in sel["sets"]:
+            ap.error(f"K={args.K} not in {args.heads_json} (has {sorted(sel['sets'])})")
+        st = sel["sets"][k]
+        D_kw = dict(heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
+                    head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
+        if args.beta_g != SparseCfg.beta_g or args.T_test != SparseCfg.T_test:
+            ap.error("case D takes beta_g and T_test from --heads-json only")
     sparse = SparseCfg(case=args.sparse_case, layer=args.sparse_layer,
-                       beta=args.beta, gamma=args.gamma, beta_g=args.beta_g,
-                       dict_mult=args.dict_mult, T_test=args.T_test,
-                       below_hard=not args.below_soft)
+                       beta=args.beta, gamma=args.gamma,
+                       beta_g=D_kw.pop("beta_g", args.beta_g),
+                       dict_mult=args.dict_mult, T_test=D_kw.pop("T_test", args.T_test),
+                       below_hard=not args.below_soft, **D_kw)
 
     planned = []
     for seed in args.seeds:

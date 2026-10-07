@@ -26,6 +26,11 @@ import sys
 
 LAST = 200
 BAND = (0.1, 0.3)
+# case D (wiki 'Method - Sparse side-head arm plan', D4): band per head, plus two
+# collapse guards that cases B/C lacked
+BAND_D = (0.05, 0.4)
+SUPPORTS_MIN_FRAC = 0.5          # distinct active patterns >= 50 % of eval rows, every head
+SPREAD_MIN_RATIO = 0.5           # embedding input spread >= 0.5 x its value at step 0
 
 
 def _load(run_dir):
@@ -47,7 +52,8 @@ def _flat(d, prefix=""):
 def arm_report(run_dir, is_pc):
     log, cfg = _load(run_dir)
     clip = cfg["opt"]["grad_clip"]
-    is_C = cfg.get("sparse", {}).get("case") == "C"
+    case = cfg.get("sparse", {}).get("case")
+    is_C = case in ("C", "D")
     key = "grad_norm_enc" if is_C else "grad_norm_preclip"
     g = [r[key] for r in log if key in r]
     lf = [r["loss_ff"] for r in log if "loss_ff" in r]
@@ -77,11 +83,36 @@ def arm_report(run_dir, is_pc):
         reasons.append(f"encoder clipping fired on {100 * info['clip_frac_enc']:.1f}% of steps (>= 5%)")
     if not all(math.isfinite(v) for v in vals):
         reasons.append("non-finite values in the log")
-    if not dep:
+    if case == "D":
+        reasons += _gate_D(log, info)
+    elif not dep:
         reasons.append("no deployed active fraction in eval rows")
     elif not BAND[0] <= dep[-1][1] <= BAND[1]:
         reasons.append(f"deployed active fraction {dep[-1][1]:.3f} outside {list(BAND)}")
     return reasons, info, cfg
+
+
+def _gate_D(log, info):
+    ev = [r["eval"]["sparse"] for r in log if isinstance(r.get("eval"), dict) and "sparse" in r["eval"]]
+    if len(ev) < 2:
+        return ["fewer than two eval rows with case-D health"]
+    first, last = ev[0], ev[-1]
+    heads = sorted(int(k[1:].split("_")[0]) for k in last if k.endswith("_active"))
+    out = []
+    info["head_active_last"] = {l: round(last[f"h{l}_active"], 4) for l in heads}
+    info["head_supports_last"] = {l: last[f"h{l}_supports"] for l in heads}
+    info["embed_spread_first_last"] = (first["embed_spread"], last["embed_spread"])
+    for l in heads:
+        a = last[f"h{l}_active"]
+        if not BAND_D[0] <= a <= BAND_D[1]:
+            out.append(f"head {l} deployed active fraction {a:.3f} outside {list(BAND_D)}")
+        if last[f"h{l}_supports"] < SUPPORTS_MIN_FRAC * last["n_rows"]:
+            out.append(f"head {l}: {last[f'h{l}_supports']} distinct supports < "
+                       f"{SUPPORTS_MIN_FRAC:.0%} of {last['n_rows']} rows (collapse)")
+    if last["embed_spread"] < SPREAD_MIN_RATIO * first["embed_spread"]:
+        out.append(f"embedding spread {last['embed_spread']:.4g} < {SPREAD_MIN_RATIO} x "
+                   f"initial {first['embed_spread']:.4g} (collapse)")
+    return out
 
 
 def gate(pc_dir, bp_dir):

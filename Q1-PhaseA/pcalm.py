@@ -189,7 +189,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
             acts_v, a_v = SP.relax_init(params, Zin[v], cfg)
             acts0.append(acts_v)
             a0.append(a_v)
-        if cfg.sparse.case != "C":
+        if cfg.sparse.case not in ("C", "D"):
             a0 = None
     alphas = SP.layer_alphas(cfg, len(acts0[0]))
     norm = SP.norm_spec(cfg)                 # None for case none
@@ -199,7 +199,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     if cfg.sparse.case == "B":
         lrs[cfg.sparse.layer] = B * cfg.sparse.s_step / cfg.pc.rho
     # case C code step, once per relaxation (D is constant within it)
-    eta_g = SP.code_step(params, cfg) if cfg.sparse.case == "C" else None
+    eta_g = SP.code_step(params, cfg) if cfg.sparse.case in ("C", "D") else None
     duals0 = zero_duals(acts0)
 
     loss_z = _objective(cfg, A)

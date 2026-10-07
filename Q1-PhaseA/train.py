@@ -89,7 +89,7 @@ def optim(cfg): # Optimizer for both the arms
             optax.clip_by_global_norm(cfg.opt.grad_clip),
             optax.adamw(sched, weight_decay=cfg.opt.weight_decay)
         )
-    if cfg.sparse.case != "C":
+    if cfg.sparse.case not in ("C", "D"):
         return base()
     # Case C (PC-C and C2 alike): the encoder keeps its usual clip; the
     # dictionary is a separate group with NO clip.  At init |dF/dD| ~ 1.5 vs
@@ -180,7 +180,7 @@ def train(cfg: RunCfg, verbose=True):
             g, aux = pc_grads(params, Zin, A, cfg, kg)
 
         gnorm = _global_norm(g)                    # BEFORE clipping
-        if cfg.sparse.case == "C":                 # clipped as separate groups
+        if cfg.sparse.case in ("C", "D"):          # encoder vs dictionary group
             gn_enc, gn_dict = _global_norm((g[0], g[1])), _global_norm(g[2])
         params, opt_state = grad_update(params, g, opt_state, opt)
         params = SP.project(params, cfg)          # case C: unit-norm D columns
@@ -204,7 +204,7 @@ def train(cfg: RunCfg, verbose=True):
             open(os.path.join(out, "DIVERGED"), "w").write(f"step {step}\n")
             print(f"[{cfg.name}] DIVERGED at step {step} -- stopping this run", flush=True)
             return params, log
-        if cfg.sparse.case == "C":
+        if cfg.sparse.case in ("C", "D"):
             row.update({"grad_norm_enc": gn_enc, "grad_norm_dict": gn_dict})
         row.update({k: float(v) for k, v in aux.items() if jnp.ndim(v) == 0})
         log.append(row)

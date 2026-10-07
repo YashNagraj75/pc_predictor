@@ -497,6 +497,173 @@ def test_all_zero_view_gives_finite_gradients():
             check(f"{case}/{arm}: gradients finite with an all-zero view in the batch", ok)
 
 
+# ------------------------------------------------------- case D: side heads
+
+def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=True,
+           projector="bn", seed=0, eta=0.0625):
+    """Tiny encoder (L = 6) with case-D side heads on residual layers."""
+    K = len(heads)
+    ws = tuple(ws if ws is not None else [0.5 / K] * K)
+    gammas = tuple(gammas if gammas is not None else [0.05] * K)
+    enc = EncoderCfg(depth=4, width=16, embed_dim=16)
+    sp = SparseCfg(case="D", heads=tuple(heads), head_ws=ws, gammas=gammas, beta_g=1.0, T_test=8)
+    cfg = RunCfg(arm="pc", use_sigreg=use_sigreg, projector=projector, enc=enc,
+                 pc=PCCfg(T=T, alpha=alpha, eta_h=eta), opt=OptCfg(seed=seed), sparse=sp)
+    params = SP.init_params(jax.random.PRNGKey(seed), cfg, cfg.data.input_dim)
+    kv, ka = jax.random.split(jax.random.PRNGKey(1))
+    Zin, _ = D.make_views(kv, jnp.asarray(_data()[:B]), cfg.data)
+    A = S.sample_directions(ka, cfg.enc.embed_dim, cfg.sig.num_slices)
+    return params, Zin, A, cfg
+
+
+def test_D_init_and_nesting():
+    """Encoder identical to case none; D_l depends only on (seed, l), so nested
+    head sets share dictionaries; every multiplier kept; no normalisation."""
+    pD, _, _, cD = smallD(heads=(2, 3))
+    pN, _, _, cN = small(case="none")
+    same_enc = all(np.array_equal(a, b) for a, b in zip(leaves((pD[0], pD[1])), leaves(pN)))
+    p1, _, _, _ = smallD(heads=(3,))
+    shared = np.array_equal(np.asarray(pD[2][1]), np.asarray(p1[2][0]))
+    unit = all(np.allclose(np.linalg.norm(np.asarray(Dl), axis=0), 1.0, atol=1e-5) for Dl in pD[2])
+    alphas = SP.layer_alphas(cD, len(pD[0]))
+    check("D: encoder == case none init; D_l shared across nested sets; unit columns; all alphas kept; no norm",
+          same_enc and shared and unit and all(a == cD.pc.alpha for a in alphas) and SP.norm_spec(cD) is None,
+          f"enc={same_enc} shared={shared} unit={unit} alphas={alphas}")
+    bad = []
+    for kw in (dict(heads=(0,)), dict(heads=(5,)), dict(heads=(2, 2)), dict(heads=(2, 3), ws=[0.1])):
+        try:
+            smallD(**kw); bad.append(kw)
+        except AssertionError:
+            pass
+    check("D: invalid head sets are refused (input/embedding layer, duplicates, length mismatch)",
+          not bad, f"accepted: {bad}")
+
+
+def test_D_zero_weight_equals_pcalm():
+    """w_l = 0: the heads are inert, so relax / grads equal plain PC-ALM."""
+    pD, Zin, A, cD = smallD(heads=(2, 3), ws=[0.0, 0.0])
+    pN, _, _, cN = small(case="none", alpha=1.0, T=8)
+    aD, _, _ = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
+    aN, _, _ = pcalm.relax(pN, Zin, A, cN, jax.random.PRNGKey(0))
+    gD, _ = pcalm.grads(pD, Zin, A, cD, jax.random.PRNGKey(0))
+    gN, _ = pcalm.grads(pN, Zin, A, cN, jax.random.PRNGKey(0))
+    da = max(maxrel(x, y) for x, y in zip(leaves(aD), leaves(aN)))
+    dg = max(maxrel(x, y) for x, y in zip(leaves((gD[0], gD[1])), leaves(gN)))
+    dD = max(float(jnp.max(jnp.abs(x))) for x in gD[2])
+    check("D: w = 0 reproduces PC-ALM (activities, encoder grads) and gives zero dictionary grad",
+          da < 1e-5 and dg < 1e-5 and dD == 0.0, f"acts {da:.2e} grads {dg:.2e} |dD| {dD:.1e}")
+
+
+def test_D_codes_solve_lasso():
+    """Deployed codes approach the FISTA optimum of each head's LASSO as t grows."""
+    pD, Zin, A, cD = smallD(heads=(2, 3))
+    x = Zin[0]
+    out = []
+    for t in (4, 64, 512):
+        acts, ex = SP.deploy(pD, x, cD, t=t)
+        gaps = []
+        for l, Dl, a, g in zip(cD.sparse.heads, SP.get_D(pD), ex["a"], cD.sparse.gammas):
+            f = acts[l]
+            astar = SP.fista(f, Dl, g, cD.sparse.beta_g, 3000)
+            e = float(jnp.mean(SP.lasso_energy(f, Dl, a, g, cD.sparse.beta_g)))
+            es = float(jnp.mean(SP.lasso_energy(f, Dl, astar, g, cD.sparse.beta_g)))
+            gaps.append((e - es) / (abs(es) + 1e-12))
+        out.append(max(gaps))
+    check("D: deployed codes converge to the LASSO optimum (rel. suboptimality falls, < 1e-3 at t=512)",
+          out[0] >= out[1] >= out[2] and out[2] < 1e-3 and min(out) > -1e-4,
+          " ".join(f"{v:.2e}" for v in out))
+
+
+def test_D_relaxation_codes_track_layer():
+    """During the PC relaxation the codes descend each head's energy at the
+    RELAXED z_l, and with all multipliers on z_l stays near f_l."""
+    pD, Zin, A, cD = smallD(heads=(2, 3), T=40)
+    acts, duals, h = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
+    preds = pcalm.layer_predictions(pD, acts[0], Zin[0], cD.enc)
+    r = [float(jnp.linalg.norm(acts[0][l] - preds[l]) / (jnp.linalg.norm(preds[l]) + 1e-12))
+         for l in cD.sparse.heads]
+    fin = all(np.all(np.isfinite(np.asarray(a))) for a in h["a"][0])
+    check("D: relaxed head layers stay near their predictions (multiplier kept), codes finite",
+          fin and max(r) < 0.1, "rel resid " + " ".join(f"{v:.3f}" for v in r))
+
+
+def test_D_control_objective_and_agreement():
+    """BP-D = task + head energy SUMMED over views; with the task drive removed
+    PC-D's gradient matches BP-D's on the dictionaries and on the layers <= max head."""
+    pD, Zin, A, cD = smallD(heads=(2, 3))
+    cb = dataclasses.replace(cD, arm="bp")
+    tot, aux = TR.bp_objective(pD, Zin, A, cb)
+    task, _ = TR.loss_from_views(pD, Zin, A, cb)
+    head = sum(float(SP.deployed_head_energy(pD, Zin[v], cb)) for v in range(Zin.shape[0]))
+    ok = abs(float(tot) - float(task) - head) <= 1e-5 * max(1.0, abs(head))
+    check("D: BP-D objective == task + head energy summed over views", ok,
+          f"tot={float(tot):.6f} task={float(task):.6f} head={head:.6f}")
+
+    def cos(a, b):
+        a, b = np.ravel(a), np.ravel(b)
+        return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    nrm = lambda x: float(jnp.linalg.norm(x))
+    for seed in (0, 1):
+        pD, Zin, A, cD = smallD(heads=(2, 3), T=60, use_sigreg=False, projector="none", seed=seed)
+        Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+        gp, _ = pcalm.grads(pD, Zin, A, cD, jax.random.PRNGKey(0))
+        gb, _ = TR.bp_grads(pD, Zin, A, dataclasses.replace(cD, arm="bp"))
+        rD = [nrm(a) / (nrm(b) + 1e-30) for a, b in zip(gp[2], gb[2])]
+        cDs = [cos(a, b) for a, b in zip(gp[2], gb[2])]
+        W = lambda g, l: g[0][l].layers[1].weight
+        rW = [nrm(W(gp, l)) / (nrm(W(gb, l)) + 1e-30) for l in range(max(cD.sparse.heads) + 1)]
+        check(f"D: zero task drive, seed {seed}: dictionary cos > 0.9 and norm ratio in [0.5, 2]; "
+              f"encoder ratio in [0.5, 2] on layers <= max head",
+              min(cDs) > 0.9 and all(0.5 <= r <= 2 for r in rD + rW),
+              "D cos " + " ".join(f"{c:.3f}" for c in cDs) + " ratio " + " ".join(f"{r:.2f}" for r in rD)
+              + " | W ratio " + " ".join(f"{r:.2f}" for r in rW))
+
+
+def test_D_batch_invariance_and_zero_view():
+    sizes = (2, 8, 32)
+    pD, Zf, A, cD = smallD(heads=(2, 3), T=6, B=max(sizes), use_sigreg=False, projector="none")
+    ref, worst = None, 0.0
+    for B in sizes:
+        _, _, h = pcalm.relax(pD, Zf[:, :B], A, cD, jax.random.PRNGKey(0))
+        v = np.concatenate([np.asarray(a[0]) for a in h["a"][0]])
+        ref = v if ref is None else ref
+        worst = max(worst, maxrel(v, ref))
+    check("D: sample 0's settled codes are batch-size invariant", worst < 1e-4, f"{worst:.2e}")
+    pD, Zin, A, cD = smallD(heads=(2, 3))
+    Zin = Zin.at[:, 0].set(0.0)
+    fin = []
+    for arm in ("pc", "bp"):
+        c = dataclasses.replace(cD, arm=arm)
+        g, _ = pcalm.grads(pD, Zin, A, c, jax.random.PRNGKey(0)) if arm == "pc" else TR.bp_grads(pD, Zin, A, c)
+        fin.append(all(np.all(np.isfinite(x)) for x in leaves(g)))
+    check("D: an all-zero view gives finite PC and BP gradients", all(fin), str(fin))
+
+
+def test_D_train_project_serialise_and_gate():
+    """A few training steps per arm: finite, D re-normalised, round-trips through
+    load_run, and the pair gate reads the case-D health rows."""
+    import gate_pilot as GP
+    from run_probes import load_run
+    tmp = tempfile.mkdtemp()
+    dirs = {}
+    for arm in ("pc", "bp"):
+        _, _, _, cD = smallD(heads=(2, 3))
+        cfg = dataclasses.replace(cD, arm=arm, out_dir=tmp, tag="tD",
+                                  opt=dataclasses.replace(cD.opt, n_steps=4, eval_every=2))
+        p, log = TR.train(cfg, verbose=False)
+        dirs[arm] = os.path.join(tmp, cfg.name)
+        unit = all(np.allclose(np.linalg.norm(np.asarray(Dl), axis=0), 1.0, atol=1e-5) for Dl in p[2])
+        c2, p2 = load_run(dirs[arm])
+        rt = all(np.array_equal(a, b) for a, b in zip(leaves(p), leaves(p2))) and c2.sparse.heads == (2, 3)
+        ev = [r for r in log if isinstance(r.get("eval"), dict)]
+        has = bool(ev) and "h2_supports" in ev[-1]["eval"]["sparse"] and "embed_spread" in ev[-1]["eval"]["sparse"]
+        check(f"D ({arm}): trains, keeps unit-norm D, round-trips, logs head health", unit and rt and has,
+              f"unit={unit} roundtrip={rt} health={has}")
+    ok, reasons, info = GP.gate(dirs["pc"], dirs["bp"])
+    readable = all("missing" not in r and "fewer than two" not in r and "no " not in r[:8] for r in reasons)
+    check("D: pair gate evaluates case-D criteria without schema errors", readable, str(reasons)[:300])
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -510,7 +677,10 @@ if __name__ == "__main__":
                test_C_D_gradient_matches_analytic, test_project_and_serialise,
                test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged,
                test_control_objective_composition, test_pc_agrees_with_its_bp_control_below_s, test_fs_normalisation,
-               test_B_layer_s_step_converges, test_all_zero_view_gives_finite_gradients):
+               test_B_layer_s_step_converges, test_all_zero_view_gives_finite_gradients,
+               test_D_init_and_nesting, test_D_zero_weight_equals_pcalm, test_D_codes_solve_lasso,
+               test_D_relaxation_codes_track_layer, test_D_control_objective_and_agreement,
+               test_D_batch_invariance_and_zero_view, test_D_train_project_serialise_and_gate):
         try:
             fn()
         except Exception as exc:
