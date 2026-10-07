@@ -80,17 +80,33 @@ def maxrel(a, b):
 # ------------------------------------------------ 1. original path unchanged
 
 def test_golden_case_none():
-    """case none reproduces the pre-edit pcalm.relax / pcalm.grads exactly."""
+    """case none reproduces the PRE-EDIT pcalm.relax / pcalm.grads bit for bit.
+
+    The reference is regenerated on THIS machine by running _golden_pcalm.py
+    against the pre-sparsity source in golden_ref/ (pcalm/encoder/config as of
+    the commit before the sparse work).  A reference frozen on one machine
+    cannot be bit-identical on another: the GPU host's CPU differs from the
+    laptop's in the 7th significant digit (335.496826 vs 335.496857), which
+    failed the first GPU job's gates.  Comparing two runs on the same machine
+    keeps the test strict."""
+    import subprocess, tempfile
     import _golden_pcalm as G
-    for alpha in (0.0, 1.0):
-        path = os.path.join(HERE, f"golden_pcalm_alpha{int(alpha)}.npz")
-        ref = np.load(path)
-        got = G.snapshot(alpha)
-        keys = sorted(ref.files)
-        bad = [k for k in keys if not np.array_equal(ref[k], got[k])]
-        worst = max((maxrel(got[k], ref[k]) for k in keys), default=0.0)
-        check(f"case none == golden (alpha={alpha:g}): {len(keys)} arrays bit-identical",
-              not bad and set(keys) == set(got), f"mismatched={bad[:4]} worst_rel={worst:.2e}")
+    with tempfile.TemporaryDirectory() as d:
+        env = {**os.environ, "GOLDEN_REF": os.path.join(HERE, "golden_ref"),
+               "GOLDEN_OUT": d, "JAX_PLATFORMS": os.environ.get("JAX_PLATFORMS", "cpu")}
+        r = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "_golden_pcalm.py")],
+                           env=env, capture_output=True, text=True, cwd=HERE)
+        if r.returncode != 0:
+            check("golden reference generation (pre-edit source)", False, r.stderr[-300:])
+            return
+        for alpha in (0.0, 1.0):
+            ref = np.load(os.path.join(d, f"golden_pcalm_alpha{int(alpha)}.npz"))
+            got = G.snapshot(alpha)
+            keys = sorted(ref.files)
+            bad = [k for k in keys if not np.array_equal(ref[k], got[k])]
+            worst = max((maxrel(got[k], ref[k]) for k in keys), default=0.0)
+            check(f"case none == pre-edit code (alpha={alpha:g}): {len(keys)} arrays bit-identical",
+                  not bad and set(keys) == set(got), f"mismatched={bad[:4]} worst_rel={worst:.2e}")
 
 
 def test_init_none_is_E_init():
@@ -363,50 +379,63 @@ def test_pc_grads_finite_and_logged():
               f"active={float(aux['active_frac']):.3f} act_growth={float(aux['act_growth']):.3f}")
 
 
-def test_pc_agrees_with_its_bp_control_below_s():
-    """PC arm vs its BP control (the review's factor-of-V / missing-Huber class).
+def test_control_objective_composition():
+    """The BP controls differentiate task loss + the deployed sparse-layer energy
+    SUMMED over views (not averaged -- the bug all three reviewers found)."""
+    for case in ("B", "C"):
+        params, Zin, A, cfg = small(case=case, alpha=1.0)
+        cb = dataclasses.replace(cfg, arm="bp")
+        tot, aux = TR.bp_objective(params, Zin, A, cb)
+        task, _ = TR.loss_from_views(params, Zin, A, cb)
+        head = sum(float(SP.deployed_head_energy(params, Zin[v], cb)) for v in range(Zin.shape[0]))
+        ok = abs(float(tot) - float(task) - head) <= 1e-5 * max(1.0, abs(head)) and head > 0
+        if case == "B":       # and the deployed energy is the Huber envelope of f~_s
+            _, ex = SP.deploy(params, Zin[0], cb)
+            hb = float(jnp.mean(SP.huber_energy(ex["f_s"], cfg.sparse.beta, cfg.pc.rho)))
+            ok = ok and abs(hb - float(SP.deployed_head_energy(params, Zin[0], cb))) < 1e-6
+        check(f"{'C1-B' if case == 'B' else 'C2'} objective == task + sum over views of the deployed energy",
+              ok, f"total={float(tot):.5f} task={float(task):.5f} sum_v head={head:.5f}")
 
-    B, with the task drive REMOVED (identical views, SIGReg off): both gradients
-    reduce to that of the sparse layer's energy, so on layers <= s they must
-    agree in direction AND size.  A head energy averaged over views would show
-    as a norm ratio ~V; a control without the Huber term as cosine ~0.
-    Measured 2026-10-07: cos 0.946/0.955/0.946, ratio 0.85-1.00.
-    C, with the real task drive at T=100: cosine on layers below s (0.78/0.87),
-    plus the dictionary gradient at zero task drive (cos 0.97).
-    NOT asserted: B with the task drive.  A converged PC-B relaxation sits at the
-    task-informed support S(f_s + g_s/rho) while C1-B trains at the deployed
-    S(f_s); agreement there FALLS as PC-B converges (0.57/0.45 once layer s got
-    its own step).  That is case B's train/test gap, the hypothesis under test."""
+
+def test_pc_agrees_with_its_bp_control_below_s():
+    """PC arm vs its BP control with the task drive REMOVED (identical views,
+    SIGReg off): both gradients then come from the sparse layer's energy alone.
+
+    GATED on gradient-NORM ratios, which separate the bug class from correct
+    code robustly across seeds 0-4 (measured 2026-10-07): B, layers <= s,
+    0.73-1.36; C, dictionary, 0.57-0.64.  A head energy averaged over views
+    would give ~4x those.  Cosines are PRINTED, not gated: on this 4-layer,
+    width-16 net a single-batch cosine is seed-sensitive (B 0.65-0.95; C with
+    the task drive 0.40-0.87, and it also depends on which images are used --
+    the laptop's cached split differs from the GPU host's).
+    Not measured here: B with the task drive, where a converged PC-B trains at
+    the task-informed support S(f_s + g_s/rho) and C1-B at S(f_s) -- case B's
+    train/test gap, the hypothesis under test, not a bug."""
     def cos(a, b):
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
     nrm = lambda x: float(jnp.linalg.norm(x))
-    # ---- B, zero task drive
-    params, Zin, A, cfg = small(case="B", alpha=1.0, T=16, use_sigreg=False, projector="none")
-    Zin = jnp.stack([Zin[0]] * Zin.shape[0])
-    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
-    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
-    s = cfg.sparse.layer
     W = lambda g, l: g[0][l].layers[1].weight
-    cs = [cos(W(gp, l), W(gb, l)) for l in range(s + 1)]
-    rs = [nrm(W(gp, l)) / (nrm(W(gb, l)) + 1e-30) for l in range(s + 1)]
-    check("PC-B vs C1-B at zero task drive: cos > 0.9 and |g_pc|/|g_bp| in [0.75, 1.33] on layers <= s",
-          min(cs) > 0.9 and all(0.75 <= r <= 1.33 for r in rs),
-          "cos " + " ".join(f"{c:.3f}" for c in cs) + "  ratio " + " ".join(f"{r:.3f}" for r in rs))
-    # ---- C, real task drive, below s
-    params, Zin, A, cfg = small(case="C", alpha=1.0, T=100, eta=0.0625, B=8)
-    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
-    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
-    cs = [cos(W(gp, l), W(gb, l)) for l in range(s)]
-    check("PC-C vs C2 (task drive, T=100): per-layer cosine > 0.7 on layers below s",
-          min(cs) > 0.7, " ".join(f"L{l}={c:.3f}" for l, c in enumerate(cs)))
-    # ---- C, dictionary at zero task drive
-    params, Zin, A, cfg = small(case="C", alpha=1.0, T=16, use_sigreg=False, projector="none")
-    Zin = jnp.stack([Zin[0]] * Zin.shape[0])
-    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
-    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
-    check("PC-C vs C2 at zero task drive: dictionary gradient cos > 0.9", cos(gp[2], gb[2]) > 0.9,
-          f"cos={cos(gp[2], gb[2]):.4f} ratio={nrm(gp[2]) / nrm(gb[2]):.3f}")
+    for seed in (0, 1):
+        params, Zin, A, cfg = small(case="B", alpha=1.0, T=16, use_sigreg=False,
+                                    projector="none", seed=seed)
+        Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+        gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+        gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+        s = cfg.sparse.layer
+        cs = [cos(W(gp, l), W(gb, l)) for l in range(s + 1)]
+        rs = [nrm(W(gp, l)) / (nrm(W(gb, l)) + 1e-30) for l in range(s + 1)]
+        check(f"PC-B vs C1-B, zero task drive, seed {seed}: |g_pc|/|g_bp| in [0.5, 2] on layers <= s",
+              all(0.5 <= r <= 2.0 for r in rs),
+              "ratio " + " ".join(f"{r:.2f}" for r in rs) + "  (cos " + " ".join(f"{c:.2f}" for c in cs) + ")")
+        params, Zin, A, cfg = small(case="C", alpha=1.0, T=16, use_sigreg=False,
+                                    projector="none", seed=seed)
+        Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+        gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+        gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+        r = nrm(gp[2]) / nrm(gb[2])
+        check(f"PC-C vs C2, zero task drive, seed {seed}: dictionary cos > 0.9, |g_pc|/|g_bp| in [0.4, 1.5]",
+              cos(gp[2], gb[2]) > 0.9 and 0.4 <= r <= 1.5, f"cos={cos(gp[2], gb[2]):.3f} ratio={r:.2f}")
 
 
 def test_fs_normalisation():
@@ -465,7 +494,7 @@ if __name__ == "__main__":
                test_blend_is_the_z_minimiser, test_C_relax_descends_at_alpha0,
                test_C_D_gradient_matches_analytic, test_project_and_serialise,
                test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged,
-               test_pc_agrees_with_its_bp_control_below_s, test_fs_normalisation,
+               test_control_objective_composition, test_pc_agrees_with_its_bp_control_below_s, test_fs_normalisation,
                test_B_layer_s_step_converges):
         try:
             fn()

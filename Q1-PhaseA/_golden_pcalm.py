@@ -1,6 +1,11 @@
 """Freeze pcalm.relax / pcalm.grads outputs on a fixed input BEFORE the sparsity
 edits.  test_sparse.py asserts the sparse.case == "none" path reproduces these."""
-import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os, sys
+# GOLDEN_REF (set by test_sparse.py) points at the PRE-EDIT source; it must come
+# first on the path so `import pcalm` etc. resolve to the old modules.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+if os.environ.get("GOLDEN_REF"):
+    sys.path.insert(0, os.environ["GOLDEN_REF"])
 import dataclasses, numpy as np, jax, jax.numpy as jnp, equinox as eqx
 import data as D, encoder as E, sigreg as S, pcalm as PA
 from config import RunCfg, PCCfg, DataCfg, OptCfg
@@ -30,5 +35,6 @@ def snapshot(alpha):
 
 if __name__ == "__main__":
     for alpha in (0.0, 1.0):
-        np.savez(f"golden_pcalm_alpha{int(alpha)}.npz", **snapshot(alpha))
-        print("wrote", f"golden_pcalm_alpha{int(alpha)}.npz")
+        out = os.path.join(os.environ.get("GOLDEN_OUT", "."), f"golden_pcalm_alpha{int(alpha)}.npz")
+        np.savez(out, **snapshot(alpha))
+        print("wrote", out)
