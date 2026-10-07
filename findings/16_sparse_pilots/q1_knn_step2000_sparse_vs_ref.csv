@@ -1,0 +1,8 @@
+arm,network,n_seeds,knn_step0,knn_step2000,seed0_step0,seed0_step2000,gain_from_step0
+PC-ALM,original encoder,3,0.3487,0.349,0.343,0.3475,0.0003
+plain PC (corrected step),original encoder,3,0.349,0.3248,0.344,0.3045,-0.0242
+backprop,original encoder,3,0.3483,0.375,0.343,0.3775,0.0267
+PC-B,"case B net (non-residual, normalised, thresholded s)",1,0.207,0.1525,0.207,0.1525,-0.0545
+C1-B (backprop),"case B net (non-residual, normalised, thresholded s)",1,0.207,0.3165,0.207,0.3165,0.1095
+PC-C,"case C net (non-residual, normalised s + dictionary head)",1,0.3175,0.248,0.3175,0.248,-0.0695
+C2 (backprop),"case C net (non-residual, normalised s + dictionary head)",1,0.3185,0.381,0.3185,0.381,0.0625
