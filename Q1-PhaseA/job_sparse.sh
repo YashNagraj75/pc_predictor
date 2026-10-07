@@ -38,7 +38,8 @@ echo "##### 0. backend"
 $PY -c "import jax;print('backend', jax.default_backend(), jax.devices())" 2>&1 | tail -1
 
 echo "##### 1. gates"
-{ $PY -W ignore test_pcalm.py && $PY -W ignore test_sparse.py; } > gates_sparse.log 2>&1 \
+# CPU on purpose: the golden outputs were frozen on CPU and are checked bit for bit
+{ JAX_PLATFORMS=cpu $PY -W ignore test_pcalm.py && JAX_PLATFORMS=cpu $PY -W ignore test_sparse.py; } > gates_sparse.log 2>&1 \
   || { grep -E "PASS|FAIL" gates_sparse.log | grep FAIL; note "GATES FAILED"; exit 3; }
 grep -cE "\[PASS\]" gates_sparse.log | xargs -I{} note "gates: {} PASS, 0 FAIL"
 

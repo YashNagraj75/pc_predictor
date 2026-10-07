@@ -116,6 +116,18 @@ class SparseCfg:
     T_test: int = 16                # case C deployed ISTA steps
     step_frac: float = 0.9          # ISTA step = step_frac / Lipschitz
     below_hard: bool = True         # keep the multipliers on layers below s (D3)
+    # per-sample normalisation of f_s before the threshold / LASSO, both arms:
+    #   f~_s = fs_norm * f_s / ||f_s||.  Added 2026-10-07: without it both arms
+    #   sparsified by silencing the ReLU input to layer s (smoke: active fraction
+    #   0.20 -> 0.007).  fs_norm fixed a priori ~ the measured init scale
+    #   (||f_s|| = 1.79, ||z_{s-1}|| = 2.30), not tuned.
+    normalise_fs: bool = True
+    fs_norm: float = 2.0
+    # case B: per-sample relaxation step at layer s, in units of 1/rho.  Layer s
+    # has no multiplier and relaxed too slowly at eta_h (fixed-point residual
+    # 1.98 at T=16).  0.5, not 1: z_s also enters r_{s+1} with J ~ I, so the
+    # local curvature is ~2 rho.
+    s_step: float = 0.5
 
 
 @dataclass(frozen=True)

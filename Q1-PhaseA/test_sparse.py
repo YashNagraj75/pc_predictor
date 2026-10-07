@@ -51,11 +51,13 @@ def _data():
 
 
 def small(case="none", s=2, alpha=1.0, T=3, B=8, use_sigreg=True, projector="bn",
-          beta=0.3, gamma=0.05, beta_g=1.0, eta=0.0625, below_hard=True, seed=0):
+          beta=0.3, gamma=0.05, beta_g=1.0, eta=0.0625, below_hard=True, seed=0,
+          normalise_fs=True, s_step=0.5):
     """Tiny encoder (depth 4 -> L = 6 layers, width 16) on real images."""
     enc = EncoderCfg(depth=4, width=16, embed_dim=16)
     sp = SparseCfg(case=case, layer=s, beta=beta, gamma=gamma, beta_g=beta_g,
-                   T_test=8, below_hard=below_hard)
+                   T_test=8, below_hard=below_hard, normalise_fs=normalise_fs,
+                   s_step=s_step)
     cfg = RunCfg(arm="pc", use_sigreg=use_sigreg, projector=projector, enc=enc,
                  pc=PCCfg(T=T, alpha=alpha, eta_h=eta), opt=OptCfg(seed=seed),
                  sparse=sp)
@@ -147,7 +149,7 @@ def test_al_energy_matches_jpc_with_missing_skip():
 
 def test_deploy_reduces_to_jpc_forward():
     for case, kw in (("B", dict(beta=0.0)), ("C", dict(beta_g=1.0))):
-        params, Zin, A, cfg = small(case=case, **kw)
+        params, Zin, A, cfg = small(case=case, normalise_fs=False, **kw)   # jpc has no norm
         z_j, hs_j = E.forward(params, Zin[0], cfg.enc)
         if case == "B":
             acts, _ = SP.deploy(params, Zin[0], cfg)
@@ -188,7 +190,10 @@ def test_B_prox_iteration_converges_to_closed_form():
 def test_B_beta0_equals_plain_relax():
     """beta = 0, alpha = 0: case B is exactly the original PC relaxation on the
     modified network (the prox is the identity and no multipliers exist)."""
-    params, Zin, A, cfg = small(case="B", beta=0.0, alpha=0.0)
+    # normalisation off and the layer-s step equal to eta_h: then case B is
+    # literally the old relaxation on the modified net
+    params, Zin, A, cfg = small(case="B", beta=0.0, alpha=0.0, normalise_fs=False,
+                                s_step=0.0625)
     acts_b, _, hb = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
     cfg0 = dataclasses.replace(cfg, sparse=SparseCfg())     # same params, old path
     acts_0, _, h0 = pcalm.relax(params, Zin, A, cfg0, jax.random.PRNGKey(0))
@@ -359,27 +364,93 @@ def test_pc_grads_finite_and_logged():
 
 
 def test_pc_agrees_with_its_bp_control_below_s():
-    """At a long relaxation the PC weight gradient on the layers BELOW s must
-    point the same way as backprop through the control's objective (task loss
-    + deployed sparse-layer energy, summed over views).  Measured 2026-10-06:
-    0.83-0.85 (B) and 0.78-0.84 (C) with the corrected objective, 0.43-0.45 (B)
-    and 0.37-0.51 (C) with the first version (head energy averaged over views /
-    no Huber term for C1-B) -- so this test catches that bug class.
-    Layers at and ABOVE s are not asserted: PC computes their gradient at the
-    relaxed z_s (which carries task credit, g_s/rho) while the control's runs at
-    the deployed z_s = S(f_s), a structural difference of removing the
-    multiplier at s, not a bug."""
+    """PC arm vs its BP control (the review's factor-of-V / missing-Huber class).
+
+    B, with the task drive REMOVED (identical views, SIGReg off): both gradients
+    reduce to that of the sparse layer's energy, so on layers <= s they must
+    agree in direction AND size.  A head energy averaged over views would show
+    as a norm ratio ~V; a control without the Huber term as cosine ~0.
+    Measured 2026-10-07: cos 0.946/0.955/0.946, ratio 0.85-1.00.
+    C, with the real task drive at T=100: cosine on layers below s (0.78/0.87),
+    plus the dictionary gradient at zero task drive (cos 0.97).
+    NOT asserted: B with the task drive.  A converged PC-B relaxation sits at the
+    task-informed support S(f_s + g_s/rho) while C1-B trains at the deployed
+    S(f_s); agreement there FALLS as PC-B converges (0.57/0.45 once layer s got
+    its own step).  That is case B's train/test gap, the hypothesis under test."""
     def cos(a, b):
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    nrm = lambda x: float(jnp.linalg.norm(x))
+    # ---- B, zero task drive
+    params, Zin, A, cfg = small(case="B", alpha=1.0, T=16, use_sigreg=False, projector="none")
+    Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+    s = cfg.sparse.layer
+    W = lambda g, l: g[0][l].layers[1].weight
+    cs = [cos(W(gp, l), W(gb, l)) for l in range(s + 1)]
+    rs = [nrm(W(gp, l)) / (nrm(W(gb, l)) + 1e-30) for l in range(s + 1)]
+    check("PC-B vs C1-B at zero task drive: cos > 0.9 and |g_pc|/|g_bp| in [0.75, 1.33] on layers <= s",
+          min(cs) > 0.9 and all(0.75 <= r <= 1.33 for r in rs),
+          "cos " + " ".join(f"{c:.3f}" for c in cs) + "  ratio " + " ".join(f"{r:.3f}" for r in rs))
+    # ---- C, real task drive, below s
+    params, Zin, A, cfg = small(case="C", alpha=1.0, T=100, eta=0.0625, B=8)
+    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+    cs = [cos(W(gp, l), W(gb, l)) for l in range(s)]
+    check("PC-C vs C2 (task drive, T=100): per-layer cosine > 0.7 on layers below s",
+          min(cs) > 0.7, " ".join(f"L{l}={c:.3f}" for l, c in enumerate(cs)))
+    # ---- C, dictionary at zero task drive
+    params, Zin, A, cfg = small(case="C", alpha=1.0, T=16, use_sigreg=False, projector="none")
+    Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+    gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
+    gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
+    check("PC-C vs C2 at zero task drive: dictionary gradient cos > 0.9", cos(gp[2], gb[2]) > 0.9,
+          f"cos={cos(gp[2], gb[2]):.4f} ratio={nrm(gp[2]) / nrm(gb[2]):.3f}")
+
+
+def test_fs_normalisation():
+    """The sparse layer's prediction is per-sample normalised to fs_norm in BOTH
+    the deployed network and the relaxation energy, consistently."""
     for case in ("B", "C"):
-        params, Zin, A, cfg = small(case=case, alpha=1.0, T=100, eta=0.0625, B=8)
-        gp, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
-        gb, _ = TR.bp_grads(params, Zin, A, dataclasses.replace(cfg, arm="bp"))
-        s = cfg.sparse.layer
-        cs = [cos(gp[0][l].layers[1].weight, gb[0][l].layers[1].weight) for l in range(s)]
-        check(f"PC-{case} vs its BP control: per-layer cosine > 0.7 on layers below s (T=100)",
-              min(cs) > 0.7, " ".join(f"L{l}={c:.3f}" for l, c in enumerate(cs)))
+        params, Zin, A, cfg = small(case=case, beta=0.0 if case == "B" else 0.3)
+        s, c = cfg.sparse.layer, cfg.sparse.fs_norm
+        acts, ex = SP.deploy(params, Zin[0], cfg)
+        nr = np.asarray(jnp.linalg.norm(ex["f_s"], axis=-1))
+        preds = pcalm.layer_predictions(params, acts, Zin[0], cfg.enc, SP.norm_spec(cfg))
+        same = maxrel(preds[s], ex["f_s"])
+        check(f"{case}: ||f_s|| == fs_norm per sample; relaxation prediction == deployed f_s",
+              np.allclose(nr, c, rtol=1e-5) and same < 1e-5,
+              f"norms {nr.min():.4f}..{nr.max():.4f} (c={c}) rel diff={same:.1e}")
+    params, Zin, A, cfg = small(case="B", beta=0.0)
+    acts, _ = SP.deploy(params, Zin[0], cfg)
+    F = float(pcalm.al_energy(params, acts, Zin[0], None, 1.0, cfg.enc, None, SP.norm_spec(cfg)))
+    check("B(beta=0): energy with normalisation is 0 at the deployed forward pass", F < 1e-8,
+          f"F={F:.2e}")
+    # the shortcut is closed: scaling W_s or silencing its input cannot shrink f_s
+    p2 = (eqx.tree_at(lambda m: m[cfg.sparse.layer].layers[1].weight, params[0],
+                      params[0][cfg.sparse.layer].layers[1].weight * 0.1), *params[1:])
+    _, e1 = SP.deploy(params, Zin[0], cfg)
+    _, e2 = SP.deploy(p2, Zin[0], cfg)
+    check("normalised f_s is invariant to rescaling W_s", maxrel(e2["f_s"], e1["f_s"]) < 1e-5)
+
+
+def test_B_layer_s_step_converges():
+    """Case B's own step at s, on the FULL-SIZE architecture (the small test net
+    is not representative here: its layer-s curvature differs, and 0.5/rho
+    oscillated there).  Measured 2026-10-07 at init, B=64: spec fixed-point
+    residual at s 0.324 (shared eta_h) -> 0.036 (s_step=0.5) at T=16."""
+    import diag_sparse as DS
+    Xtr = _data()
+    res = {}
+    for ss in (0.0625, 0.5):
+        cfg = RunCfg(arm="pc", pc=PCCfg(T=16, eta_h=0.0625, alpha=1.0),
+                     sparse=SparseCfg(case="B", beta=0.235, s_step=ss))
+        p = SP.init_params(jax.random.PRNGKey(0), cfg, cfg.data.input_dim)
+        res[ss] = DS.relax_fixed_point_residual(p, cfg, Xtr, Ts=(16,), B=16)[0]["fp_B"]
+    check("B (full size): layer-s step brings the fixed-point residual at s below 0.1 at T=16",
+          res[0.5] < 0.1 and res[0.5] < res[0.0625],
+          f"shared eta_h: {res[0.0625]:.3f}  s_step=0.5: {res[0.5]:.3f}")
 
 
 if __name__ == "__main__":
@@ -394,7 +465,8 @@ if __name__ == "__main__":
                test_blend_is_the_z_minimiser, test_C_relax_descends_at_alpha0,
                test_C_D_gradient_matches_analytic, test_project_and_serialise,
                test_batch_invariance, test_bp_controls, test_pc_grads_finite_and_logged,
-               test_pc_agrees_with_its_bp_control_below_s):
+               test_pc_agrees_with_its_bp_control_below_s, test_fs_normalisation,
+               test_B_layer_s_step_converges):
         try:
             fn()
         except Exception as exc:

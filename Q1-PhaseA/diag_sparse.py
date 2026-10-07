@@ -199,21 +199,23 @@ def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0
     def measures(acts, duals, a):
         def Fs(acts):
             F = sum(PA.al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
-                                 cfg.pc.out_scale) for v in range(V))
+                                 cfg.pc.out_scale, SP.norm_spec(cfg)) for v in range(V))
             if a is not None:
                 F = F + sum(SP.head_smooth(params, acts[v], a[v], cfg) for v in range(V))
             return F
         g = jax.grad(Fs)(acts)
         gL = jax.grad(lambda ac: loss_z(jnp.stack([ac[v][-1] for v in range(V)])))(acts)
-        r = [PA.residuals(params, acts[v], Zin[v], cfg.enc) for v in range(V)]
+        r = [PA.residuals(params, acts[v], Zin[v], cfg.enc, SP.norm_spec(cfg)) for v in range(V)]
         nrm = lambda xs: float(np.sqrt(sum(float(jnp.sum(x ** 2)) for x in xs)))
         out = {"step_rel": [], "resid_rel": [], "dual_step_rel": []}
         fpB = None
         for l in range(len(acts[0])):
             grads = [B * g[v][l] + B * gL[v][l] for v in range(V)]
-            steps = [acts[v][l] - eta * grads[v] for v in range(V)]
+            # the relaxation's own per-sample step at this layer
+            el = cfg.sparse.s_step / rho if (cfg.sparse.case == "B" and l == s) else eta
+            steps = [acts[v][l] - el * grads[v] for v in range(V)]
             if cfg.sparse.case == "B" and l == s:
-                steps = [SP.soft_threshold(x, eta * cfg.sparse.beta) for x in steps]
+                steps = [SP.soft_threshold(x, el * cfg.sparse.beta) for x in steps]
                 tgt = [SP.soft_threshold(acts[v][l] - grads[v] / rho, cfg.sparse.beta / rho)
                        for v in range(V)]
                 fpB = nrm([acts[v][l] - tgt[v] for v in range(V)]) / (nrm([acts[v][l] for v in range(V)]) + 1e-12)

@@ -194,12 +194,27 @@ def _scalings(params, x, cfg):
                                    gamma=E.gamma_for(cfg.enc))
 
 
-def _pred(params, scalings, l, prev):
-    """f_l(prev), mirroring jpc.init_activities_with_ffwd term for term."""
+def norm_spec(cfg):
+    """(s, c) if the sparse layer's prediction is normalised, else None."""
+    sp = cfg.sparse
+    if sp.case == "none" or not sp.normalise_fs:
+        return None
+    return (sp.layer, sp.fs_norm)
+
+
+def normalise_rows(f, c):
+    return c * f / (jnp.linalg.norm(f, axis=-1, keepdims=True) + 1e-8)
+
+
+def _pred(params, scalings, l, prev, norm=None):
+    """f_l(prev), mirroring jpc.init_activities_with_ffwd term for term;
+    norm = (s, c) normalises layer s's prediction (as pcalm.layer_predictions)."""
     model, skip = params[0], params[1]
     p = scalings[l] * vmap(model[l])(prev)
     if skip[l] is not None:
         p = p + vmap(skip[l])(prev)
+    if norm is not None and l == norm[0]:
+        p = normalise_rows(p, norm[1])
     return p
 
 
@@ -222,7 +237,7 @@ def deploy(params, x, cfg, t=None, beta_g=None):
     L, s = len(params[0]), sp.layer
     acts, extras, prev = [], {}, x
     for l in range(L):
-        f = _pred(params, sc, l, prev)
+        f = _pred(params, sc, l, prev, norm_spec(cfg))
         if l == s:
             extras["f_s"] = f
             if sp.case == "B":
@@ -306,12 +321,14 @@ def nonsmooth(acts, a, cfg):
 
 
 def prox_zs(acts, cfg):
-    """Case B proximal step on z_s, PER-SAMPLE threshold eta_h * beta."""
+    """Case B proximal step on z_s.  PER-SAMPLE threshold = (per-sample step
+    at layer s) * beta = (s_step / rho) * beta -- layer s has its own step
+    (pcalm.relax), never eta_h * B."""
     if cfg.sparse.case != "B":
         return acts
     s = cfg.sparse.layer
     out = list(acts)
-    out[s] = soft_threshold(acts[s], cfg.pc.eta_h * cfg.sparse.beta)
+    out[s] = soft_threshold(acts[s], cfg.sparse.s_step / cfg.pc.rho * cfg.sparse.beta)
     return out
 
 

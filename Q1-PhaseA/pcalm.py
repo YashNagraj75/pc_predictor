@@ -70,7 +70,7 @@ from config import EncoderCfg, RunCfg
 # --------------------------------------------------------------- residuals
 
 
-def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg):
+def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=None):
     """Per-layer prediction f_l(z_{l-1}), in the same order as `acts`.
 
     Mirrors the term structure of `jpc.pc_energy_fn` term for term -- see the
@@ -95,13 +95,18 @@ def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg):
         # subtracts a skip, and neither does its first-layer term.
         if 0 < l < L - 1 and skip is not None and skip[l] is not None:
             pred = pred + vmap(skip[l])(prev)
+        if norm is not None and l == norm[0]:
+            # sparse arms: per-sample normalised prediction at layer s
+            pred = norm[1] * pred / (jnp.linalg.norm(pred, axis=-1, keepdims=True) + 1e-8)
         preds.append(pred)
     return preds
 
 
-def residuals(params, acts, x, enc: EncoderCfg):
-    """r_l = z_l - f_l(z_{l-1}) for every layer, same shapes as `acts`."""
-    return [a - p for a, p in zip(acts, layer_predictions(params, acts, x, enc))]
+def residuals(params, acts, x, enc: EncoderCfg, norm=None):
+    """r_l = z_l - f_l(z_{l-1}) for every layer, same shapes as `acts`.
+    norm = (s, c) normalises the prediction at layer s (sparse arms); None
+    leaves every layer exactly as jpc defines it."""
+    return [a - p for a, p in zip(acts, layer_predictions(params, acts, x, enc, norm))]
 
 
 def zero_duals(acts):
@@ -113,7 +118,7 @@ def zero_duals(acts):
 
 
 def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
-              out_scale: Optional[float] = None):
+              out_scale: Optional[float] = None, norm=None):
     """Augmented Lagrangian in the completing-the-square form (paper Eq. 9).
 
         L_rho = (1 / 2B) * rho * sum_l || r_l + lam_l / rho ||^2
@@ -131,7 +136,7 @@ def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
     implementation.  The Lagrangian's boundary condition is therefore supplied
     by that injected gradient rather than by a term in this function.
     """
-    r = residuals(params, acts, x, enc)
+    r = residuals(params, acts, x, enc, norm)
     if duals is not None:
         r = [ri + li / rho for ri, li in zip(r, duals)]
     scale = 1.0 if out_scale is None else out_scale
@@ -187,6 +192,12 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         if cfg.sparse.case != "C":
             a0 = None
     alphas = SP.layer_alphas(cfg, len(acts0[0]))
+    norm = SP.norm_spec(cfg)                 # None for case none
+    # per-layer EFFECTIVE step (per-sample step x B); case B uses its own step
+    # at layer s, s_step / rho (the prox threshold follows in SP.prox_zs)
+    lrs = [eff_lr] * len(acts0[0])
+    if cfg.sparse.case == "B":
+        lrs[cfg.sparse.layer] = B * cfg.sparse.s_step / cfg.pc.rho
     # case C code step, once per relaxation (D is constant within it)
     eta_g = SP.code_step(params, cfg) if cfg.sparse.case == "C" else None
     duals0 = zero_duals(acts0)
@@ -198,7 +209,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
 
     def F_total(acts, duals):
         return sum(al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
-                             cfg.pc.out_scale) for v in range(V))
+                             cfg.pc.out_scale, norm) for v in range(V))
 
     # smooth part (differentiated) and reported energy (+ the L1 terms)
     def F_smooth(acts, duals, a):
@@ -227,10 +238,11 @@ def relax(params, Zin, A, cfg: RunCfg, key):
             g = [[gi + gj for gi, gj in zip(g[v], gL[v])] for v in range(V)]
         else:
             g = [[*g[v][:-1], g[v][-1] + g0[v]] for v in range(V)]
-        new = [[z - eff_lr * gz for z, gz in zip(acts[v], g[v])]
-               for v in range(V)]
         if not sparse_on:
-            return new
+            return [[z - eff_lr * gz for z, gz in zip(acts[v], g[v])]
+                    for v in range(V)]
+        new = [[z - lr * gz for z, lr, gz in zip(acts[v], lrs, g[v])]
+               for v in range(V)]
         new = [SP.prox_zs(new[v], cfg) for v in range(V)]          # case B
         if a is None:
             return new, None
@@ -240,7 +252,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     def dual(acts, duals):
         if all(al == 0.0 for al in alphas):
             return duals
-        r = [residuals(params, acts[v], Zin[v], cfg.enc) for v in range(V)]
+        r = [residuals(params, acts[v], Zin[v], cfg.enc, norm) for v in range(V)]
         return [[lam + al * ri for lam, al, ri in zip(duals[v], alphas, r[v])]
                 for v in range(V)]
 
@@ -325,7 +337,7 @@ def grads(params, Zin, A, cfg: RunCfg, key):
 
     def F_of_params(p):
         F = sum(al_energy(p, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
-                          cfg.pc.out_scale) for v in range(V))
+                          cfg.pc.out_scale, SP.norm_spec(cfg)) for v in range(V))
         if a is not None:            # case C: D's gradient from the head energy
             F = F + sum(SP.head_smooth(p, acts[v], a[v], cfg) for v in range(V))
         return F
