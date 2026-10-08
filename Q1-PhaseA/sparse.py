@@ -77,6 +77,51 @@ def get_mu(params):
     return params[3]
 
 
+def recon(cfg) -> bool:
+    """Case E: case D plus a code -> pixel reconstruction anchor (beta_r > 0).
+    Spec: wiki 'Method - Reconstruction-anchored sparse heads plan'.  Params are
+    then (model, skip, Ds, mus, Gs, xbar); with beta_r = 0 they stay case D's 4-tuple
+    and every expression below reduces to case D's exactly."""
+    return is_D(cfg) and cfg.sparse.beta_r > 0
+
+
+def get_G(params):
+    return params[4]
+
+
+def get_xbar(params):
+    return params[5]
+
+
+def stacked(f_t, Dl, xc, Gl, cfg):
+    """The per-head LASSO as (target, dictionary, mu):
+        case D:  (f~, D, beta_g)                       -> beta_g/2||f~ - D a||^2
+        case E:  ([sqrt(bg) f~ ; sqrt(br) xc], [sqrt(bg) D ; sqrt(br) G], 1)
+                 -> beta_g/2||f~ - D a||^2 + beta_r/2||xc - G a||^2
+    so ista / fista / lasso_energy solve and score the anchored code unchanged."""
+    sp = cfg.sparse
+    if not recon(cfg):
+        return f_t, Dl, sp.beta_g
+    return (jnp.concatenate([jnp.sqrt(sp.beta_g) * f_t, jnp.sqrt(sp.beta_r) * xc], -1),
+            stacked_D(Dl, Gl, cfg), 1.0)
+
+
+def stacked_D(Dl, Gl, cfg):
+    """[sqrt(beta_g) D ; sqrt(beta_r) G]  (case E's per-head LASSO dictionary)."""
+    return jnp.concatenate([jnp.sqrt(cfg.sparse.beta_g) * Dl, jnp.sqrt(cfg.sparse.beta_r) * Gl], 0)
+
+
+def _heads(params, cfg, x=None):
+    """Per head: (layer, D_l, mu_l, G_l or None, centred pixels or None)."""
+    sp = cfg.sparse
+    Ds, mus = get_D(params), get_mu(params)
+    if recon(cfg):
+        assert x is not None, "case E needs the input view"
+        xc = x - jax.lax.stop_gradient(get_xbar(params))
+        return [(l, Dl, mu, Gl, xc) for l, Dl, mu, Gl in zip(sp.heads, Ds, mus, get_G(params))]
+    return [(l, Dl, mu, None, None) for l, Dl, mu in zip(sp.heads, Ds, mus)]
+
+
 def mu_rows(Xtr, cfg, n=1024):
     """Deterministic training centre views used to initialise mu (the same rows,
     rng(0), that select_heads.py selects gamma on)."""
@@ -96,7 +141,11 @@ def init_mu(params, x, cfg):
     before head selection, and for every untrained floor)."""
     if not is_D(cfg):
         return params
-    return (params[0], params[1], params[2], _head_means(params, x, cfg))
+    out = list(params)
+    out[3] = _head_means(params, x, cfg)
+    if recon(cfg):
+        out[5] = jnp.mean(x, axis=0)          # per-pixel training mean, fixed after this
+    return tuple(out)
 
 
 @eqx.filter_jit
@@ -112,7 +161,9 @@ def update_mu(params, Zin, cfg):
     optimiser step.  Same rule in both arms."""
     if not is_D(cfg):
         return params
-    return (params[0], params[1], params[2], _mu_ema(params, Zin, cfg))
+    out = list(params)
+    out[3] = _mu_ema(params, Zin, cfg)
+    return tuple(out)
 
 
 def check_D(cfg, L):
@@ -141,7 +192,8 @@ def spectral_sq(D):
     Ds = jax.lax.stop_gradient(D)
     # exact: lambda_max(D D^T) = sigma_max(D)^2, via a symmetric eigensolve of the
     # n x n Gram, cheaper on GPU than the SVD behind norm(ord=2) (review D-M5/N7)
-    return jnp.linalg.eigvalsh(Ds @ Ds.T)[-1]
+    # n x n Gram (or m x m when D is tall, e.g. case E's stacked [D; G]: same value)
+    return jnp.linalg.eigvalsh(Ds @ Ds.T if Ds.shape[0] <= Ds.shape[1] else Ds.T @ Ds)[-1]
 
 
 def code_step(params, cfg):
@@ -150,6 +202,10 @@ def code_step(params, cfg):
     Case D: one step per head (tuple).  w_l cancels from the code dynamics:
     the code energy is w_l [beta_g/2||z_l - D_l a||^2 + gamma_l||a||_1], whose
     prox-gradient step at eta/w_l is the unweighted step at eta."""
+    if recon(cfg):          # exact Lipschitz constant of the stacked LASSO
+        sp = cfg.sparse
+        return tuple(sp.step_frac / spectral_sq(stacked_D(Dl, Gl, cfg))
+                     for Dl, Gl in zip(get_D(params), get_G(params)))
     if is_D(cfg):
         return tuple(cfg.sparse.step_frac / (cfg.sparse.beta_g * spectral_sq(Dl))
                      for Dl in get_D(params))
@@ -190,6 +246,10 @@ def init_params(key, cfg, input_dim):
         Ds = tuple(normalise_dict(jax.random.normal(jax.random.fold_in(key, 7919 + l), (n, m)))
                    for l in sp.heads)
         mus = tuple(jnp.zeros((cfg.enc.width,)) for _ in sp.heads)   # set by init_mu
+        if sp.beta_r > 0:      # case E: generative dictionary per head, own fold; pixel mean
+            Gs = tuple(normalise_dict(jax.random.normal(jax.random.fold_in(key, 104729 + l), (input_dim, m)))
+                       for l in sp.heads)
+            return (params[0], params[1], Ds, mus, Gs, jnp.zeros((input_dim,)))   # xbar set by init_mu
         return (params[0], params[1], Ds, mus)
     model, skip = params
     L, s = len(model), sp.layer
@@ -209,7 +269,11 @@ def init_params(key, cfg, input_dim):
 def project(params, cfg):
     """Post-optimiser-step projection: re-normalise D's columns (case C)."""
     if cfg.sparse.case == "D":
-        return (params[0], params[1], tuple(normalise_dict(Dl) for Dl in params[2]), params[3])
+        out = list(params)
+        out[2] = tuple(normalise_dict(Dl) for Dl in params[2])
+        if len(params) == 6:                   # case E: unit-norm generative columns too
+            out[4] = tuple(normalise_dict(Gl) for Gl in params[4])
+        return tuple(out)
     if cfg.sparse.case != "C":
         return params
     return (params[0], params[1], normalise_dict(params[2]))
@@ -223,8 +287,11 @@ def param_labels(params):
     """optax.multi_transform labels for case-C params: encoder vs dictionary."""
     enc = jax.tree_util.tree_map(lambda _: "enc", (params[0], params[1]))
     if isinstance(params[2], tuple):                       # case D: one D per head
-        return (enc[0], enc[1], tuple("dict" for _ in params[2]),
-                tuple("frozen" for _ in params[3]))        # mu: EMA only, never trained
+        lab = (enc[0], enc[1], tuple("dict" for _ in params[2]),
+               tuple("frozen" for _ in params[3]))         # mu: EMA only, never trained
+        if len(params) == 6:                               # case E: G trained, xbar fixed
+            lab = lab + (tuple("dict" for _ in params[4]), "frozen")
+        return lab
     return (enc[0], enc[1], "dict")
 
 
@@ -343,12 +410,17 @@ def deploy(params, x, cfg, t=None, beta_g=None):
         acts = [*hs, z]
         tt = sp.T_test if t is None else t
         codes, steps = [], []
-        fh = tuple(head_in(acts[l], mu) for l, mu in zip(sp.heads, get_mu(params)))
-        for f, Dl, gl in zip(fh, get_D(params), sp.gammas):
-            eta = sp.step_frac / (sp.beta_g * spectral_sq(Dl))
-            codes.append(ista(f, Dl, gl, sp.beta_g, tt, eta))
+        hd = _heads(params, cfg, x)
+        fh = tuple(head_in(acts[l], mu) for l, _, mu, _, _ in hd)
+        for f, (l, Dl, mu, Gl, xc), gl in zip(fh, hd, sp.gammas):
+            F, Ds_, m_ = stacked(f, Dl, xc, Gl, cfg)
+            eta = sp.step_frac / (m_ * spectral_sq(Ds_))
+            codes.append(ista(F, Ds_, gl, m_, tt, eta))
             steps.append(eta)
-        return acts, {"a": tuple(codes), "eta": tuple(steps), "f_heads": fh}
+        ex = {"a": tuple(codes), "eta": tuple(steps), "f_heads": fh}
+        if recon(cfg):
+            ex["x_c"] = hd[0][4]
+        return acts, ex
     rho = cfg.pc.rho
     sc = _scalings(params, x, cfg)
     L, s = len(params[0]), sp.layer
@@ -399,9 +471,10 @@ def deployed_head_energy(params, x, cfg):
         # code DETACHED (approved 2026-10-07, review N2): the gradient is the
         # partial derivative at the code, exactly what PC-D's weight update uses,
         # not a derivative through the 17 unrolled ISTA steps.
-        return sum(wl * jnp.mean(lasso_energy(f, Dl, jax.lax.stop_gradient(a), gl, sp.beta_g))
-                   for f, Dl, a, gl, wl in zip(ex["f_heads"], get_D(params), ex["a"],
-                                               sp.gammas, sp.head_ws))
+        return sum(wl * jnp.mean(lasso_energy(*stacked(f, Dl, xc, Gl, cfg)[:2], jax.lax.stop_gradient(a), gl,
+                                              stacked(f, Dl, xc, Gl, cfg)[2]))
+                   for f, (l, Dl, mu, Gl, xc), a, gl, wl in zip(ex["f_heads"], _heads(params, cfg, x), ex["a"],
+                                                               sp.gammas, sp.head_ws))
     if sp.case == "B":
         return jnp.mean(huber_energy(ex["f_s"], sp.beta, cfg.pc.rho))
     return jnp.mean(lasso_energy(ex["f_s"], get_D(params), ex["a"], sp.gamma, lasso_mu(cfg)))
@@ -426,12 +499,17 @@ def relax_init(params, x, cfg):
     return acts, ex.get("a")
 
 
-def head_smooth(params, acts, a, cfg):
+def head_smooth(params, acts, a, cfg, x=None):
     """Smooth head energy (case C), batch mean: beta_g/(2B) sum ||z_s - D a||^2."""
     if is_D(cfg):
         sp = cfg.sparse
-        return sum(wl * 0.5 * sp.beta_g * jnp.sum((head_in(acts[l], mu) - al @ Dl.T) ** 2) / acts[l].shape[0]
-                   for l, Dl, al, wl, mu in zip(sp.heads, get_D(params), a, sp.head_ws, get_mu(params)))
+        e = 0.0
+        for (l, Dl, mu, Gl, xc), al, wl in zip(_heads(params, cfg, x), a, sp.head_ws):
+            t = 0.5 * sp.beta_g * jnp.sum((head_in(acts[l], mu) - al @ Dl.T) ** 2)
+            if Gl is not None:           # case E anchor
+                t = t + 0.5 * sp.beta_r * jnp.sum((xc - al @ Gl.T) ** 2)
+            e = e + wl * t / acts[l].shape[0]
+        return e
     if cfg.sparse.case != "C":
         return 0.0
     zs = acts[cfg.sparse.layer]
@@ -464,7 +542,7 @@ def prox_zs(acts, cfg):
     return out
 
 
-def a_step(params, acts, a, cfg, eta):
+def a_step(params, acts, a, cfg, eta, x=None):
     """Case C proximal-gradient step on the code, at the PRE-step activities.
 
     a <- S_{eta_g gamma}(a - eta_g beta_g D^T (D a - z_s)),
@@ -473,8 +551,13 @@ def a_step(params, acts, a, cfg, eta):
     """
     sp = cfg.sparse
     if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
-        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - head_in(acts[l], mu)) @ Dl), el * gl)
-                     for l, Dl, al, el, gl, mu in zip(sp.heads, get_D(params), a, eta, sp.gammas, get_mu(params)))
+        out = []
+        for (l, Dl, mu, Gl, xc), al, el, gl in zip(_heads(params, cfg, x), a, eta, sp.gammas):
+            gr = sp.beta_g * ((al @ Dl.T - head_in(acts[l], mu)) @ Dl)
+            if Gl is not None:           # case E anchor
+                gr = gr + sp.beta_r * ((al @ Gl.T - xc) @ Gl)
+            out.append(soft_threshold(al - el * gr, el * gl))
+        return tuple(out)
     D = get_D(params)
     zs = acts[sp.layer]
     grad = sp.beta_g * ((a @ D.T - zs) @ D)
@@ -548,8 +631,11 @@ def health_D(params, acts, ex, cfg, n_fista=256):
     out = {"embed_spread": _spread(z), "embed_norm": float(jnp.mean(jnp.linalg.norm(z, axis=-1))),
            "embed_std": float(jnp.mean(jnp.std(z, 0))), "n_rows": int(z.shape[0])}
     fr, sup = [], []
-    for l, Dl, al, gl, wl, ft, mu in zip(sp.heads, get_D(params), ex["a"], sp.gammas, sp.head_ws,
-                                         ex["f_heads"], get_mu(params)):
+    Gs = get_G(params) if recon(cfg) else (None,) * len(sp.heads)
+    xc = ex.get("x_c")
+    for l, Dl, al, gl, wl, ft, mu, Gl in zip(sp.heads, get_D(params), ex["a"], sp.gammas, sp.head_ws,
+                                             ex["f_heads"], get_mu(params), Gs):
+        F, Dst, mst = stacked(ft, Dl, xc, Gl, cfg)        # == (ft, Dl, beta_g) for case D
         fc = np.asarray(acts[l]) - np.asarray(acts[l]).mean(0)
         lam = np.clip(np.linalg.eigvalsh(fc.T @ fc / fc.shape[0]), 0, None)
         pr = float(lam.sum() ** 2 / (np.sum(lam ** 2) + 1e-30))
@@ -557,10 +643,10 @@ def health_D(params, acts, ex, cfg, n_fista=256):
                     / (np.sqrt(np.mean(np.sum(fc ** 2, 1))) + 1e-12))
         on = np.asarray(al != 0)
         G = jnp.abs(Dl.T @ Dl) - jnp.eye(Dl.shape[1])
-        e = float(jnp.mean(lasso_energy(ft, Dl, al, gl, sp.beta_g)))
+        e = float(jnp.mean(lasso_energy(F, Dst, al, gl, mst)))
         k = min(n_fista, ft.shape[0])
-        e_star = float(jnp.mean(lasso_energy(ft[:k], Dl, fista(ft[:k], Dl, gl, sp.beta_g, 500), gl, sp.beta_g)))
-        e_k = float(jnp.mean(lasso_energy(ft[:k], Dl, al[:k], gl, sp.beta_g)))
+        e_star = float(jnp.mean(lasso_energy(F[:k], Dst, fista(F[:k], Dst, gl, mst, 500), gl, mst)))
+        e_k = float(jnp.mean(lasso_energy(F[:k], Dst, al[:k], gl, mst)))
         h = {f"h{l}_active": float(on.mean()), f"h{l}_supports": len({r.tobytes() for r in on}),
              f"h{l}_dead_atoms": float(np.mean(~on.any(0))), f"h{l}_coherence": float(jnp.max(G)),
              f"h{l}_lasso": e, f"h{l}_wlasso": float(wl) * e,
@@ -570,6 +656,11 @@ def health_D(params, acts, ex, cfg, n_fista=256):
              f"h{l}_input_spread": _spread(acts[l]),
              f"h{l}_subopt": (e_k - e_star) / (abs(e_star) + 1e-12),
              f"h{l}_D_spec": float(spectral_sq(Dl)), f"h{l}_pr": pr, f"h{l}_mu_offset": off}
+        if Gl is not None:     # case E: pixel R^2 of G_l a_l vs the centred view (0 = mean image)
+            res = np.asarray(xc - al @ Gl.T)
+            h[f"h{l}_recon_r2"] = float(1.0 - np.sum(res ** 2) / (np.sum(np.asarray(xc) ** 2) + 1e-12))
+            h[f"h{l}_recon_energy"] = float(0.5 * sp.beta_r * np.mean(np.sum(res ** 2, -1)))
+            h[f"h{l}_head_energy"] = float(0.5 * sp.beta_g * jnp.mean(jnp.sum((ft - al @ Dl.T) ** 2, -1)))
         out.update(h)
         fr.append(h[f"h{l}_active"]); sup.append(h[f"h{l}_supports"])
     out["active_frac"] = float(np.mean(fr))

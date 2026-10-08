@@ -93,7 +93,8 @@ def main():
             ap.error(f"K={args.K} not in {args.heads_json} (has {sorted(sel['sets'])})")
         st = sel["sets"][k]
         D_kw = dict(heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
-                    head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
+                    head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"],
+                    beta_r=sel.get("beta_r", 0.0))
         if args.beta_g != SparseCfg.beta_g or args.T_test != SparseCfg.T_test:
             ap.error("case D takes beta_g and T_test from --heads-json only")
         if args.T != sel["T_test"]:

@@ -717,6 +717,115 @@ def test_D_head_reads_normalised_copy():
           f"(|gmu|={float(jnp.max(jnp.abs(gmu))):.1e} frozen={frozen} ema={ema})")
 
 
+# ------------------------------------------------- case E: reconstruction anchor
+
+def smallE(heads=(2, 3), beta_r=0.05, **kw):
+    """smallD with the code -> pixel anchor (beta_r > 0); params are a 6-tuple."""
+    pD, Zin, A, cD = smallD(heads=heads, **kw)
+    cE = dataclasses.replace(cD, sparse=dataclasses.replace(cD.sparse, beta_r=beta_r))
+    pE = SP.init_params(jax.random.PRNGKey(cE.opt.seed), cE, cE.data.input_dim)
+    pE = SP.init_mu(pE, D.eval_batch(jnp.asarray(_data()[:64]), cE.data), cE)
+    return pE, Zin, A, cE
+
+
+def test_E_init_and_reduction():
+    """beta_r = 0 is case D exactly (4-tuple, same codes); beta_r > 0 adds unit-norm G_l
+    and the pixel mean, encoder/D/mu identical to case D, labels cover all 6 parts."""
+    pD, Zin, A, cD = smallD(heads=(2, 3))
+    pE, _, _, cE = smallE(heads=(2, 3))
+    x = Zin[0]
+    xb = D.eval_batch(jnp.asarray(_data()[:64]), cE.data)
+    same = all(np.array_equal(a, b) for a, b in zip(leaves(pD), leaves(pE[:4])))
+    unitG = all(np.allclose(np.linalg.norm(np.asarray(G), axis=0), 1.0, atol=1e-5) for G in pE[4])
+    xbar = np.allclose(np.asarray(pE[5]), np.asarray(jnp.mean(xb, 0)), atol=1e-6)
+    lab = SP.param_labels(pE)
+    labs = len(lab) == 6 and lab[4] == ("dict", "dict") and lab[5] == "frozen"
+    c0 = dataclasses.replace(cE, sparse=dataclasses.replace(cE.sparse, beta_r=0.0))
+    codes_eq = all(np.array_equal(a, b) for a, b in zip(SP.deploy(pD, x, cD)[1]["a"], SP.deploy(pD, x, c0)[1]["a"]))
+    check("E: beta_r=0 is case D; beta_r>0 adds unit-norm G and the pixel mean, rest identical, labels complete",
+          same and unitG and xbar and labs and codes_eq and len(SP.init_params(jax.random.PRNGKey(0), c0, c0.data.input_dim)) == 4,
+          f"same={same} unitG={unitG} xbar={xbar} labels={labs} codes_eq={codes_eq}")
+
+
+def test_E_codes_solve_anchored_lasso():
+    """Deployed codes approach the FISTA optimum of the EXPLICIT anchored energy
+    beta_g/2||f~ - D a||^2 + beta_r/2||xbar - G a||^2 + gamma||a||_1."""
+    pE, Zin, A, cE = smallE(heads=(2, 3))
+    x = Zin[0]; sp = cE.sparse
+    xc = x - pE[5]
+    def energy(f, Dl, Gl, a, g):
+        return float(jnp.mean(0.5 * sp.beta_g * jnp.sum((f - a @ Dl.T) ** 2, -1)
+                              + 0.5 * sp.beta_r * jnp.sum((xc - a @ Gl.T) ** 2, -1) + g * jnp.sum(jnp.abs(a), -1)))
+    out = []
+    for t in (4, 64, 512):
+        _, ex = SP.deploy(pE, x, cE, t=t)
+        gaps = []
+        for f, Dl, Gl, a, g in zip(ex["f_heads"], pE[2], pE[4], ex["a"], sp.gammas):
+            F, Dst, m = SP.stacked(f, Dl, xc, Gl, cE)
+            astar = SP.fista(F, Dst, g, m, 3000)
+            gaps.append((energy(f, Dl, Gl, a, g) - energy(f, Dl, Gl, astar, g)) / abs(energy(f, Dl, Gl, astar, g)))
+        out.append(max(gaps))
+    check("E: deployed codes converge to the optimum of the explicit anchored energy (< 1e-3 at t=512)",
+          out[0] >= out[1] >= out[2] and out[2] < 1e-3 and min(out) > -1e-4, " ".join(f"{v:.2e}" for v in out))
+
+
+def test_E_relaxation_hooks_match_autodiff():
+    """head_smooth includes the anchor, and a_step is a prox step on its exact gradient."""
+    pE, Zin, A, cE = smallE(heads=(2, 3))
+    x = Zin[0]; sp = cE.sparse
+    acts, ex = SP.deploy(pE, x, cE, t=3)
+    a = ex["a"]
+    xc = x - pE[5]
+    manual = sum(w * (0.5 * sp.beta_g * jnp.sum((SP.head_in(acts[l], mu) - al @ Dl.T) ** 2)
+                      + 0.5 * sp.beta_r * jnp.sum((xc - al @ Gl.T) ** 2)) / x.shape[0]
+                 for l, Dl, mu, Gl, al, w in zip(sp.heads, pE[2], pE[3], pE[4], a, sp.head_ws))
+    hs = SP.head_smooth(pE, acts, a, cE, x=x)
+    eta = SP.code_step(pE, cE)
+    gr = jax.grad(lambda aa: SP.head_smooth(pE, acts, aa, cE, x=x))(a)
+    ref = tuple(SP.soft_threshold(al - (el / (w / x.shape[0])) * g_, el * gm)
+                for al, g_, el, gm, w in zip(a, gr, eta, sp.gammas, sp.head_ws))
+    got = SP.a_step(pE, acts, a, cE, eta, x=x)
+    err = max(maxrel(u, v) for u, v in zip(got, ref))
+    lip = all(abs(float(e) * float(SP.spectral_sq(SP.stacked_D(Dl, Gl, cE))) / sp.step_frac - 1.0) < 1e-5
+              for e, Dl, Gl in zip(eta, pE[2], pE[4]))
+    check("E: head_smooth includes the anchor; a_step = prox step on its exact gradient; step from the stacked Lipschitz",
+          maxrel(hs, manual) < 1e-5 and err < 1e-4 and lip, f"energy {maxrel(hs, manual):.1e} step {err:.1e} lip={lip}")
+
+
+def test_E_pc_bp_agree_and_train():
+    """Zero task drive, long relaxation: PC's G and D gradients match BP-E's.  Then a few
+    training steps per arm: G unit-norm, xbar unchanged, round-trip, R^2 logged, gate reads it."""
+    def cos(u, v):
+        u, v = np.ravel(u), np.ravel(v); return float(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-30))
+    pE, Zin, A, cE = smallE(heads=(2, 3), T=200, use_sigreg=False, projector="none")
+    Zin = jnp.stack([Zin[0]] * Zin.shape[0])
+    gp, _ = pcalm.grads(pE, Zin, A, cE, jax.random.PRNGKey(0))
+    gb, _ = TR.bp_grads(pE, Zin, A, dataclasses.replace(cE, arm="bp"))
+    cG = [cos(a, b) for a, b in zip(gp[4], gb[4])]; cDs = [cos(a, b) for a, b in zip(gp[2], gb[2])]
+    zero_x = float(jnp.max(jnp.abs(gp[5]))) == 0.0 and float(jnp.max(jnp.abs(gb[5]))) == 0.0
+    check("E: zero task drive, T=200: PC vs BP-E cosine > 0.95 on G and D; no gradient on xbar",
+          min(cG + cDs) > 0.95 and zero_x, f"G {[round(c, 3) for c in cG]} D {[round(c, 3) for c in cDs]} xbar0={zero_x}")
+    import gate_pilot as GP
+    from run_probes import load_run
+    tmp = tempfile.mkdtemp(); dirs = {}
+    for arm in ("pc", "bp"):
+        _, _, _, cE = smallE(heads=(2, 3))
+        cfg = dataclasses.replace(cE, arm=arm, out_dir=tmp, tag="tE",
+                                  opt=dataclasses.replace(cE.opt, n_steps=4, eval_every=2))
+        p, log = TR.train(cfg, verbose=False)
+        dirs[arm] = os.path.join(tmp, cfg.name)
+        unit = all(np.allclose(np.linalg.norm(np.asarray(G), axis=0), 1.0, atol=1e-5) for G in p[4])
+        xb = np.allclose(np.asarray(p[5]), np.asarray(jnp.mean(SP.mu_rows(D.load_dataset(cfg.data)[0], cfg), 0)), atol=1e-5)
+        c2, p2 = load_run(dirs[arm])
+        rt = all(np.array_equal(a, b) for a, b in zip(leaves(p), leaves(p2))) and c2.sparse.beta_r == cfg.sparse.beta_r
+        ev = [r for r in log if isinstance(r.get("eval"), dict)]
+        has = bool(ev) and "h2_recon_r2" in ev[-1]["eval"]["sparse"]
+        check(f"E ({arm}): trains, unit-norm G, xbar = training mean and fixed, round-trips, logs R^2",
+              unit and xb and rt and has, f"unit={unit} xbar={xb} roundtrip={rt} r2={has}")
+    ok, reasons, info = GP.gate(dirs["pc"], dirs["bp"])
+    check("E: pair gate reads the reconstruction criteria", "head_recon_r2_first_last" in info["pc"], str(reasons)[:200])
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -734,7 +843,9 @@ if __name__ == "__main__":
                test_D_init_and_nesting, test_D_zero_weight_equals_pcalm, test_D_codes_solve_lasso,
                test_D_relaxation_codes_track_layer, test_D_control_objective_and_agreement,
                test_D_batch_invariance_and_zero_view, test_D_train_project_serialise_and_gate,
-               test_D_head_reads_normalised_copy):
+               test_D_head_reads_normalised_copy, test_E_init_and_reduction,
+               test_E_codes_solve_anchored_lasso, test_E_relaxation_hooks_match_autodiff,
+               test_E_pc_bp_agree_and_train):
         try:
             fn()
         except Exception as exc:

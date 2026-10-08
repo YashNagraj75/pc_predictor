@@ -60,12 +60,30 @@ def k5_sparse(heads_json):
     sel = json.load(open(heads_json))
     st = sel["sets"]["5"]
     return SparseCfg(case="D", heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
-                     head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"])
+                     head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"],
+                     beta_r=sel.get("beta_r", 0.0))
 
 
 def init_D(cfg):
     """The INITIAL dictionaries of cfg's heads (same key folds as init_params)."""
     return SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)[2]
+
+
+def with_init_dicts(params, cfg):
+    """Same encoder, mu and pixel mean; dictionaries D (and case-E G) at their initial draw."""
+    p0 = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
+    out = list(params)
+    out[2] = p0[2]
+    if SP.recon(cfg):
+        out[4] = p0[4]
+    return tuple(out)
+
+
+def attach_init_heads(params, cfg, Xtr):
+    """A head-free (case none) encoder with cfg's heads at their initial draw; mu (and xbar)
+    measured on THIS encoder's stream."""
+    p0 = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
+    return SP.init_mu((params[0], params[1], *p0[2:]), SP.mu_rows(Xtr, cfg), cfg)
 
 
 @eqx.filter_jit
@@ -174,14 +192,12 @@ def analyse(run_dir, n_train, n_test, heads_json=None):
         analyse_one(params, cfg, role, tag, data, rows, subsets=nested if floor else None)
         if not floor:      # same trained encoder, dictionaries put back to their initial draw
             # trained encoder, trained mu (it describes the encoder's stream), initial D
-            analyse_one((params[0], params[1], init_D(cfg), params[3]), cfg, "trained_enc_init_D", tag, data,
-                        rows, emb=False)
+            analyse_one(with_init_dicts(params, cfg), cfg, "trained_enc_init_D", tag, data, rows, emb=False)
     else:
         analyse_one(params, cfg, "reused_headfree", tag, data, rows)
         if heads_json:
             c2 = dataclasses.replace(cfg, sparse=k5_sparse(heads_json))
-            pr = SP.init_mu((params[0], params[1], init_D(c2), tuple(jnp.zeros(cfg.enc.width) for _ in c2.sparse.heads)),
-                            SP.mu_rows(Xtr, c2), c2)        # mu of THIS encoder's stream
+            pr = attach_init_heads(params, c2, Xtr)
             analyse_one(pr, c2, "reused_enc_init_D", tag, data, rows,
                         emb=False, subsets=nested)
     return rows

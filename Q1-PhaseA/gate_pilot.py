@@ -128,6 +128,15 @@ def _gate_D(log, info):
             out.append(f"layer {l} participation ratio {last[f'h{l}_pr']:.2f} < {PR_MIN_RATIO} x its max {mx:.2f} (rank collapse)")
         if last[f"h{l}_fnorm"] < FNORM_MIN_RATIO * first[f"h{l}_fnorm"]:
             out.append(f"layer {l} norm {last[f'h{l}_fnorm']:.3f} < {FNORM_MIN_RATIO} x initial {first[f'h{l}_fnorm']:.3f} (scale shrink)")
+    for l in heads:          # case E anchor: codes must keep explaining the pixels
+        if f"h{l}_recon_r2" in last:
+            mx = max(e[f"h{l}_recon_r2"] for e in ev)
+            if not last[f"h{l}_recon_r2"] > 0:
+                out.append(f"layer {l} reconstruction R2 {last[f'h{l}_recon_r2']:.3f} <= 0 (no better than the mean image)")
+            elif last[f"h{l}_recon_r2"] < 0.5 * mx:
+                out.append(f"layer {l} reconstruction R2 {last[f'h{l}_recon_r2']:.3f} < 0.5 x its max {mx:.3f}")
+    if f"h{heads[0]}_recon_r2" in last:
+        info["head_recon_r2_first_last"] = {l: (round(first[f"h{l}_recon_r2"], 3), round(last[f"h{l}_recon_r2"], 3)) for l in heads}
     info["head_pr_first_last"] = {l: (round(first[f"h{l}_pr"], 2), round(last[f"h{l}_pr"], 2)) for l in heads}
     info["head_mu_offset_last"] = {l: round(last[f"h{l}_mu_offset"], 4) for l in heads}
     info["head_fnorm_first_last"] = {l: (round(first[f"h{l}_fnorm"], 3), round(last[f"h{l}_fnorm"], 3)) for l in heads}

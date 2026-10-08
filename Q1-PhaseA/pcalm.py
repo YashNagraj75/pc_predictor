@@ -216,7 +216,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         if not sparse_on:
             return F_total(acts, duals)
         return F_total(acts, duals) + sum(
-            SP.head_smooth(params, acts[v], None if a is None else a[v], cfg)
+            SP.head_smooth(params, acts[v], None if a is None else a[v], cfg, x=Zin[v])
             for v in range(V))
 
     def F_report(acts, duals, a):
@@ -247,7 +247,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         if a is None:
             return new, None
         # case C: Jacobi -- the code steps at the PRE-step activities
-        return new, [SP.a_step(params, acts[v], a[v], cfg, eta_g) for v in range(V)]
+        return new, [SP.a_step(params, acts[v], a[v], cfg, eta_g, x=Zin[v]) for v in range(V)]
 
     def dual(acts, duals):
         if all(al == 0.0 for al in alphas):
@@ -339,7 +339,7 @@ def grads(params, Zin, A, cfg: RunCfg, key):
         F = sum(al_energy(p, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
                           cfg.pc.out_scale, SP.norm_spec(cfg)) for v in range(V))
         if a is not None:            # case C: D's gradient from the head energy
-            F = F + sum(SP.head_smooth(p, acts[v], a[v], cfg) for v in range(V))
+            F = F + sum(SP.head_smooth(p, acts[v], a[v], cfg, x=Zin[v]) for v in range(V))
         return F
 
     g = eqx.filter_grad(F_of_params)(params)
