@@ -58,14 +58,61 @@ def is_D(cfg) -> bool:
     return cfg.sparse.case == "D"
 
 
-def head_in(v):
-    """What a case-D head explains: the per-sample NORMALISED activity
-    sqrt(n) v / ||v|| (safe norm, finite at v = 0).  Approved 2026-10-07 after a
-    smoke run showed the heads shrinking the residual stream to lower their
-    energy (layer 5 norm 2.35 -> 1.36 under PC with heads vs 2.26 without): with
-    a normalised input the head energy is scale-invariant, and the main path
-    keeps its own scale."""
-    return normalise_rows(v, float(np.sqrt(v.shape[-1])))
+def head_in(v, mu):
+    """What a case-D head explains: the CENTRED, per-sample normalised activity
+        sqrt(n) (v - mu) / ||v - mu||       (safe norm, mu held fixed: no gradient)
+    with mu the running mean of the head layer (params[3], EMA, never trained).
+
+    History.  Raw v: the heads shrank the stream (||f_5|| 2.35 -> 1.36).  Normalised
+    v (2026-10-07): closed that, but the 2000-step pilot (job 4faac68e) found a
+    constant-offset route -- both arms grew the head layers ~6-12x toward ONE
+    input-independent direction that a single code explains.  Centring removes the
+    shared offset, so the head must explain how inputs DIFFER (user decision
+    2026-10-08).  A remaining route -- variation squeezed into few directions -- is
+    not removed; health_D logs the participation ratio and the gate guards it."""
+    return normalise_rows(v - jax.lax.stop_gradient(mu), float(np.sqrt(v.shape[-1])))
+
+
+def get_mu(params):
+    return params[3]
+
+
+def mu_rows(Xtr, cfg, n=1024):
+    """Deterministic training centre views used to initialise mu (the same rows,
+    rng(0), that select_heads.py selects gamma on)."""
+    import data as Dd
+    idx = np.random.default_rng(0).choice(len(Xtr), n, replace=False)
+    return Dd.eval_batch(jnp.asarray(Xtr[idx]), cfg.data)
+
+
+def _head_means(params, x, cfg):
+    z, hs = E.forward(params, x, cfg.enc)
+    acts = [*hs, z]
+    return tuple(jnp.mean(acts[l], axis=0) for l in cfg.sparse.heads)
+
+
+def init_mu(params, x, cfg):
+    """Set mu_l to the feedforward mean of head layer l over x (call before training,
+    before head selection, and for every untrained floor)."""
+    if not is_D(cfg):
+        return params
+    return (params[0], params[1], params[2], _head_means(params, x, cfg))
+
+
+@eqx.filter_jit
+def _mu_ema(params, Zin, cfg):
+    m = cfg.sparse.mu_momentum
+    means = [jnp.mean(jnp.stack([_head_means(params, Zin[v], cfg)[h] for v in range(Zin.shape[0])]), axis=0)
+             for h in range(len(cfg.sparse.heads))]
+    return tuple(m * mu + (1 - m) * jax.lax.stop_gradient(nm) for mu, nm in zip(params[3], means))
+
+
+def update_mu(params, Zin, cfg):
+    """EMA update of mu from this step's training views (feedforward), after the
+    optimiser step.  Same rule in both arms."""
+    if not is_D(cfg):
+        return params
+    return (params[0], params[1], params[2], _mu_ema(params, Zin, cfg))
 
 
 def check_D(cfg, L):
@@ -142,7 +189,8 @@ def init_params(key, cfg, input_dim):
         n, m = cfg.enc.width, sp.dict_mult * cfg.enc.width
         Ds = tuple(normalise_dict(jax.random.normal(jax.random.fold_in(key, 7919 + l), (n, m)))
                    for l in sp.heads)
-        return (params[0], params[1], Ds)
+        mus = tuple(jnp.zeros((cfg.enc.width,)) for _ in sp.heads)   # set by init_mu
+        return (params[0], params[1], Ds, mus)
     model, skip = params
     L, s = len(model), sp.layer
     assert 0 < s < L - 1, f"sparse.layer={s} must be interior (1..{L-2})"
@@ -161,7 +209,7 @@ def init_params(key, cfg, input_dim):
 def project(params, cfg):
     """Post-optimiser-step projection: re-normalise D's columns (case C)."""
     if cfg.sparse.case == "D":
-        return (params[0], params[1], tuple(normalise_dict(Dl) for Dl in params[2]))
+        return (params[0], params[1], tuple(normalise_dict(Dl) for Dl in params[2]), params[3])
     if cfg.sparse.case != "C":
         return params
     return (params[0], params[1], normalise_dict(params[2]))
@@ -175,7 +223,8 @@ def param_labels(params):
     """optax.multi_transform labels for case-C params: encoder vs dictionary."""
     enc = jax.tree_util.tree_map(lambda _: "enc", (params[0], params[1]))
     if isinstance(params[2], tuple):                       # case D: one D per head
-        return (enc[0], enc[1], tuple("dict" for _ in params[2]))
+        return (enc[0], enc[1], tuple("dict" for _ in params[2]),
+                tuple("frozen" for _ in params[3]))        # mu: EMA only, never trained
     return (enc[0], enc[1], "dict")
 
 
@@ -294,7 +343,7 @@ def deploy(params, x, cfg, t=None, beta_g=None):
         acts = [*hs, z]
         tt = sp.T_test if t is None else t
         codes, steps = [], []
-        fh = tuple(head_in(acts[l]) for l in sp.heads)
+        fh = tuple(head_in(acts[l], mu) for l, mu in zip(sp.heads, get_mu(params)))
         for f, Dl, gl in zip(fh, get_D(params), sp.gammas):
             eta = sp.step_frac / (sp.beta_g * spectral_sq(Dl))
             codes.append(ista(f, Dl, gl, sp.beta_g, tt, eta))
@@ -381,8 +430,8 @@ def head_smooth(params, acts, a, cfg):
     """Smooth head energy (case C), batch mean: beta_g/(2B) sum ||z_s - D a||^2."""
     if is_D(cfg):
         sp = cfg.sparse
-        return sum(wl * 0.5 * sp.beta_g * jnp.sum((head_in(acts[l]) - al @ Dl.T) ** 2) / acts[l].shape[0]
-                   for l, Dl, al, wl in zip(sp.heads, get_D(params), a, sp.head_ws))
+        return sum(wl * 0.5 * sp.beta_g * jnp.sum((head_in(acts[l], mu) - al @ Dl.T) ** 2) / acts[l].shape[0]
+                   for l, Dl, al, wl, mu in zip(sp.heads, get_D(params), a, sp.head_ws, get_mu(params)))
     if cfg.sparse.case != "C":
         return 0.0
     zs = acts[cfg.sparse.layer]
@@ -424,8 +473,8 @@ def a_step(params, acts, a, cfg, eta):
     """
     sp = cfg.sparse
     if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
-        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - head_in(acts[l])) @ Dl), el * gl)
-                     for l, Dl, al, el, gl in zip(sp.heads, get_D(params), a, eta, sp.gammas))
+        return tuple(soft_threshold(al - el * sp.beta_g * ((al @ Dl.T - head_in(acts[l], mu)) @ Dl), el * gl)
+                     for l, Dl, al, el, gl, mu in zip(sp.heads, get_D(params), a, eta, sp.gammas, get_mu(params)))
     D = get_D(params)
     zs = acts[sp.layer]
     grad = sp.beta_g * ((a @ D.T - zs) @ D)
@@ -489,13 +538,23 @@ def health_D(params, acts, ex, cfg, n_fista=256):
     h{l}_wlasso       w_l * h{l}_lasso  (x V gives the head's share of the BP-D objective)
     h{l}_subopt       relative LASSO suboptimality of a^(T_test) vs FISTA(500), first rows
     h{l}_D_spec       ||D_l||_2^2 (conditioning sets the ISTA step)
+    h{l}_pr           participation ratio (sum lam)^2 / sum lam^2 of the covariance of the
+                      CENTRED head layer f_l - mu_l: effective number of directions the
+                      inputs vary along (rank-collapse guard)
+    h{l}_mu_offset    ||mean_rows(f_l) - mu_l|| / rms ||f_l - mean|| (is mu tracking?)
     """
     sp = cfg.sparse
     z = acts[-1]
     out = {"embed_spread": _spread(z), "embed_norm": float(jnp.mean(jnp.linalg.norm(z, axis=-1))),
            "embed_std": float(jnp.mean(jnp.std(z, 0))), "n_rows": int(z.shape[0])}
     fr, sup = [], []
-    for l, Dl, al, gl, wl, ft in zip(sp.heads, get_D(params), ex["a"], sp.gammas, sp.head_ws, ex["f_heads"]):
+    for l, Dl, al, gl, wl, ft, mu in zip(sp.heads, get_D(params), ex["a"], sp.gammas, sp.head_ws,
+                                         ex["f_heads"], get_mu(params)):
+        fc = np.asarray(acts[l]) - np.asarray(acts[l]).mean(0)
+        lam = np.clip(np.linalg.eigvalsh(fc.T @ fc / fc.shape[0]), 0, None)
+        pr = float(lam.sum() ** 2 / (np.sum(lam ** 2) + 1e-30))
+        off = float(np.linalg.norm(np.asarray(acts[l]).mean(0) - np.asarray(mu))
+                    / (np.sqrt(np.mean(np.sum(fc ** 2, 1))) + 1e-12))
         on = np.asarray(al != 0)
         G = jnp.abs(Dl.T @ Dl) - jnp.eye(Dl.shape[1])
         e = float(jnp.mean(lasso_energy(ft, Dl, al, gl, sp.beta_g)))
@@ -510,7 +569,7 @@ def health_D(params, acts, ex, cfg, n_fista=256):
              f"h{l}_fnorm": float(jnp.mean(jnp.linalg.norm(acts[l], axis=-1))),
              f"h{l}_input_spread": _spread(acts[l]),
              f"h{l}_subopt": (e_k - e_star) / (abs(e_star) + 1e-12),
-             f"h{l}_D_spec": float(spectral_sq(Dl))}
+             f"h{l}_D_spec": float(spectral_sq(Dl)), f"h{l}_pr": pr, f"h{l}_mu_offset": off}
         out.update(h)
         fr.append(h[f"h{l}_active"]); sup.append(h[f"h{l}_supports"])
     out["active_frac"] = float(np.mean(fr))

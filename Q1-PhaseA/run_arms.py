@@ -139,6 +139,8 @@ def main():
                 f.write(cfg.to_json())
             p = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg,
                                cfg.data.input_dim)
+            import data as Dd
+            p = SP.init_mu(p, SP.mu_rows(Dd.load_dataset(cfg.data)[0], cfg), cfg)
             eqx.tree_serialise_leaves(os.path.join(out, "params.eqx"), p)
             print("init-only:", out, flush=True)
         return

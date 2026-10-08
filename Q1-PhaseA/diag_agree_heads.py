@@ -73,6 +73,8 @@ def analyse(run_dir, init=False, step=0):
     if init:
         params = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     Xtr = D.load_dataset(cfg.data)[0]
+    if init:
+        params = SP.init_mu(params, SP.mu_rows(Xtr, cfg), cfg)
     Zin, A, kg = batch(cfg, Xtr, step)
     out = {"run": run_dir, "init": init, "heads": list(cfg.sparse.heads)}
     out["task"] = compare(params, cfg, Zin, A, kg)

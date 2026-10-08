@@ -98,7 +98,9 @@ def optim(cfg): # Optimizer for both the arms
     # own because Adam is invariant to the gradient's scale, and a D clip would
     # fire at different rates in the two arms of a pair -- found in review.
     dict_opt = optax.adamw(sched, weight_decay=cfg.opt.weight_decay)
-    return optax.multi_transform({"enc": base(), "dict": dict_opt}, SP.param_labels)
+    # case D: the head-layer means (params[3]) are EMA state, never trained
+    return optax.multi_transform({"enc": base(), "dict": dict_opt, "frozen": optax.set_to_zero()},
+                                 SP.param_labels)
 
 @eqx.filter_jit
 def grad_update(params,g, opt_state,opt):
@@ -158,6 +160,7 @@ def train(cfg: RunCfg, verbose=True):
     input_dim = Zprobe.shape[-1]
 
     params = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, input_dim)
+    params = SP.init_mu(params, SP.mu_rows(Xtr, cfg), cfg)   # case D centring; no-op otherwise
     opt = optim(cfg)
     opt_state = opt.init(eqx.filter(params, eqx.is_inexact_array))
 
@@ -184,6 +187,7 @@ def train(cfg: RunCfg, verbose=True):
             gn_enc, gn_dict = _global_norm((g[0], g[1])), _global_norm(g[2])
         params, opt_state = grad_update(params, g, opt_state, opt)
         params = SP.project(params, cfg)          # case C: unit-norm D columns
+        params = SP.update_mu(params, Zin, cfg)   # case D: EMA of head-layer means
 
         # common yardstick: the objective at the FEEDFORWARD embeddings,
         # identically defined for both arms.  PC's own L_final/F_final are

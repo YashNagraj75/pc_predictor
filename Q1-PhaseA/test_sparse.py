@@ -516,6 +516,7 @@ def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=Tru
     kv, ka = jax.random.split(jax.random.PRNGKey(1))
     Zin, _ = D.make_views(kv, jnp.asarray(_data()[:B]), cfg.data)
     A = S.sample_directions(ka, cfg.enc.embed_dim, cfg.sig.num_slices)
+    params = SP.init_mu(params, D.eval_batch(jnp.asarray(_data()[:64]), cfg.data), cfg)
     return params, Zin, A, cfg
 
 
@@ -679,20 +680,41 @@ def test_D_head_reads_normalised_copy():
     x = Zin[0]
     acts, ex = SP.deploy(pD, x, cD)
     f = acts[2]
+    mu = SP.get_mu(pD)[0]
     nrm = np.linalg.norm(np.asarray(ex["f_heads"][0]), axis=1)
     rows_ok = np.allclose(nrm, np.sqrt(f.shape[-1]), rtol=1e-4)
-    # rescaling: energy of the head at 0.5 f equals that at f
     D0, g0 = SP.get_D(pD)[0], cD.sparse.gammas[0]
-    e = lambda v: float(jnp.mean(SP.lasso_energy(SP.head_in(v), D0, SP.ista(SP.head_in(v), D0, g0, 1.0, 16,
-                         0.9 / SP.spectral_sq(D0)), g0, 1.0)))
-    inv = abs(e(f) - e(0.5 * f)) < 1e-4 * abs(e(f))
+    def e(v, m):
+        h = SP.head_in(v, m)
+        return float(jnp.mean(SP.lasso_energy(h, D0, SP.ista(h, D0, g0, 1.0, 16, 0.9 / SP.spectral_sq(D0)), g0, 1.0)))
+    # scale about mu, and a shared offset absorbed by mu, leave the head energy unchanged
+    c = 5.0 * jax.random.normal(jax.random.PRNGKey(3), mu.shape)
+    inv = abs(e(f, mu) - e(mu + 0.5 * (f - mu), mu)) < 1e-4 * abs(e(f, mu)) \
+        and abs(e(f, mu) - e(f + c, mu + c)) < 1e-4 * abs(e(f, mu))
     # detached: the BP-D head gradient wrt D equals the partial derivative at fixed a
     a = ex["a"][0]; ft = ex["f_heads"][0]
     g_part = jax.grad(lambda Dm: cD.sparse.head_ws[0] * jnp.mean(SP.lasso_energy(ft, Dm, a, g0, 1.0)))(D0)
-    g_bp = jax.grad(lambda Dm: SP.deployed_head_energy((pD[0], pD[1], (Dm,)), x, cD))(D0)
+    g_bp = jax.grad(lambda Dm: SP.deployed_head_energy((pD[0], pD[1], (Dm,), pD[3]), x, cD))(D0)
     det = maxrel(g_bp, g_part) < 1e-4
-    check("D: head input normalised per row; head energy scale-invariant; BP-D code detached",
-          rows_ok and inv and det, f"rows={rows_ok} invariant={inv} detached={det} ({maxrel(g_bp, g_part):.1e})")
+    # mu: no gradient, untouched by the optimiser, EMA-updated toward the batch mean
+    gmu = jax.grad(lambda m: SP.deployed_head_energy((pD[0], pD[1], pD[2], (m,)), x, cD))(mu)
+    opt = TR.optim(dataclasses.replace(cD, arm="bp"))
+    fl = eqx.filter(pD, eqx.is_inexact_array)
+    st = opt.init(fl)
+    rnd = jax.tree_util.tree_map(lambda v: jnp.ones_like(v), fl)
+    upd, _ = opt.update(rnd, st, fl)
+    p2 = eqx.apply_updates(pD, upd)
+    frozen = bool(jnp.all(p2[3][0] == mu)) and not bool(jnp.all(p2[0][0].layers[1].weight == pD[0][0].layers[1].weight))
+    p3 = SP.update_mu(pD, Zin, cD)
+    bm = jnp.mean(jnp.stack([SP._head_means(pD, Zin[v], cD)[0] for v in range(Zin.shape[0])]), 0)
+    m = cD.sparse.mu_momentum
+    ema = maxrel(p3[3][0], m * mu + (1 - m) * bm) < 1e-5
+    ok_mu = float(jnp.max(jnp.abs(gmu))) == 0.0 and frozen and ema
+    check("D: centred head input normalised per row; energy invariant to scale about mu and to a tracked offset; "
+          "BP-D code detached; mu has no gradient, is frozen by the optimiser, EMA-updated",
+          rows_ok and inv and det and ok_mu,
+          f"rows={rows_ok} invariant={inv} detached={det} ({maxrel(g_bp, g_part):.1e}) mu_ok={ok_mu} "
+          f"(|gmu|={float(jnp.max(jnp.abs(gmu))):.1e} frozen={frozen} ema={ema})")
 
 
 if __name__ == "__main__":

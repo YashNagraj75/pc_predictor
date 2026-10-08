@@ -70,12 +70,15 @@ def main():
     all_heads = tuple(sorted(ORDER))
     cfg_all = cfg_for(all_heads, (1.0,) * 5, (1.0,) * 5)
     params = SP.init_params(jax.random.PRNGKey(0), cfg_all, base.data.input_dim)
+    params = SP.init_mu(params, SP.mu_rows(Xtr, cfg_all, n=args.n), cfg_all)   # same rows as idx
     z, hs = E.forward(params, x, base.enc)
     acts = [*hs, z]
 
     gammas = {}
-    for l, Dl in zip(all_heads, SP.get_D(params)):
-        f = SP.head_in(acts[l])                 # heads explain the normalised copy
+    sub = lambda hs: (params[0], params[1], tuple(SP.get_D(params)[all_heads.index(l)] for l in hs),
+                      tuple(SP.get_mu(params)[all_heads.index(l)] for l in hs))
+    for l, Dl, mu in zip(all_heads, SP.get_D(params), SP.get_mu(params)):
+        f = SP.head_in(acts[l], mu)             # heads explain the centred, normalised copy
         eta = cfg_all.sparse.step_frac / (BETA_G * SP.spectral_sq(Dl))
 
         def frac(g):
@@ -101,7 +104,7 @@ def main():
     e = {}
     for l in all_heads:
         one = cfg_for((l,), (gammas[l][0],), (1.0,))
-        pl = (params[0], params[1], (SP.get_D(params)[all_heads.index(l)],))
+        pl = sub((l,))
         e[l] = float(sum(SP.deployed_head_energy(pl, Zin[v], one) for v in range(V))) / V
         print(f"head {l}: unweighted per-view head energy e={e[l]:.5g}", flush=True)
 
@@ -116,7 +119,7 @@ def main():
     for K, hset in head_sets().items():
         base = [1.0 / (K * V * e[l]) for l in hset]            # equal energy per head
         cK = cfg_for(hset, [gammas[l][0] for l in hset], base)
-        pK = (params[0], params[1], tuple(SP.get_D(params)[all_heads.index(l)] for l in hset))
+        pK = sub(hset)
         g_head = eqx.filter_grad(lambda p: sum(SP.deployed_head_energy(p, Zin[v], cK)
                                                for v in range(V)))(pK)
         top = max(hset)

@@ -173,12 +173,16 @@ def analyse(run_dir, n_train, n_test, heads_json=None):
         role = "floor_init" if floor else "trained_D"
         analyse_one(params, cfg, role, tag, data, rows, subsets=nested if floor else None)
         if not floor:      # same trained encoder, dictionaries put back to their initial draw
-            analyse_one((params[0], params[1], init_D(cfg)), cfg, "trained_enc_init_D", tag, data, rows, emb=False)
+            # trained encoder, trained mu (it describes the encoder's stream), initial D
+            analyse_one((params[0], params[1], init_D(cfg), params[3]), cfg, "trained_enc_init_D", tag, data,
+                        rows, emb=False)
     else:
         analyse_one(params, cfg, "reused_headfree", tag, data, rows)
         if heads_json:
             c2 = dataclasses.replace(cfg, sparse=k5_sparse(heads_json))
-            analyse_one((params[0], params[1], init_D(c2)), c2, "reused_enc_init_D", tag, data, rows,
+            pr = SP.init_mu((params[0], params[1], init_D(c2), tuple(jnp.zeros(cfg.enc.width) for _ in c2.sparse.heads)),
+                            SP.mu_rows(Xtr, c2), c2)        # mu of THIS encoder's stream
+            analyse_one(pr, c2, "reused_enc_init_D", tag, data, rows,
                         emb=False, subsets=nested)
     return rows
 
