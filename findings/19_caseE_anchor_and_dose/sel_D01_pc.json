@@ -1,0 +1,154 @@
+{
+ "rule": "nested outward from 5; gamma_l -> 20% active at init (seed 0, training centre views); equal energy per head within K, total scaled so the head gradient on encoder layers <= max head is 0.1 x the task gradient at init (BP, one training batch); PC arm head_ws rescaled so PC's own head/task gradient ratio is 0.1 (diag_dose.py)",
+ "beta_g": 1.0,
+ "beta_r": 0.0,
+ "beta_r_rounds": [],
+ "grad_ratio": 0.1,
+ "T_test": 16,
+ "code_k": 8,
+ "calibration_views": "centre",
+ "task_loss_at_init": 1.3666112422943115,
+ "n_views": 4,
+ "n_images": 256,
+ "per_head_energy": {
+  "3": 48.82465362548828,
+  "4": 50.732093811035156,
+  "5": 49.46921157836914,
+  "6": 48.30363464355469,
+  "7": 50.22751235961914
+ },
+ "sets": {
+  "1": {
+   "heads": [
+    5
+   ],
+   "gammas": [
+    0.8353625469578262
+   ],
+   "head_ws": [
+    0.00042923633429146993
+   ],
+   "active_at_init": [
+    0.20404052734375
+   ],
+   "grad_ratio_at_init": 0.1,
+   "grad_ratio_unit_weights": 0.14624157280075262,
+   "head_energy_total_at_init": 0.6838000856038753,
+   "energy_ratio_to_task": 0.5003618179343303,
+   "pc_dose_scale": 0.12421164305316648
+  },
+  "2": {
+   "heads": [
+    4,
+    5
+   ],
+   "gammas": [
+    0.8353625469578262,
+    0.8353625469578262
+   ],
+   "head_ws": [
+    0.0025942096510576445,
+    0.0026604363236000456
+   ],
+   "active_at_init": [
+    0.20233154296875,
+    0.20404052734375
+   ],
+   "grad_ratio_at_init": 0.1,
+   "grad_ratio_unit_weights": 0.09497781089342097,
+   "head_energy_total_at_init": 1.0528774990635936,
+   "energy_ratio_to_task": 0.7704294143636551
+  },
+  "3": {
+   "heads": [
+    4,
+    5,
+    6
+   ],
+   "gammas": [
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262
+   ],
+   "head_ws": [
+    0.001902357735398958,
+    0.0019509223619122414,
+    0.001997998531716827
+   ],
+   "active_at_init": [
+    0.20233154296875,
+    0.20404052734375,
+    0.2014007568359375
+   ],
+   "grad_ratio_at_init": 0.1,
+   "grad_ratio_unit_weights": 0.08634630913390141,
+   "head_energy_total_at_init": 1.1581270931329,
+   "energy_ratio_to_task": 0.847444435762579
+  },
+  "4": {
+   "heads": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "gammas": [
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262
+   ],
+   "head_ws": [
+    0.0017444077846380471,
+    0.0016788210276476299,
+    0.0017216790635854688,
+    0.0017632235440469602
+   ],
+   "active_at_init": [
+    0.2034454345703125,
+    0.20233154296875,
+    0.20404052734375,
+    0.2014007568359375
+   ],
+   "grad_ratio_at_init": 0.1,
+   "grad_ratio_unit_weights": 0.07338255525703248,
+   "head_energy_total_at_init": 1.3627216938649283,
+   "energy_ratio_to_task": 0.9971538735311051
+  },
+  "5": {
+   "heads": [
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "gammas": [
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262,
+    0.8353625469578262
+   ],
+   "head_ws": [
+    0.0006223085339005414,
+    0.0005989107945958717,
+    0.0006142001791911527,
+    0.0006290209596046123,
+    0.0006049274031000359
+   ],
+   "active_at_init": [
+    0.2034454345703125,
+    0.20233154296875,
+    0.20404052734375,
+    0.2014007568359375,
+    0.2038116455078125
+   ],
+   "grad_ratio_at_init": 0.1,
+   "grad_ratio_unit_weights": 0.06340631398759561,
+   "head_energy_total_at_init": 1.5771300003271498,
+   "energy_ratio_to_task": 1.154044362813387,
+   "pc_dose_scale": 0.38530747128742343
+  }
+ }
+}

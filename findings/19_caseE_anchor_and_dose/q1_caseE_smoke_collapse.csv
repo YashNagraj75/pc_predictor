@@ -1,0 +1,9 @@
+condition,arm,pr5_step159,embed_spread_step159
+no heads,PC,7.86,0.0969
+no heads,BP,9.23,0.149
+D@0.1x,PC,1.69,0.0036
+D@0.1x,BP,6.46,
+E (anchor),PC,1.98,0.0068
+E (anchor),BP,4.53,
+"E, PC-matched dose",PC,2.128,0.008
+"D@0.1x, PC-matched dose",PC,1.938,0.005
