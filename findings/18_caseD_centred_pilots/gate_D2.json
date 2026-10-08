@@ -1,0 +1,174 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: encoder clipping fired on 80.8% of steps (>= 5%)",
+    "PC: head 4 deployed active fraction 0.413 outside [0.05, 0.4]",
+    "PC: head 4: 351 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 5 deployed active fraction 0.470 outside [0.05, 0.4]",
+    "PC: head 5: 253 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: embedding spread 0.0001869 < 0.5 x its max 0.03875 (collapse)",
+    "PC: layer 4 participation ratio 1.01 < 0.5 x its max 7.13 (rank collapse)",
+    "PC: layer 5 participation ratio 1.01 < 0.5 x its max 7.01 (rank collapse)",
+    "BP: head 4 deployed active fraction 0.699 outside [0.05, 0.4]",
+    "BP: head 5 deployed active fraction 0.682 outside [0.05, 0.4]",
+    "BP: embedding spread 0.02803 < 0.5 x its max 0.07853 (collapse)",
+    "BP: layer 4 participation ratio 1.04 < 0.5 x its max 7.13 (rank collapse)",
+    "BP: layer 5 participation ratio 1.03 < 0.5 x its max 7.02 (rank collapse)"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_hK2pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.8075,
+    "deployed_active_frac": [
+      0.2005,
+      0.3853,
+      0.4312,
+      0.4337,
+      0.4309,
+      0.4372,
+      0.4398,
+      0.4402,
+      0.4417
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000444650650024,
+    "relaxed_active_frac_last200": 0.43164563179016113,
+    "head_active_last": {
+      "4": 0.413,
+      "5": 0.4703
+    },
+    "head_supports_last": {
+      "4": 351,
+      "5": 253
+    },
+    "embed_spread_first_last": [
+      0.0387495756149292,
+      0.0001868605613708496
+    ],
+    "head_pr_first_last": {
+      "4": [
+        7.13,
+        1.01
+      ],
+      "5": [
+        7.01,
+        1.01
+      ]
+    },
+    "head_mu_offset_last": {
+      "4": 0.9456,
+      "5": 0.9454
+    },
+    "head_fnorm_first_last": {
+      "4": [
+        2.304,
+        39.829
+      ],
+      "5": [
+        2.357,
+        38.27
+      ]
+    },
+    "head_spread_last": {
+      "4": 0.0001,
+      "5": 0.0001
+    },
+    "head_subopt_last": {
+      "4": 0.0282,
+      "5": 0.0317
+    },
+    "head_task_ratio_first_last": [
+      2.3492,
+      0.7456
+    ],
+    "head_resid_first_last": [
+      0.0055,
+      0.0003
+    ]
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_hK2pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2006,
+      0.4632,
+      0.5286,
+      0.5573,
+      0.5958,
+      0.661,
+      0.691,
+      0.6938,
+      0.6908
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "head_active_last": {
+      "4": 0.6994,
+      "5": 0.6822
+    },
+    "head_supports_last": {
+      "4": 542,
+      "5": 544
+    },
+    "embed_spread_first_last": [
+      0.038776516914367676,
+      0.028031110763549805
+    ],
+    "head_pr_first_last": {
+      "4": [
+        7.13,
+        1.04
+      ],
+      "5": [
+        7.02,
+        1.03
+      ]
+    },
+    "head_mu_offset_last": {
+      "4": 0.6583,
+      "5": 0.6621
+    },
+    "head_fnorm_first_last": {
+      "4": [
+        2.304,
+        23.361
+      ],
+      "5": [
+        2.357,
+        26.829
+      ]
+    },
+    "head_spread_last": {
+      "4": 0.0003,
+      "5": 0.0002
+    },
+    "head_subopt_last": {
+      "4": 0.0743,
+      "5": 0.0705
+    },
+    "head_task_ratio_first_last": [
+      2.3506,
+      1.2822
+    ]
+  }
+}

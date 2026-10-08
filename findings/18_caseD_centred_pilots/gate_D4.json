@@ -1,0 +1,239 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: encoder clipping fired on 81.2% of steps (>= 5%)",
+    "PC: head 3 deployed active fraction 0.466 outside [0.05, 0.4]",
+    "PC: head 3: 208 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 4 deployed active fraction 0.467 outside [0.05, 0.4]",
+    "PC: head 4: 244 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 5 deployed active fraction 0.480 outside [0.05, 0.4]",
+    "PC: head 5: 227 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 6 deployed active fraction 0.499 outside [0.05, 0.4]",
+    "PC: head 6: 283 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: embedding spread 0.0001847 < 0.5 x its max 0.03873 (collapse)",
+    "PC: layer 3 participation ratio 1.01 < 0.5 x its max 6.97 (rank collapse)",
+    "PC: layer 4 participation ratio 1.01 < 0.5 x its max 7.13 (rank collapse)",
+    "PC: layer 5 participation ratio 1.01 < 0.5 x its max 7.01 (rank collapse)",
+    "PC: layer 6 participation ratio 1.02 < 0.5 x its max 6.48 (rank collapse)",
+    "BP: head 3 deployed active fraction 0.706 outside [0.05, 0.4]",
+    "BP: head 4 deployed active fraction 0.682 outside [0.05, 0.4]",
+    "BP: head 4: 451 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: head 5 deployed active fraction 0.673 outside [0.05, 0.4]",
+    "BP: head 5: 472 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: head 6 deployed active fraction 0.665 outside [0.05, 0.4]",
+    "BP: head 6: 467 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: embedding spread 0.01276 < 0.5 x its max 0.05011 (collapse)",
+    "BP: layer 3 participation ratio 1.05 < 0.5 x its max 6.97 (rank collapse)",
+    "BP: layer 4 participation ratio 1.03 < 0.5 x its max 7.13 (rank collapse)",
+    "BP: layer 5 participation ratio 1.03 < 0.5 x its max 7.02 (rank collapse)",
+    "BP: layer 6 participation ratio 1.02 < 0.5 x its max 6.48 (rank collapse)"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_hK4pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.8125,
+    "deployed_active_frac": [
+      0.2001,
+      0.4081,
+      0.4601,
+      0.4678,
+      0.4716,
+      0.4759,
+      0.4778,
+      0.4776,
+      0.4776
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000624656677246,
+    "relaxed_active_frac_last200": 0.47338348865509033,
+    "head_active_last": {
+      "3": 0.4655,
+      "4": 0.4667,
+      "5": 0.4795,
+      "6": 0.4986
+    },
+    "head_supports_last": {
+      "3": 208,
+      "4": 244,
+      "5": 227,
+      "6": 283
+    },
+    "embed_spread_first_last": [
+      0.03873169422149658,
+      0.00018465518951416016
+    ],
+    "head_pr_first_last": {
+      "3": [
+        6.97,
+        1.01
+      ],
+      "4": [
+        7.13,
+        1.01
+      ],
+      "5": [
+        7.01,
+        1.01
+      ],
+      "6": [
+        6.48,
+        1.02
+      ]
+    },
+    "head_mu_offset_last": {
+      "3": 0.9492,
+      "4": 0.9504,
+      "5": 0.9503,
+      "6": 0.9477
+    },
+    "head_fnorm_first_last": {
+      "3": [
+        2.264,
+        34.715
+      ],
+      "4": [
+        2.304,
+        38.749
+      ],
+      "5": [
+        2.357,
+        37.713
+      ],
+      "6": [
+        2.467,
+        34.968
+      ]
+    },
+    "head_spread_last": {
+      "3": 0.0001,
+      "4": 0.0001,
+      "5": 0.0001,
+      "6": 0.0001
+    },
+    "head_subopt_last": {
+      "3": 0.0267,
+      "4": 0.0269,
+      "5": 0.0273,
+      "6": 0.0296
+    },
+    "head_task_ratio_first_last": [
+      3.1454,
+      0.991
+    ],
+    "head_resid_first_last": [
+      0.0062,
+      0.0004
+    ]
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_hK4pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2001,
+      0.441,
+      0.5052,
+      0.5457,
+      0.598,
+      0.6443,
+      0.6707,
+      0.6812,
+      0.6816
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "head_active_last": {
+      "3": 0.7057,
+      "4": 0.6824,
+      "5": 0.6734,
+      "6": 0.665
+    },
+    "head_supports_last": {
+      "3": 529,
+      "4": 451,
+      "5": 472,
+      "6": 467
+    },
+    "embed_spread_first_last": [
+      0.03876841068267822,
+      0.012757599353790283
+    ],
+    "head_pr_first_last": {
+      "3": [
+        6.97,
+        1.05
+      ],
+      "4": [
+        7.13,
+        1.03
+      ],
+      "5": [
+        7.02,
+        1.03
+      ],
+      "6": [
+        6.48,
+        1.02
+      ]
+    },
+    "head_mu_offset_last": {
+      "3": 0.6639,
+      "4": 0.6659,
+      "5": 0.6679,
+      "6": 0.6689
+    },
+    "head_fnorm_first_last": {
+      "3": [
+        2.264,
+        20.119
+      ],
+      "4": [
+        2.304,
+        24.789
+      ],
+      "5": [
+        2.357,
+        28.854
+      ],
+      "6": [
+        2.466,
+        31.451
+      ]
+    },
+    "head_spread_last": {
+      "3": 0.0003,
+      "4": 0.0002,
+      "5": 0.0002,
+      "6": 0.0002
+    },
+    "head_subopt_last": {
+      "3": 0.0681,
+      "4": 0.0646,
+      "5": 0.0618,
+      "6": 0.0584
+    },
+    "head_task_ratio_first_last": [
+      3.1473,
+      1.6884
+    ]
+  }
+}

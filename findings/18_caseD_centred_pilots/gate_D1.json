@@ -1,0 +1,143 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: encoder clipping fired on 88.2% of steps (>= 5%)",
+    "PC: head 5 deployed active fraction 0.438 outside [0.05, 0.4]",
+    "PC: head 5: 275 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: embedding spread 8.303e-05 < 0.5 x its max 0.03874 (collapse)",
+    "PC: layer 5 participation ratio 1.01 < 0.5 x its max 7.01 (rank collapse)",
+    "BP: head 5 deployed active fraction 0.688 outside [0.05, 0.4]",
+    "BP: embedding spread 0.02689 < 0.5 x its max 0.09505 (collapse)",
+    "BP: layer 5 participation ratio 1.05 < 0.5 x its max 7.02 (rank collapse)"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_hK1pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.8825,
+    "deployed_active_frac": [
+      0.2013,
+      0.3738,
+      0.4472,
+      0.4389,
+      0.4354,
+      0.4367,
+      0.4386,
+      0.4376,
+      0.4382
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000355243682861,
+    "relaxed_active_frac_last200": 0.43168092727661134,
+    "head_active_last": {
+      "5": 0.4382
+    },
+    "head_supports_last": {
+      "5": 275
+    },
+    "embed_spread_first_last": [
+      0.0387415885925293,
+      8.302927017211914e-05
+    ],
+    "head_pr_first_last": {
+      "5": [
+        7.01,
+        1.01
+      ]
+    },
+    "head_mu_offset_last": {
+      "5": 0.8996
+    },
+    "head_fnorm_first_last": {
+      "5": [
+        2.357,
+        42.0
+      ]
+    },
+    "head_spread_last": {
+      "5": 0.0001
+    },
+    "head_subopt_last": {
+      "5": 0.0288
+    },
+    "head_task_ratio_first_last": [
+      1.5715,
+      0.4609
+    ],
+    "head_resid_first_last": [
+      0.0077,
+      0.0004
+    ]
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_hK1pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2013,
+      0.4455,
+      0.5075,
+      0.5577,
+      0.598,
+      0.6524,
+      0.6796,
+      0.6866,
+      0.6885
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "head_active_last": {
+      "5": 0.6885
+    },
+    "head_supports_last": {
+      "5": 559
+    },
+    "embed_spread_first_last": [
+      0.03878206014633179,
+      0.026889562606811523
+    ],
+    "head_pr_first_last": {
+      "5": [
+        7.02,
+        1.05
+      ]
+    },
+    "head_mu_offset_last": {
+      "5": 0.7072
+    },
+    "head_fnorm_first_last": {
+      "5": [
+        2.357,
+        23.168
+      ]
+    },
+    "head_spread_last": {
+      "5": 0.0003
+    },
+    "head_subopt_last": {
+      "5": 0.0803
+    },
+    "head_task_ratio_first_last": [
+      1.5724,
+      0.8726
+    ]
+  }
+}

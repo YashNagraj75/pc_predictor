@@ -1,0 +1,270 @@
+{
+  "pass": false,
+  "reasons": [
+    "PC: encoder clipping fired on 82.7% of steps (>= 5%)",
+    "PC: head 3 deployed active fraction 0.471 outside [0.05, 0.4]",
+    "PC: head 3: 219 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 4 deployed active fraction 0.472 outside [0.05, 0.4]",
+    "PC: head 4: 280 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 5 deployed active fraction 0.477 outside [0.05, 0.4]",
+    "PC: head 5: 221 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 6 deployed active fraction 0.493 outside [0.05, 0.4]",
+    "PC: head 6: 277 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: head 7 deployed active fraction 0.485 outside [0.05, 0.4]",
+    "PC: head 7: 432 distinct supports < 50% of 1024 rows (collapse)",
+    "PC: embedding spread 0.0001789 < 0.5 x its max 0.03874 (collapse)",
+    "PC: layer 3 participation ratio 1.02 < 0.5 x its max 6.97 (rank collapse)",
+    "PC: layer 4 participation ratio 1.01 < 0.5 x its max 7.13 (rank collapse)",
+    "PC: layer 5 participation ratio 1.01 < 0.5 x its max 7.01 (rank collapse)",
+    "PC: layer 6 participation ratio 1.02 < 0.5 x its max 6.48 (rank collapse)",
+    "PC: layer 7 participation ratio 1.02 < 0.5 x its max 6.47 (rank collapse)",
+    "BP: head 3 deployed active fraction 0.694 outside [0.05, 0.4]",
+    "BP: head 4 deployed active fraction 0.672 outside [0.05, 0.4]",
+    "BP: head 5 deployed active fraction 0.683 outside [0.05, 0.4]",
+    "BP: head 5: 493 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: head 6 deployed active fraction 0.650 outside [0.05, 0.4]",
+    "BP: head 6: 425 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: head 7 deployed active fraction 0.632 outside [0.05, 0.4]",
+    "BP: head 7: 389 distinct supports < 50% of 1024 rows (collapse)",
+    "BP: embedding spread 0.009614 < 0.5 x its max 0.05415 (collapse)",
+    "BP: layer 3 participation ratio 1.05 < 0.5 x its max 6.97 (rank collapse)",
+    "BP: layer 4 participation ratio 1.03 < 0.5 x its max 7.13 (rank collapse)",
+    "BP: layer 5 participation ratio 1.03 < 0.5 x its max 7.02 (rank collapse)",
+    "BP: layer 6 participation ratio 1.02 < 0.5 x its max 6.48 (rank collapse)",
+    "BP: layer 7 participation ratio 1.02 < 0.5 x its max 6.47 (rank collapse)"
+  ],
+  "pc": {
+    "run": "runs/pc_sigreg_T16_coupled_hK5pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.827,
+    "deployed_active_frac": [
+      0.2002,
+      0.4032,
+      0.4542,
+      0.4646,
+      0.4663,
+      0.4738,
+      0.4773,
+      0.4788,
+      0.4796
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "act_growth_max_last200": 1.0000619888305664,
+    "relaxed_active_frac_last200": 0.47455724626779555,
+    "head_active_last": {
+      "3": 0.471,
+      "4": 0.4722,
+      "5": 0.4771,
+      "6": 0.4927,
+      "7": 0.485
+    },
+    "head_supports_last": {
+      "3": 219,
+      "4": 280,
+      "5": 221,
+      "6": 277,
+      "7": 432
+    },
+    "embed_spread_first_last": [
+      0.0387425422668457,
+      0.00017893314361572266
+    ],
+    "head_pr_first_last": {
+      "3": [
+        6.97,
+        1.02
+      ],
+      "4": [
+        7.13,
+        1.01
+      ],
+      "5": [
+        7.01,
+        1.01
+      ],
+      "6": [
+        6.48,
+        1.02
+      ],
+      "7": [
+        6.47,
+        1.02
+      ]
+    },
+    "head_mu_offset_last": {
+      "3": 0.9458,
+      "4": 0.9471,
+      "5": 0.9471,
+      "6": 0.9449,
+      "7": 0.9443
+    },
+    "head_fnorm_first_last": {
+      "3": [
+        2.264,
+        33.396
+      ],
+      "4": [
+        2.304,
+        37.601
+      ],
+      "5": [
+        2.357,
+        37.924
+      ],
+      "6": [
+        2.467,
+        36.606
+      ],
+      "7": [
+        2.551,
+        35.804
+      ]
+    },
+    "head_spread_last": {
+      "3": 0.0001,
+      "4": 0.0001,
+      "5": 0.0001,
+      "6": 0.0001,
+      "7": 0.0001
+    },
+    "head_subopt_last": {
+      "3": 0.0269,
+      "4": 0.0281,
+      "5": 0.0284,
+      "6": 0.0294,
+      "7": 0.0371
+    },
+    "head_task_ratio_first_last": [
+      3.5761,
+      1.1539
+    ],
+    "head_resid_first_last": [
+      0.0069,
+      0.0005
+    ]
+  },
+  "bp": {
+    "run": "runs/bp_sigreg_hK5pilot_s0",
+    "n_steps": 2000,
+    "clip_frac_enc": 0.0,
+    "deployed_active_frac": [
+      0.2002,
+      0.4413,
+      0.5092,
+      0.5454,
+      0.5828,
+      0.6283,
+      0.657,
+      0.6683,
+      0.6662
+    ],
+    "deployed_active_steps": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      1999
+    ],
+    "head_active_last": {
+      "3": 0.6944,
+      "4": 0.672,
+      "5": 0.6829,
+      "6": 0.6502,
+      "7": 0.6318
+    },
+    "head_supports_last": {
+      "3": 537,
+      "4": 532,
+      "5": 493,
+      "6": 425,
+      "7": 389
+    },
+    "embed_spread_first_last": [
+      0.03877830505371094,
+      0.009613513946533203
+    ],
+    "head_pr_first_last": {
+      "3": [
+        6.97,
+        1.05
+      ],
+      "4": [
+        7.13,
+        1.03
+      ],
+      "5": [
+        7.02,
+        1.03
+      ],
+      "6": [
+        6.48,
+        1.02
+      ],
+      "7": [
+        6.47,
+        1.02
+      ]
+    },
+    "head_mu_offset_last": {
+      "3": 0.6461,
+      "4": 0.6455,
+      "5": 0.6503,
+      "6": 0.6519,
+      "7": 0.6514
+    },
+    "head_fnorm_first_last": {
+      "3": [
+        2.264,
+        20.179
+      ],
+      "4": [
+        2.304,
+        24.881
+      ],
+      "5": [
+        2.357,
+        28.837
+      ],
+      "6": [
+        2.466,
+        31.613
+      ],
+      "7": [
+        2.551,
+        35.064
+      ]
+    },
+    "head_spread_last": {
+      "3": 0.0003,
+      "4": 0.0002,
+      "5": 0.0002,
+      "6": 0.0002,
+      "7": 0.0001
+    },
+    "head_subopt_last": {
+      "3": 0.0709,
+      "4": 0.0642,
+      "5": 0.0626,
+      "6": 0.0624,
+      "7": 0.0624
+    },
+    "head_task_ratio_first_last": [
+      3.5783,
+      1.9061
+    ]
+  }
+}
