@@ -117,17 +117,34 @@ def _heads(params, cfg, x=None):
     Ds, mus = get_D(params), get_mu(params)
     if recon(cfg):
         assert x is not None, "case E needs the input view"
-        xc = x - jax.lax.stop_gradient(get_xbar(params))
+        xc = anchor_target(x, get_xbar(params))
         return [(l, Dl, mu, Gl, xc) for l, Dl, mu, Gl in zip(sp.heads, Ds, mus, get_G(params))]
     return [(l, Dl, mu, None, None) for l, Dl, mu in zip(sp.heads, Ds, mus)]
 
 
 def mu_rows(Xtr, cfg, n=1024):
-    """Deterministic training centre views used to initialise mu (the same rows,
-    rng(0), that select_heads.py selects gamma on)."""
+    """Calibration rows: initialise mu (and case E's xbar), and select gamma / beta_r.
+    Same images, rng(0).  Case D: deterministic training centre views.  Case E (user
+    decision 2026-10-08, review E-M1/D5): AUGMENTED training views, the distribution
+    the model trains on -- one view per image from a fixed key (PRNGKey(0))."""
     import data as Dd
     idx = np.random.default_rng(0).choice(len(Xtr), n, replace=False)
+    if recon(cfg):
+        views, _ = Dd.make_views(jax.random.PRNGKey(0), jnp.asarray(Xtr[idx]), cfg.data)
+        return views[0]
     return Dd.eval_batch(jnp.asarray(Xtr[idx]), cfg.data)
+
+
+def t_deploy(cfg):
+    """Deployed ISTA steps after a^(0): T_test * code_k, the count the relaxation takes."""
+    return cfg.sparse.T_test * cfg.sparse.code_k
+
+
+def anchor_target(x, xbar):
+    """Case E target: the view minus the pixel mean, with each view's own mean
+    brightness removed (user decision 2026-10-08) so brightness jitter is not rewarded."""
+    xc = x - jax.lax.stop_gradient(xbar)
+    return xc - jnp.mean(xc, axis=-1, keepdims=True)
 
 
 def _head_means(params, x, cfg):
@@ -408,7 +425,7 @@ def deploy(params, x, cfg, t=None, beta_g=None):
         # (mu = beta_g, and w_l does not change the minimiser).
         z, hs = E.forward(params, x, cfg.enc)
         acts = [*hs, z]
-        tt = sp.T_test if t is None else t
+        tt = t_deploy(cfg) if t is None else t
         codes, steps = [], []
         hd = _heads(params, cfg, x)
         fh = tuple(head_in(acts[l], mu) for l, _, mu, _, _ in hd)
@@ -553,10 +570,13 @@ def a_step(params, acts, a, cfg, eta, x=None):
     if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
         out = []
         for (l, Dl, mu, Gl, xc), al, el, gl in zip(_heads(params, cfg, x), a, eta, sp.gammas):
-            gr = sp.beta_g * ((al @ Dl.T - head_in(acts[l], mu)) @ Dl)
-            if Gl is not None:           # case E anchor
-                gr = gr + sp.beta_r * ((al @ Gl.T - xc) @ Gl)
-            out.append(soft_threshold(al - el * gr, el * gl))
+            f = head_in(acts[l], mu)
+            for _ in range(sp.code_k):   # code_k prox steps at the PRE-step activities
+                gr = sp.beta_g * ((al @ Dl.T - f) @ Dl)
+                if Gl is not None:       # case E anchor
+                    gr = gr + sp.beta_r * ((al @ Gl.T - xc) @ Gl)
+                al = soft_threshold(al - el * gr, el * gl)
+            out.append(al)
         return tuple(out)
     D = get_D(params)
     zs = acts[sp.layer]
@@ -656,9 +676,24 @@ def health_D(params, acts, ex, cfg, n_fista=256):
              f"h{l}_input_spread": _spread(acts[l]),
              f"h{l}_subopt": (e_k - e_star) / (abs(e_star) + 1e-12),
              f"h{l}_D_spec": float(spectral_sq(Dl)), f"h{l}_pr": pr, f"h{l}_mu_offset": off}
-        if Gl is not None:     # case E: pixel R^2 of G_l a_l vs the centred view (0 = mean image)
+        # solver health (review N1): stacked Lipschitz, step, and the CODE-space distance
+        # of the deployed a^(T) from the LASSO optimum (FISTA 2000) on the first k rows
+        Lst = float(spectral_sq(Dst))
+        a_opt = fista(F[:k], Dst, gl, mst, 2000)
+        h[f"h{l}_stacked_L"] = Lst
+        h[f"h{l}_eta"] = float(sp.step_frac / (mst * Lst))
+        h[f"h{l}_code_err"] = float(jnp.linalg.norm(al[:k] - a_opt) / (jnp.linalg.norm(a_opt) + 1e-12))
+        h[f"h{l}_active_opt"] = float(jnp.mean(a_opt != 0))
+        if Gl is not None:     # case E: pixel R^2 of G_l a_l vs the anchor target (0 = mean image)
             res = np.asarray(xc - al @ Gl.T)
             h[f"h{l}_recon_r2"] = float(1.0 - np.sum(res ** 2) / (np.sum(np.asarray(xc) ** 2) + 1e-12))
+            h[f"h{l}_G_spec"] = float(spectral_sq(Gl))
+            # ENCODER-dependent reconstruction (review N3/D3): code from f~ ALONE (anchor off),
+            # same D, gamma and step count; pixel info here must have come through the encoder
+            eta_f = sp.step_frac / (sp.beta_g * spectral_sq(Dl))
+            a_f = ista(ft, Dl, gl, sp.beta_g, t_deploy(cfg), eta_f)
+            res_f = np.asarray(xc - a_f @ Gl.T)
+            h[f"h{l}_recon_r2_enc"] = float(1.0 - np.sum(res_f ** 2) / (np.sum(np.asarray(xc) ** 2) + 1e-12))
             h[f"h{l}_recon_energy"] = float(0.5 * sp.beta_r * np.mean(np.sum(res ** 2, -1)))
             h[f"h{l}_head_energy"] = float(0.5 * sp.beta_g * jnp.mean(jnp.sum((ft - al @ Dl.T) ** 2, -1)))
         out.update(h)

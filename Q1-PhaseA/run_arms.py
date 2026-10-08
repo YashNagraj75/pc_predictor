@@ -94,7 +94,7 @@ def main():
         st = sel["sets"][k]
         D_kw = dict(heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
                     head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"],
-                    beta_r=sel.get("beta_r", 0.0))
+                    beta_r=sel.get("beta_r", 0.0), code_k=sel.get("code_k", 1))
         if args.beta_g != SparseCfg.beta_g or args.T_test != SparseCfg.T_test:
             ap.error("case D takes beta_g and T_test from --heads-json only")
         if args.T != sel["T_test"]:

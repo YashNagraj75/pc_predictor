@@ -23,11 +23,12 @@ PY=../.venv/bin/python
 export JAX_PLATFORMS=cuda
 CLEAN='cuda_|plugin|xla_bridge|versions_helpers|cuStreamGetGreenCtx|decoder step|^\s*File |^\s*~|^\s*\^'
 TAG=${TAG:-hK}; KS=${KS:-"1 2 3 4 5"}; SELECT_ARGS=${SELECT_ARGS:-}
-# case E: TAG=hE KS="1 5" SELECT_ARGS=--anchor
+# case E: TAG=hE KS="1 5" SELECT_ARGS="--anchor --code-k 8"; its control D@0.1x:
+#         TAG=hD01 KS="1 5" SELECT_ARGS="--grad-ratio 0.1 --code-k 8".  Every output name carries TAG.
 STEPS=${STEPS:-17200}; PILOT=${PILOT:-2000}; PILOT_ONLY=${PILOT_ONLY:-0}; REUSE_PILOTS=${REUSE_PILOTS:-0}; BUDGET=${BUDGET:-27000}   # s of training before K screens stop
 OP="--T 16 --eta-h 0.0625 --alpha 1"
 REUSED="runs/pc_sigreg_T16_coupled_alm_s0 runs/pc_sigreg_T16_coupled_alm_s1 runs/pc_sigreg_T16_coupled_alm_s2 runs/bp_sigreg_etafix_s0 runs/bp_sigreg_etafix_s1 runs/bp_sigreg_etafix_s2"
-STATUS=heads_status.txt; : > $STATUS
+STATUS=${TAG}_status.txt
 note() { echo "$*" | tee -a $STATUS; }
 seeds_for() { case $1 in 1|5) echo "0 1 2";; *) echo "0";; esac; }
 pcdir() { echo "runs/pc_sigreg_T16_coupled_${TAG}$1_s$2"; }
@@ -38,88 +39,89 @@ complete() {   # params.eqx, no DIVERGED, log reaches the last step
 }
 
 collect() {
-  tar czf "$JOBDIR/q1_heads.tar.gz" heads_status.txt heads_selected.json \
-      gates_heads.log select_heads.log train_heads*.log gate_D*.json gate_D*.err gate_full_*.json \
-      agree_*.json agree_*.log runs/*${TAG}*pilot*/params.eqx probes_heads.log probes_heads_summary.csv \
-      diag_heads*.csv diag_heads*.log diag_learning_heads.csv diag_learning_heads.log config_diff.txt \
+  tar czf "$JOBDIR/q1_${TAG}.tar.gz" ${TAG}_status.txt ${TAG}_heads_selected.json \
+      ${TAG}_gates.log ${TAG}_select.log ${TAG}_train*.log ${TAG}_gate_D*.json ${TAG}_gate_D*.err ${TAG}_gate_full_*.json \
+      ${TAG}_agree_*.json ${TAG}_agree_*.log runs/*${TAG}*pilot*/params.eqx ${TAG}_probes.log ${TAG}_probes_summary.csv \
+      ${TAG}_diag_heads*.csv ${TAG}_diag_heads*.log ${TAG}_diag_learning.csv ${TAG}_diag_learning.log ${TAG}_config_diff.txt \
       runs/*${TAG}*/DIVERGED runs/*${TAG}*/config.json runs/*${TAG}*/log.json runs/*${TAG}*/probes.json runs/*${TAG}*/params.eqx \
-      runs/*randD*/config.json runs/*randD*/probes.json runs/*randD*/params.eqx \
+      runs/*${TAG}randD*/config.json runs/*${TAG}randD*/probes.json runs/*${TAG}randD*/params.eqx \
       $(for r in $REUSED; do echo $r/probes.json; done) 2>/dev/null
-  ls -lh "$JOBDIR/q1_heads.tar.gz"
+  ls -lh "$JOBDIR/q1_${TAG}.tar.gz"
 }
-trap collect EXIT
 
 echo "##### 0. preflight"
 $PY -c "import jax;print('backend', jax.default_backend(), jax.devices(), 'matmul_precision', jax.config.jax_default_matmul_precision)" 2>&1 | tail -1 | tee -a $STATUS
 for r in $REUSED; do [ -f "$r/params.eqx" ] || { note "FATAL: reused run $r missing"; exit 6; }; done
 # PILOT_ONLY=1: stop after stage 3.  REUSE_PILOTS=1 (the later full job): keep the
 # pilot dirs and their gate files, skip selection + pilots, refuse only full-run dirs.
-if [ "$REUSE_PILOTS" = 1 ]; then EXIST=$(ls -d runs/*_${TAG}[1-5]_s* runs/*randD_s* 2>/dev/null)
-else EXIST=$(ls -d runs/*_${TAG}*_s* runs/*randD_s* 2>/dev/null); fi
+if [ "$REUSE_PILOTS" = 1 ]; then EXIST=$(ls -d runs/*_${TAG}[1-5]_s* runs/*${TAG}randD_s* 2>/dev/null)
+else EXIST=$(ls -d runs/*_${TAG}*_s* runs/*${TAG}randD_s* 2>/dev/null); fi
 if [ -n "$EXIST" ]; then
   note "FATAL: case-D run dirs already exist (stale smoke or an earlier attempt) -- move them aside first:"
   echo "$EXIST" | tee -a $STATUS; exit 7
 fi
+: > $STATUS          # only after the guard, so a refused launch leaves earlier status intact (review N2)
+trap collect EXIT
 for r in $REUSED; do [ -f "$r/probes.json" ] && [ ! -f "$r/probes.json.pre_caseD" ] && cp "$r/probes.json" "$r/probes.json.pre_caseD"; done
 
 echo "##### 1. gates (CPU: golden reference regenerated and checked bit for bit)"
-{ JAX_PLATFORMS=cpu $PY -W ignore test_pcalm.py && JAX_PLATFORMS=cpu $PY -W ignore test_sparse.py; } > gates_heads.log 2>&1 \
-  || { grep FAIL gates_heads.log; note "GATES FAILED"; exit 3; }
-grep -cE "\[PASS\]" gates_heads.log | xargs -I{} note "gates: {} PASS, 0 FAIL"
+{ JAX_PLATFORMS=cpu $PY -W ignore test_pcalm.py && JAX_PLATFORMS=cpu $PY -W ignore test_sparse.py; } > ${TAG}_gates.log 2>&1 \
+  || { grep FAIL ${TAG}_gates.log; note "GATES FAILED"; exit 3; }
+n=$(grep -cE "\[PASS\]" ${TAG}_gates.log); note "gates: $n PASS, 0 FAIL"
 
 if [ "$REUSE_PILOTS" = 1 ]; then
-  [ -s heads_selected.json ] || { note "FATAL: REUSE_PILOTS but no heads_selected.json"; exit 4; }
+  [ -s ${TAG}_heads_selected.json ] || { note "FATAL: REUSE_PILOTS but no ${TAG}_heads_selected.json"; exit 4; }
   PASSED=""
   for K in $KS; do
-    $PY -c "import json,sys;sys.exit(0 if json.load(open('gate_D$K.json')).get('pass') is True else 1)" 2>/dev/null \
+    $PY -c "import json,sys;sys.exit(0 if json.load(open('${TAG}_gate_D$K.json')).get('pass') is True else 1)" 2>/dev/null \
       && PASSED="$PASSED $K"
   done
   note "reusing pilots; passed:$PASSED"
 else
 echo "##### 2. selection (training images only, at initialisation)"
-$PY -W ignore select_heads.py $SELECT_ARGS --out heads_selected.json > select_heads.log 2>&1 \
-  || { tail -5 select_heads.log; note "SELECTION FAILED"; exit 4; }
-grep -E "^head" select_heads.log | tee -a $STATUS
+$PY -W ignore select_heads.py $SELECT_ARGS --out ${TAG}_heads_selected.json > ${TAG}_select.log 2>&1 \
+  || { tail -5 ${TAG}_select.log; note "SELECTION FAILED"; exit 4; }
+grep -E "^head" ${TAG}_select.log | tee -a $STATUS
 
 echo "##### 3. pilot pair per K: agreement at init, train, gate, agreement at end"
 PASSED=""
 for K in $KS; do
   if ! $PY -W ignore run_arms.py --steps $PILOT --eval-every 250 --arms pc bp --seeds 0 $OP \
-        --sparse-case D --heads-json heads_selected.json --K $K --tag ${TAG}${K}pilot > train_heads_pilot_K$K.log 2>&1; then
-    note "pilot K=$K: run_arms FAILED -- K=$K SKIPPED"; tail -3 train_heads_pilot_K$K.log | tee -a $STATUS; continue
+        --sparse-case D --heads-json ${TAG}_heads_selected.json --K $K --tag ${TAG}${K}pilot > ${TAG}_train_pilot_K$K.log 2>&1; then
+    note "pilot K=$K: run_arms FAILED -- K=$K SKIPPED"; tail -3 ${TAG}_train_pilot_K$K.log | tee -a $STATUS; continue
   fi
   PCP=runs/pc_sigreg_T16_coupled_${TAG}${K}pilot_s0
-  $PY -W ignore diag_agree_heads.py $PCP --init --json agree_init_K$K.json > agree_init_K$K.log 2>&1 || note "agreement (init) K=$K errored"
-  $PY -W ignore diag_agree_heads.py $PCP --json agree_pilot_K$K.json > agree_pilot_K$K.log 2>&1 || note "agreement (pilot end) K=$K errored"
-  $PY gate_pilot.py $PCP runs/bp_sigreg_${TAG}${K}pilot_s0 > gate_D$K.json 2> gate_D$K.err; rc=$?
+  $PY -W ignore diag_agree_heads.py $PCP --init --json ${TAG}_agree_init_K$K.json > ${TAG}_agree_init_K$K.log 2>&1 || note "agreement (init) K=$K errored"
+  $PY -W ignore diag_agree_heads.py $PCP --json ${TAG}_agree_pilot_K$K.json > ${TAG}_agree_pilot_K$K.log 2>&1 || note "agreement (pilot end) K=$K errored"
+  $PY gate_pilot.py $PCP runs/bp_sigreg_${TAG}${K}pilot_s0 > ${TAG}_gate_D$K.json 2> ${TAG}_gate_D$K.err; rc=$?
   if [ $rc -eq 0 ]; then PASSED="$PASSED $K"; note "pilot K=$K: PASS"
   elif [ $rc -eq 1 ]; then note "pilot K=$K: FAIL -- full runs SKIPPED"
-  else note "pilot K=$K: GATE ERROR (rc=$rc, see gate_D$K.err) -- full runs SKIPPED"; fi
-  $PY -c "import json;d=json.load(open('gate_D$K.json'));print('  ',{k:d.get(k) for k in ('reasons','error')})" 2>&1 | tee -a $STATUS
+  else note "pilot K=$K: GATE ERROR (rc=$rc, see ${TAG}_gate_D$K.err) -- full runs SKIPPED"; fi
+  $PY -c "import json;d=json.load(open('${TAG}_gate_D$K.json'));print('  ',{k:d.get(k) for k in ('reasons','error')})" 2>&1 | tee -a $STATUS
 done
 fi   # REUSE_PILOTS
 if [ "$PILOT_ONLY" = 1 ]; then note "PILOT_ONLY: stopping after the pilots (passed:${PASSED:- none})"; exit 0; fi
 [ -n "$PASSED" ] || { note "no K passed its pilot"; exit 5; }
 
-NEW=""; FLOORS="runs/pc_sigreg_T16_coupled_randD_s0 runs/pc_sigreg_T16_coupled_randD_s1 runs/pc_sigreg_T16_coupled_randD_s2"
+NEW=""; FLOORS="runs/pc_sigreg_T16_coupled_${TAG}randD_s0 runs/pc_sigreg_T16_coupled_${TAG}randD_s1 runs/pc_sigreg_T16_coupled_${TAG}randD_s2"
 run_K() {   # $1 = K; one run_arms call per seed so a failure is isolated
   local K=$1
   for s in $(seeds_for $K); do
     $PY -W ignore run_arms.py --steps $STEPS --eval-every 2000 --arms pc bp --seeds $s $OP \
-        --sparse-case D --heads-json heads_selected.json --K $K --tag ${TAG}$K >> train_heads_K$K.log 2>&1 \
+        --sparse-case D --heads-json ${TAG}_heads_selected.json --K $K --tag ${TAG}$K >> ${TAG}_train_K$K.log 2>&1 \
         || note "run_arms K=$K seed $s exited nonzero"
     for d in $(pcdir $K $s) $(bpdir $K $s); do
       if complete $d $STEPS; then NEW="$NEW $d"; else note "INCOMPLETE: $d (excluded from analysis)"; fi
     done
     if complete $(pcdir $K $s) $STEPS && complete $(bpdir $K $s) $STEPS; then
-      $PY gate_pilot.py $(pcdir $K $s) $(bpdir $K $s) > gate_full_K${K}_s$s.json 2>/dev/null; rc=$?
+      $PY gate_pilot.py $(pcdir $K $s) $(bpdir $K $s) > ${TAG}_gate_full_K${K}_s$s.json 2>/dev/null; rc=$?
       note "full-run gate (report only) K=$K seed $s: $([ $rc -eq 0 ] && echo PASS || echo "FLAG rc=$rc")"
     fi
   done
 }
 analyse_now() {   # $1 = label; incremental head analysis on what exists so far
-  $PY -W ignore diag_heads.py $NEW --heads-json heads_selected.json --csv diag_heads_$1.csv > diag_heads_$1.log 2>&1 \
-    || note "diag_heads ($1) exited nonzero"
+  $PY -W ignore diag_heads.py $NEW --heads-json ${TAG}_heads_selected.json --csv ${TAG}_diag_heads_$1.csv > ${TAG}_diag_heads_$1.log 2>&1 \
+    || note "${TAG}_diag_heads ($1) exited nonzero"
 }
 
 echo "##### 4. decisive full runs: K=1 and K=5, 3 seeds each"
@@ -136,10 +138,10 @@ done
 
 echo "##### 6. untrained floor (original encoder at init + the K=5 heads at init)"
 $PY -W ignore run_arms.py --init-only --arms pc --seeds 0 1 2 $OP --sparse-case D \
-    --heads-json heads_selected.json --K 5 --tag randD > train_heads_floor.log 2>&1 || note "floor init-only failed"
+    --heads-json ${TAG}_heads_selected.json --K 5 --tag ${TAG}randD > ${TAG}_train_floor.log 2>&1 || note "floor init-only failed"
 
 echo "##### 7. config check: reused baselines vs the new runs"
-TAG=$TAG $PY - > config_diff.txt 2>&1 <<'EOF'
+TAG=$TAG $PY - > ${TAG}_config_diff.txt 2>&1 <<'EOF'
 import json, glob, os
 TAG = os.environ['TAG']
 def flat(d, p=""):
@@ -157,21 +159,21 @@ for ref, new in (("runs/pc_sigreg_T16_coupled_alm_s0", f"runs/pc_sigreg_T16_coup
     d = sorted(k for k in set(a) | set(b) if not k.startswith(skip) and a.get(k) != b.get(k))
     print(ref, "vs", new, "differ in:", {k: (a.get(k), b.get(k)) for k in d} or "nothing")
 EOF
-cat config_diff.txt | tee -a $STATUS
+cat ${TAG}_config_diff.txt | tee -a $STATUS
 
 echo "##### 8. probe suite (embedding): new runs, floors AND reused arms, one protocol"
 rm -f probes_summary.csv
-$PY -W ignore run_probes.py $NEW $FLOORS $REUSED > probes_heads.log 2>&1 || note "run_probes exited nonzero"
-if [ -f probes_summary.csv ]; then mv probes_summary.csv probes_heads_summary.csv; else note "no probes summary written"; fi
-grep -viE "$CLEAN" probes_heads.log | grep -iE "===|class probe|knn" | tail -80
+$PY -W ignore run_probes.py $NEW $FLOORS $REUSED > ${TAG}_probes.log 2>&1 || note "run_probes exited nonzero"
+if [ -f probes_summary.csv ]; then mv probes_summary.csv ${TAG}_probes_summary.csv; else note "no probes summary written"; fi
+grep -viE "$CLEAN" ${TAG}_probes.log | grep -iE "===|class probe|knn" | tail -80
 
 echo "##### 9. head analysis: all runs, floors, reused arms (+ initial heads)"
-$PY -W ignore diag_heads.py $NEW $FLOORS $REUSED --heads-json heads_selected.json \
-    --csv diag_heads.csv > diag_heads.log 2>&1 || note "diag_heads exited nonzero"
-grep -viE "$CLEAN" diag_heads.log | grep -E "===|wrote" | tail -40
+$PY -W ignore diag_heads.py $NEW $FLOORS $REUSED --heads-json ${TAG}_heads_selected.json \
+    --csv ${TAG}_diag_heads.csv > ${TAG}_diag_heads.log 2>&1 || note "${TAG}_diag_heads exited nonzero"
+grep -viE "$CLEAN" ${TAG}_diag_heads.log | grep -E "===|wrote" | tail -40
 
 echo "##### 10. learning diagnostic"
-$PY -W ignore diag_learning.py $NEW --csv diag_learning_heads.csv > diag_learning_heads.log 2>&1 \
+$PY -W ignore diag_learning.py $NEW --csv ${TAG}_diag_learning.csv > ${TAG}_diag_learning.log 2>&1 \
   || note "diag_learning exited nonzero"
 
 MISSING=0

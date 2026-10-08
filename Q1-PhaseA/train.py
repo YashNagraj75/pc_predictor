@@ -185,6 +185,7 @@ def train(cfg: RunCfg, verbose=True):
         gnorm = _global_norm(g)                    # BEFORE clipping
         if cfg.sparse.case in ("C", "D"):          # encoder vs dictionary group
             gn_enc, gn_dict = _global_norm((g[0], g[1])), _global_norm(g[2])
+            gn_G = _global_norm(g[4]) if len(g) == 6 else None     # case E generative dictionaries
         params, opt_state = grad_update(params, g, opt_state, opt)
         params = SP.project(params, cfg)          # case C: unit-norm D columns
         params = SP.update_mu(params, Zin, cfg)   # case D: EMA of head-layer means
@@ -210,6 +211,8 @@ def train(cfg: RunCfg, verbose=True):
             return params, log
         if cfg.sparse.case in ("C", "D"):
             row.update({"grad_norm_enc": gn_enc, "grad_norm_dict": gn_dict})
+            if gn_G is not None:
+                row["grad_norm_G"] = gn_G
         row.update({k: float(v) for k, v in aux.items() if jnp.ndim(v) == 0})
         log.append(row)
 

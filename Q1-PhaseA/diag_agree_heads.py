@@ -64,6 +64,10 @@ def compare(params, cfg, Zin, A, kg):
             "enc_ratio": [_n(W(gp, l)) / (_n(W(gb, l)) + 1e-30) for l in range(L)],
             "D_cos": [_cos(a, b) for a, b in zip(gp[2], gb[2])],
             "D_ratio": [_n(a) / (_n(b) + 1e-30) for a, b in zip(gp[2], gb[2])],
+            # case E (review N5): the generative dictionaries, and no gradient on xbar
+            "G_cos": [_cos(a, b) for a, b in zip(gp[4], gb[4])] if len(gp) == 6 else [],
+            "G_ratio": [_n(a) / (_n(b) + 1e-30) for a, b in zip(gp[4], gb[4])] if len(gp) == 6 else [],
+            "xbar_grad_max": float(max(jnp.max(jnp.abs(gp[5])), jnp.max(jnp.abs(gb[5])))) if len(gp) == 6 else 0.0,
             "head_resid": float(aux.get("head_resid", float("nan")))}
 
 

@@ -116,6 +116,7 @@ class SparseCfg:
     T_test: int = 16                # case C deployed ISTA steps
     mu_momentum: float = 0.99       # case D: EMA of the head-layer mean used for centring
     beta_r: float = 0.0             # case E (= case D + beta_r > 0): code -> pixel reconstruction anchor
+    code_k: int = 1                 # case D/E: ISTA code steps per relaxation step; deployed = T_test * code_k
     step_frac: float = 0.9          # ISTA step = step_frac / Lipschitz
     below_hard: bool = True         # keep the multipliers on layers below s (D3)
     # per-sample normalisation of f_s before the threshold / LASSO, both arms:

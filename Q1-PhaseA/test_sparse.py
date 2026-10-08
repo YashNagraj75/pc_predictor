@@ -752,7 +752,7 @@ def test_E_codes_solve_anchored_lasso():
     beta_g/2||f~ - D a||^2 + beta_r/2||xbar - G a||^2 + gamma||a||_1."""
     pE, Zin, A, cE = smallE(heads=(2, 3))
     x = Zin[0]; sp = cE.sparse
-    xc = x - pE[5]
+    xc = SP.anchor_target(x, pE[5])
     def energy(f, Dl, Gl, a, g):
         return float(jnp.mean(0.5 * sp.beta_g * jnp.sum((f - a @ Dl.T) ** 2, -1)
                               + 0.5 * sp.beta_r * jnp.sum((xc - a @ Gl.T) ** 2, -1) + g * jnp.sum(jnp.abs(a), -1)))
@@ -775,7 +775,7 @@ def test_E_relaxation_hooks_match_autodiff():
     x = Zin[0]; sp = cE.sparse
     acts, ex = SP.deploy(pE, x, cE, t=3)
     a = ex["a"]
-    xc = x - pE[5]
+    xc = SP.anchor_target(x, pE[5])
     manual = sum(w * (0.5 * sp.beta_g * jnp.sum((SP.head_in(acts[l], mu) - al @ Dl.T) ** 2)
                       + 0.5 * sp.beta_r * jnp.sum((xc - al @ Gl.T) ** 2)) / x.shape[0]
                  for l, Dl, mu, Gl, al, w in zip(sp.heads, pE[2], pE[3], pE[4], a, sp.head_ws))
@@ -826,6 +826,64 @@ def test_E_pc_bp_agree_and_train():
     check("E: pair gate reads the reconstruction criteria", "head_recon_r2_first_last" in info["pc"], str(reasons)[:200])
 
 
+def test_E_target_codek_and_views():
+    """(1) The anchor target removes each view's brightness: zero row mean, and the
+    deployed code and energy are invariant to adding a per-view constant to x.
+    (2) code_k: one a_step with code_k = k equals k a_steps with code_k = 1, and the
+    deployed default runs T_test * code_k steps.  (3) Distinct views at production-like
+    beta_r: the relaxation energy uses each view's OWN pixels."""
+    pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0)
+    x = Zin[0]
+    t = SP.anchor_target(x, pE[5])
+    zero_mean = float(jnp.max(jnp.abs(jnp.mean(t, -1)))) < 1e-5
+    shift = 0.3 * jnp.linspace(-1, 1, x.shape[0])[:, None]
+    _, e1 = SP.deploy(pE, x, cE)
+    l, Dl, mu, Gl, xc2 = SP._heads(pE, cE, x + shift)[0]
+    inv_t = maxrel(xc2, SP._heads(pE, cE, x)[0][4]) < 1e-5
+    # (2)
+    acts, ex = SP.deploy(pE, x, cE, t=2)
+    eta = SP.code_step(pE, cE)
+    cK = dataclasses.replace(cE, sparse=dataclasses.replace(cE.sparse, code_k=4))
+    once = SP.a_step(pE, acts, ex["a"], cK, eta, x=x)
+    rep = ex["a"]
+    for _ in range(4):
+        rep = SP.a_step(pE, acts, rep, cE, eta, x=x)
+    same = max(maxrel(u, v) for u, v in zip(once, rep)) < 1e-5
+    ndep = SP.t_deploy(cK) == cK.sparse.T_test * 4
+    dflt = max(maxrel(u, v) for u, v in zip(SP.deploy(pE, x, cK)[1]["a"], SP.deploy(pE, x, cK, t=cK.sparse.T_test * 4)[1]["a"])) == 0.0
+    # (3) distinct views: each view's head energy uses its own pixels
+    acts_v = [SP.deploy(pE, Zin[v], cE)[0] for v in range(Zin.shape[0])]
+    a_v = [SP.deploy(pE, Zin[v], cE)[1]["a"] for v in range(Zin.shape[0])]
+    own = sum(SP.head_smooth(pE, acts_v[v], a_v[v], cE, x=Zin[v]) for v in range(Zin.shape[0]))
+    swapped = sum(SP.head_smooth(pE, acts_v[v], a_v[v], cE, x=Zin[(v + 1) % Zin.shape[0]]) for v in range(Zin.shape[0]))
+    distinct = float(jnp.max(jnp.abs(Zin[0] - Zin[1]))) > 0 and float(own) < float(swapped)
+    check("E: anchor target removes brightness; code_k = k equals k steps, deployed T_test*k; views use own pixels",
+          zero_mean and inv_t and same and ndep and dflt and distinct,
+          f"zero_mean={zero_mean} shift_inv={inv_t} codek={same} t_deploy={ndep} default={dflt} own<swapped={distinct} "
+          f"({float(own):.3g} vs {float(swapped):.3g})")
+
+
+def test_E_G_gradient_is_local_hebbian():
+    """At fixed codes, PC's gradient on G_l is  -sum_v w_l beta_r (xc_v - G a_v)^T a_v / B  (local, Hebbian),
+    at production-like beta_r and with distinct views."""
+    pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0, T=4)
+    sp = cE.sparse
+    acts_v = [SP.deploy(pE, Zin[v], cE)[0] for v in range(Zin.shape[0])]
+    a_v = [SP.deploy(pE, Zin[v], cE)[1]["a"] for v in range(Zin.shape[0])]
+    def F(G):
+        p = (pE[0], pE[1], pE[2], pE[3], G, pE[5])
+        return sum(SP.head_smooth(p, acts_v[v], a_v[v], cE, x=Zin[v]) for v in range(Zin.shape[0]))
+    g = jax.grad(F)(pE[4])
+    ok = True; worst = 0.0
+    for i, (Gl, wl) in enumerate(zip(pE[4], sp.head_ws)):
+        man = 0.0
+        for v in range(Zin.shape[0]):
+            xc = SP.anchor_target(Zin[v], pE[5]); a = a_v[v][i]
+            man = man - wl * sp.beta_r * (xc - a @ Gl.T).T @ a / Zin.shape[1]
+        worst = max(worst, maxrel(g[i], man))
+    check("E: G gradient = local Hebbian -w beta_r (xc - G a)^T a / B, summed over distinct views", worst < 1e-4, f"{worst:.1e}")
+
+
 if __name__ == "__main__":
     print("Sparse-arm gates")
     for fn in (test_golden_case_none, test_init_none_is_E_init,
@@ -845,7 +903,8 @@ if __name__ == "__main__":
                test_D_batch_invariance_and_zero_view, test_D_train_project_serialise_and_gate,
                test_D_head_reads_normalised_copy, test_E_init_and_reduction,
                test_E_codes_solve_anchored_lasso, test_E_relaxation_hooks_match_autodiff,
-               test_E_pc_bp_agree_and_train):
+               test_E_pc_bp_agree_and_train, test_E_target_codek_and_views,
+               test_E_G_gradient_is_local_hebbian):
         try:
             fn()
         except Exception as exc:

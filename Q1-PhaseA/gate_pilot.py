@@ -29,6 +29,10 @@ BAND = (0.1, 0.3)
 # case D (wiki 'Method - Sparse side-head arm plan', D4): band per head, plus two
 # collapse guards that cases B/C lacked
 BAND_D = (0.05, 0.4)
+# case E: SAME band as case D.  A widening to 0.7 (2026-10-08) was withdrawn before any
+# GPU run: the 0.55 it accommodated was an under-converged solver (review N1), now fixed.
+BAND_E = BAND_D
+CODE_ERR_MAX = 0.1              # deployed code within 10% of the LASSO optimum (code space)
 SUPPORTS_MIN_FRAC = 0.5          # distinct active patterns >= 50 % of eval rows, every head
 SPREAD_MIN_RATIO = 0.5           # embedding / head-layer spread >= 0.5 x its MAX over the log
 FNORM_MIN_RATIO = 0.5            # raw head-layer norm >= 0.5 x its value at step 0
@@ -110,8 +114,9 @@ def _gate_D(log, info):
     info["embed_spread_first_last"] = (first["embed_spread"], last["embed_spread"])
     for l in heads:
         a = last[f"h{l}_active"]
-        if not BAND_D[0] <= a <= BAND_D[1]:
-            out.append(f"head {l} deployed active fraction {a:.3f} outside {list(BAND_D)}")
+        band = BAND_E if f"h{l}_recon_r2" in last else BAND_D
+        if not band[0] <= a <= band[1]:
+            out.append(f"head {l} deployed active fraction {a:.3f} outside {list(band)}")
         if last[f"h{l}_supports"] < SUPPORTS_MIN_FRAC * last["n_rows"]:
             out.append(f"head {l}: {last[f'h{l}_supports']} distinct supports < "
                        f"{SUPPORTS_MIN_FRAC:.0%} of {last['n_rows']} rows (collapse)")
@@ -128,6 +133,18 @@ def _gate_D(log, info):
             out.append(f"layer {l} participation ratio {last[f'h{l}_pr']:.2f} < {PR_MIN_RATIO} x its max {mx:.2f} (rank collapse)")
         if last[f"h{l}_fnorm"] < FNORM_MIN_RATIO * first[f"h{l}_fnorm"]:
             out.append(f"layer {l} norm {last[f'h{l}_fnorm']:.3f} < {FNORM_MIN_RATIO} x initial {first[f'h{l}_fnorm']:.3f} (scale shrink)")
+    for l in heads:          # solver convergence (both arms, every case-D/E head)
+        if f"h{l}_code_err" in last and not last[f"h{l}_code_err"] <= CODE_ERR_MAX:
+            out.append(f"head {l} deployed code {last[f'h{l}_code_err']:.3f} from the LASSO optimum > {CODE_ERR_MAX}")
+        if f"h{l}_recon_r2_enc" in last:      # encoder-dependent pixel information must not collapse
+            mx = max(e[f"h{l}_recon_r2_enc"] for e in ev)
+            if mx > 0 and last[f"h{l}_recon_r2_enc"] < 0.5 * mx:
+                out.append(f"layer {l} encoder-only reconstruction R2 {last[f'h{l}_recon_r2_enc']:.3f} < 0.5 x its max {mx:.3f}")
+    if f"h{heads[0]}_code_err" in last:
+        info["head_code_err_last"] = {l: round(last[f"h{l}_code_err"], 3) for l in heads}
+        info["head_active_opt_last"] = {l: round(last[f"h{l}_active_opt"], 3) for l in heads}
+    if f"h{heads[0]}_recon_r2_enc" in last:
+        info["head_recon_r2_enc_first_last"] = {l: (round(first[f"h{l}_recon_r2_enc"], 3), round(last[f"h{l}_recon_r2_enc"], 3)) for l in heads}
     for l in heads:          # case E anchor: codes must keep explaining the pixels
         if f"h{l}_recon_r2" in last:
             mx = max(e[f"h{l}_recon_r2"] for e in ev)

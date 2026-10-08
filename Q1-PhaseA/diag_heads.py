@@ -61,7 +61,7 @@ def k5_sparse(heads_json):
     st = sel["sets"]["5"]
     return SparseCfg(case="D", heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
                      head_ws=tuple(st["head_ws"]), beta_g=sel["beta_g"], T_test=sel["T_test"],
-                     beta_r=sel.get("beta_r", 0.0))
+                     beta_r=sel.get("beta_r", 0.0), code_k=sel.get("code_k", 1))
 
 
 def init_D(cfg):
@@ -117,7 +117,7 @@ def analyse_one(params, cfg, role, tag, data, rows, emb=True, subsets=None):
                      "metric": metric, "condition": condition, "t": t, "head": head, "value": value})
 
     D_on = sp.case == "D"
-    ts = [("0", 0), ("T", sp.T_test)] if D_on else [("", None)]
+    ts = [("0", 0), ("T", SP.t_deploy(cfg))] if D_on else [("", None)]
     conds = [("clean", 0.0)] + [("noise", s) for s in NOISE] + [("occlusion", o) for o in OCCL]
     ftr = {lab: _feats(params, cfg, xtr, t) for lab, t in ts}
     tr_T = ftr[ts[-1][0]]

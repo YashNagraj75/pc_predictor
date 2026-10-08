@@ -55,12 +55,13 @@ def head_sets():
 
 
 BETA_R = [0.0]                          # set in main() for case E
+CODE_K = [1]                            # ISTA code steps per relaxation step (--code-k)
 
 
 def cfg_for(heads, gammas, ws):
     return RunCfg(arm="bp", pc=PC, sparse=SparseCfg(case="D", heads=tuple(heads), gammas=tuple(gammas),
                                                      head_ws=tuple(ws), beta_g=BETA_G, T_test=T_TEST,
-                                                     beta_r=BETA_R[0]))
+                                                     beta_r=BETA_R[0], code_k=CODE_K[0]))
 
 
 def main():
@@ -69,10 +70,15 @@ def main():
     ap.add_argument("--n", type=int, default=1024)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--anchor", action="store_true", help="case E: add the reconstruction anchor")
+    ap.add_argument("--grad-ratio", type=float, default=None,
+                    help="head/task encoder-gradient ratio at init (default 0.25; 0.1 with --anchor). "
+                         "Decoupled from --anchor so the D@0.1x control can be selected (review D-E1)")
+    ap.add_argument("--code-k", type=int, default=1, help="ISTA code steps per relaxation step")
     args = ap.parse_args()
     global GRAD_RATIO
-    if args.anchor:
-        GRAD_RATIO = 0.1
+    GRAD_RATIO = args.grad_ratio if args.grad_ratio is not None else (0.1 if args.anchor else 0.25)
+    CODE_K[0] = args.code_k
+    NSTEP = T_TEST * args.code_k            # deployed ISTA steps after a^(0)
 
     base = RunCfg()
     Xtr = D.load_dataset(base.data)[0]
@@ -96,7 +102,7 @@ def main():
             eta = cfg_all.sparse.step_frac / (mst * SP.spectral_sq(Dst))
 
             def frac(gm):
-                return float(jnp.mean(SP.ista(F, Dst, gm, mst, T_TEST, eta) != 0))
+                return float(jnp.mean(SP.ista(F, Dst, gm, mst, NSTEP, eta) != 0))
             lo, hi = 1e-5, 10.0
             for _ in range(40):
                 mid = float(np.sqrt(lo * hi)); fm = frac(mid)
@@ -113,7 +119,7 @@ def main():
         for (l, Dl, mu, Gl, xc) in SP._heads(params, cfg_all, x):
             f = SP.head_in(acts[l], mu)
             F, Dst, mst = SP.stacked(f, Dl, xc, Gl, cfg_all)
-            a = SP.ista(F, Dst, gammas[l][0], mst, T_TEST, cfg_all.sparse.step_frac / (mst * SP.spectral_sq(Dst)))
+            a = SP.ista(F, Dst, gammas[l][0], mst, NSTEP, cfg_all.sparse.step_frac / (mst * SP.spectral_sq(Dst)))
             eh.append(float(jnp.mean(jnp.sum((f - a @ Dl.T) ** 2, -1))))
             er.append(float(jnp.mean(jnp.sum((xc - a @ Gl.T) ** 2, -1))))
         return float(np.mean(eh)), float(np.mean(er))
@@ -126,13 +132,22 @@ def main():
     if args.anchor:
         BETA_R[0] = 1.0
         cfg_all, params = build()                  # now carries G and xbar
-        for rnd in range(2):                       # beta_r <-> gamma fixed point, 2 rounds
+        # case E calibrates on AUGMENTED training views (mu_rows switches on recon(cfg))
+        x = SP.mu_rows(Xtr, cfg_all, n=args.n)
+        z, hs = E.forward(params, x, base.enc)
+        acts = [*hs, z]
+        gammas = select_gammas(cfg_all, params, acts)
+        for rnd in range(8):                       # beta_r <-> gamma fixed point, to 2 %
             eh, er = energy_split(params, cfg_all, acts, gammas)
+            ratio = BETA_R[0] * er / (BETA_G * eh)
+            print(f"round {rnd}: beta_r={BETA_R[0]:.5g} (E_head {eh:.4g}, E_recon {er:.4g}, ratio {ratio:.4f})", flush=True)
+            if abs(ratio - 1.0) < 0.02:
+                break
             BETA_R[0] = BETA_G * eh / er           # equal energy:  beta_g E_h = beta_r E_r
             beta_r_hist.append(BETA_R[0])
             cfg_all, params = build()
             gammas = select_gammas(cfg_all, params, acts)
-            print(f"round {rnd}: beta_r={BETA_R[0]:.5g} (E_head {eh:.4g}, E_recon {er:.4g})", flush=True)
+        assert abs(ratio - 1.0) < 0.02, f"beta_r did not converge (ratio {ratio:.3f})"
         eh, er = energy_split(params, cfg_all, acts, gammas)
         print(f"final: beta_g E_head = {BETA_G * eh:.4g}, beta_r E_recon = {BETA_R[0] * er:.4g}", flush=True)
     for l in all_heads:
@@ -184,7 +199,8 @@ def main():
                    "views); equal energy per head within K, total scaled so the head gradient on encoder "
                    f"layers <= max head is {GRAD_RATIO} x the task gradient at init (BP, one training batch)"
                    + ("; case E: beta_r for equal head and reconstruction energy at init" if args.anchor else ""),
-           "beta_g": BETA_G, "beta_r": BETA_R[0], "beta_r_rounds": beta_r_hist, "grad_ratio": GRAD_RATIO, "T_test": T_TEST, "task_loss_at_init": task, "n_views": V,
+           "beta_g": BETA_G, "beta_r": BETA_R[0], "beta_r_rounds": beta_r_hist, "grad_ratio": GRAD_RATIO, "T_test": T_TEST, "code_k": CODE_K[0],
+           "calibration_views": "augmented (fixed key)" if args.anchor else "centre", "task_loss_at_init": task, "n_views": V,
            "n_images": int(x.shape[0]), "per_head_energy": {str(k): v for k, v in e.items()},
            "sets": sets}
     json.dump(out, open(args.out, "w"), indent=2)
