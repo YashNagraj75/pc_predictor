@@ -1,0 +1,25 @@
+[sdpc bp s0] {"step": 1, "energy": 203.66563415527344, "active": [0.5056, 0.3568, 0.3125, 0.2542, 0.1462], "monotone": true}  4s
+[sdpc bp s0] {"step": 500, "energy": 64.63819122314453, "active": [0.4953, 0.4159, 0.4104, 0.4343, 0.472], "monotone": true}  24s
+[sdpc bp s0] {"step": 1000, "energy": 68.09930419921875, "active": [0.5048, 0.3545, 0.3504, 0.374, 0.4309], "monotone": true}  44s
+[sdpc bp s0] {"step": 1500, "energy": 64.19451141357422, "active": [0.506, 0.3192, 0.3073, 0.3326, 0.4128], "monotone": true}  64s
+[sdpc bp s0] {"step": 2000, "energy": 63.66433334350586, "active": [0.509, 0.314, 0.2918, 0.3259, 0.402], "monotone": true}  84s
+[sdpc bp s0] {"step": 2500, "energy": 62.48296356201172, "active": [0.5081, 0.3151, 0.289, 0.3217, 0.4013], "monotone": true}  104s
+[sdpc bp s0] {"step": 3000, "energy": 63.707218170166016, "active": [0.5034, 0.3159, 0.2872, 0.3224, 0.4049], "monotone": true}  124s
+[sdpc bp s0] {"step": 3500, "energy": 63.945892333984375, "active": [0.5044, 0.3158, 0.2834, 0.3185, 0.3961], "monotone": true}  144s
+[sdpc bp s0] {"step": 4000, "energy": 65.880615234375, "active": [0.507, 0.3192, 0.2929, 0.3246, 0.4004], "monotone": true}  164s
+sdpc   bp s0 pairs   clean        k=1 T=     nmse 0.3949 cos 0.7679 retr1 0.1006
+sdpc   bp s0 k_seen  clean        k=1 T=     nmse 0.3932 cos 0.7677 retr1 0.1055
+sdpc   bp s0 k_seen  clean        k=2 T=     nmse 0.3499 cos 0.7978 retr1 0.1172
+sdpc   bp s0 k_seen  clean        k=3 T=     nmse 0.3286 cos 0.8104 retr1 0.1330
+sdpc   bp s0 T_inf   clean        k=1 T=5    nmse 0.7820 cos 0.7634 retr1 0.0015
+sdpc   bp s0 T_inf   clean        k=1 T=10   nmse 0.6398 cos 0.7642 retr1 0.0080
+sdpc   bp s0 T_inf   clean        k=1 T=25   nmse 0.4493 cos 0.7661 retr1 0.0447
+sdpc   bp s0 T_inf   clean        k=1 T=50   nmse 0.3932 cos 0.7677 retr1 0.1055
+sdpc   bp s0 T_inf   clean        k=1 T=100  nmse 0.3978 cos 0.7679 retr1 0.1390
+sdpc   bp s0 T_inf   clean        k=1 T=200  nmse 0.4077 cos 0.7657 retr1 0.1533
+sdpc   bp s0 robust  noise=0.1    k=1 T=     nmse 0.7401 cos 0.5443 retr1 0.0242
+sdpc   bp s0 robust  noise=0.2    k=1 T=     nmse 1.6150 cos 0.2852 retr1 0.0050
+sdpc   bp s0 robust  occlude=0.25 k=1 T=     nmse 1.7469 cos 0.1352 retr1 0.0033
+sdpc   bp s0 robust  noise=0.1    k=2 T=     nmse 0.4522 cos 0.7105 retr1 0.0650
+sdpc   bp s0 robust  noise=0.2    k=2 T=     nmse 0.7060 cos 0.5540 retr1 0.0225
+sdpc   bp s0 robust  occlude=0.25 k=2 T=     nmse 0.7780 cos 0.5125 retr1 0.0132

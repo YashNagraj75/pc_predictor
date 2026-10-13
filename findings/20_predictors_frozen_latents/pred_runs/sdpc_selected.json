@@ -1,0 +1,13 @@
+{
+ "lam": 0.01,
+ "beta": 0.3,
+ "lam_decay": 0.3,
+ "T_inf": 50,
+ "steps": 4000,
+ "val_k1_nmse": 0.39060503244400024,
+ "val_k1_nmse_range": [
+  0.39060503244400024,
+  0.3908371329307556
+ ],
+ "rule": "lowest val k=1 nmse over the 8-config sweep (pred_sdpc_prereg.json)"
+}

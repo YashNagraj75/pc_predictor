@@ -1,0 +1,20 @@
+{
+ "written": "2026-10-12, before any SDPC or BP-set test-set number was computed",
+ "target": "frozen latents, layer emb (pred_target_check.json), standardised with train stats (pred_ff.load)",
+ "primary_backbone": "bp (runs/bp_sigreg_e400); control: rand (same architecture at init, PRNGKey(0))",
+ "validation": "last 10% of train images; SDPC hyperparameters (lam, beta, lam_decay) chosen by lowest val k=1 nmse at T_inf=50, 1500 steps (pred_runs/sdpc_sweep.json); BP set predictor uses fixed defaults (width 256, lr 1e-3, 6000 steps)",
+ "methods": ["SDPC (5 layers, local learning)", "BP set predictor (mean-pooled MLP, backprop)", "copy (mean of seen latents)", "feedforward BP and PC (k=1 only, pred_ff, curvature-tracking PC step)"],
+ "tests": {
+  "a_k_seen": "k in {1,2,3}, cases pred_eval.k_cases(2000,k); k=1 also on the 12 ordered pairs (pred_eval.eval_pairs) for comparison with pred_ff",
+  "b_robustness": "k in {1,2}: corrupt ONE seen view (the first in the case's permutation) in pixel space and re-encode: gaussian sigma 0.1, 0.2; occlusion 25% area (16x16 square, zeros); seed 0; report nmse/cos/retr1 and degradation = metric(corrupt) - metric(clean)",
+  "c_inference_budget": "SDPC test nmse at T_inf in {5,10,25,50,100,200} with the trained dictionaries",
+  "d_backbones": "all tests on bp; tests a and c also on rand"
+ },
+ "seeds": "SDPC and BP set: 3 seeds on bp, 3 on rand (if time allows, otherwise 1 on rand, declared)",
+ "claims_tested": [
+  "H1: SDPC error falls with k faster than BP set (fusion of evidence through inference)",
+  "H2: SDPC degrades less than BP set / feedforward under corruption of a seen view (robustness)",
+  "H3: SDPC test error keeps improving with T_inf beyond the training budget (inference does useful work)"
+ ],
+ "metrics": "nmse (primary), cosine, retrieval@1 among 2000 test images of the same target view"
+}

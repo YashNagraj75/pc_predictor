@@ -1,0 +1,4 @@
+copy   rand s0 pairs   clean        k=1 T=     nmse 1.7899 cos 0.0897 retr1 0.0049
+copy   rand s0 k_seen  clean        k=1 T=     nmse 1.7914 cos 0.0940 retr1 0.0047
+copy   rand s0 k_seen  clean        k=2 T=     nmse 1.3442 cos 0.1160 retr1 0.0037
+copy   rand s0 k_seen  clean        k=3 T=     nmse 1.2075 cos 0.1263 retr1 0.0035

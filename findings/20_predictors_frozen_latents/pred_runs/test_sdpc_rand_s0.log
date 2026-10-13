@@ -1,0 +1,19 @@
+[sdpc rand s0] {"step": 1, "energy": 235.0712127685547, "active": [0.5079, 0.308, 0.2339, 0.1154, 0.0327], "monotone": true}  4s
+[sdpc rand s0] {"step": 500, "energy": 118.79048919677734, "active": [0.6922, 0.5113, 0.4698, 0.4674, 0.4658], "monotone": true}  24s
+[sdpc rand s0] {"step": 1000, "energy": 124.45735931396484, "active": [0.6907, 0.4732, 0.4154, 0.4224, 0.4325], "monotone": true}  44s
+[sdpc rand s0] {"step": 1500, "energy": 117.51689147949219, "active": [0.6897, 0.468, 0.3971, 0.3946, 0.413], "monotone": true}  64s
+[sdpc rand s0] {"step": 2000, "energy": 114.70149230957031, "active": [0.6831, 0.4593, 0.3854, 0.3791, 0.3958], "monotone": true}  84s
+[sdpc rand s0] {"step": 2500, "energy": 117.7485580444336, "active": [0.6914, 0.4649, 0.3926, 0.3798, 0.3989], "monotone": true}  104s
+[sdpc rand s0] {"step": 3000, "energy": 123.80823516845703, "active": [0.6763, 0.4569, 0.3931, 0.3809, 0.3965], "monotone": true}  124s
+[sdpc rand s0] {"step": 3500, "energy": 122.301025390625, "active": [0.6779, 0.466, 0.3956, 0.3854, 0.3949], "monotone": true}  144s
+[sdpc rand s0] {"step": 4000, "energy": 125.49361419677734, "active": [0.6894, 0.4677, 0.4014, 0.386, 0.3935], "monotone": true}  164s
+sdpc   rand s0 pairs   clean        k=1 T=     nmse 1.0714 cos 0.1964 retr1 0.0032
+sdpc   rand s0 k_seen  clean        k=1 T=     nmse 1.0722 cos 0.1967 retr1 0.0043
+sdpc   rand s0 k_seen  clean        k=2 T=     nmse 1.0158 cos 0.2101 retr1 0.0030
+sdpc   rand s0 k_seen  clean        k=3 T=     nmse 0.9962 cos 0.2162 retr1 0.0020
+sdpc   rand s0 T_inf   clean        k=1 T=5    nmse 0.9610 cos 0.1677 retr1 0.0010
+sdpc   rand s0 T_inf   clean        k=1 T=10   nmse 0.9731 cos 0.1739 retr1 0.0012
+sdpc   rand s0 T_inf   clean        k=1 T=25   nmse 1.0179 cos 0.1872 retr1 0.0023
+sdpc   rand s0 T_inf   clean        k=1 T=50   nmse 1.0722 cos 0.1967 retr1 0.0043
+sdpc   rand s0 T_inf   clean        k=1 T=100  nmse 1.1338 cos 0.2027 retr1 0.0057
+sdpc   rand s0 T_inf   clean        k=1 T=200  nmse 1.1742 cos 0.2097 retr1 0.0058

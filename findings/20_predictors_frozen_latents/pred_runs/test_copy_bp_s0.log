@@ -1,0 +1,10 @@
+copy   bp s0 pairs   clean        k=1 T=     nmse 0.5037 cos 0.7134 retr1 0.1586
+copy   bp s0 k_seen  clean        k=1 T=     nmse 0.5018 cos 0.7136 retr1 0.1627
+copy   bp s0 k_seen  clean        k=2 T=     nmse 0.3805 cos 0.7679 retr1 0.1935
+copy   bp s0 k_seen  clean        k=3 T=     nmse 0.3331 cos 0.7914 retr1 0.2205
+copy   bp s0 robust  noise=0.1    k=1 T=     nmse 1.2350 cos 0.4705 retr1 0.0373
+copy   bp s0 robust  noise=0.2    k=1 T=     nmse 3.1282 cos 0.2235 retr1 0.0068
+copy   bp s0 robust  occlude=0.25 k=1 T=     nmse 3.0006 cos 0.1068 retr1 0.0027
+copy   bp s0 robust  noise=0.1    k=2 T=     nmse 0.5635 cos 0.6645 retr1 0.0940
+copy   bp s0 robust  noise=0.2    k=2 T=     nmse 1.0398 cos 0.4943 retr1 0.0297
+copy   bp s0 robust  occlude=0.25 k=2 T=     nmse 1.0099 cos 0.4697 retr1 0.0248

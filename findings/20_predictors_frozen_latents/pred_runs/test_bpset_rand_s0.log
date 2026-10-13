@@ -1,0 +1,7 @@
+[bpset s0] step 2000 loss 20.998 17s
+[bpset s0] step 4000 loss 19.445 23s
+[bpset s0] step 6000 loss 17.558 28s
+bpset  rand s0 pairs   clean        k=1 T=     nmse 0.3254 cos 0.7886 retr1 0.1863
+bpset  rand s0 k_seen  clean        k=1 T=     nmse 0.3265 cos 0.7874 retr1 0.1888
+bpset  rand s0 k_seen  clean        k=2 T=     nmse 0.3128 cos 0.7981 retr1 0.2000
+bpset  rand s0 k_seen  clean        k=3 T=     nmse 0.3121 cos 0.7996 retr1 0.2065

@@ -1,0 +1,5 @@
+ffbp   bp s2 pairs   clean        k=1 T=     nmse 0.2982 cos 0.8089 retr1 0.2428
+ffbp   bp s2 k_seen  clean        k=1 T=     nmse 0.2992 cos 0.8069 retr1 0.2525
+ffbp   bp s2 robust  noise=0.1    k=1 T=     nmse 0.6881 cos 0.5711 retr1 0.0445
+ffbp   bp s2 robust  noise=0.2    k=1 T=     nmse 1.4803 cos 0.2986 retr1 0.0093
+ffbp   bp s2 robust  occlude=0.25 k=1 T=     nmse 1.8491 cos 0.1570 retr1 0.0053

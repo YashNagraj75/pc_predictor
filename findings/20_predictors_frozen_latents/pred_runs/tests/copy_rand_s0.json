@@ -1,0 +1,41 @@
+{
+ "method": "copy",
+ "backbone": "rand",
+ "seed": 0,
+ "rows": [
+  {
+   "test": "pairs",
+   "condition": "clean",
+   "k": 1,
+   "nmse": 1.7898857593536377,
+   "cos": 0.08969374746084213,
+   "retr1": 0.004916666666666666
+  },
+  {
+   "test": "k_seen",
+   "condition": "clean",
+   "k": 1,
+   "nmse": 1.7914271354675293,
+   "cos": 0.09402217715978622,
+   "retr1": 0.004666666666666667
+  },
+  {
+   "test": "k_seen",
+   "condition": "clean",
+   "k": 2,
+   "nmse": 1.344177007675171,
+   "cos": 0.1159992665052414,
+   "retr1": 0.00375
+  },
+  {
+   "test": "k_seen",
+   "condition": "clean",
+   "k": 3,
+   "nmse": 1.2074567079544067,
+   "cos": 0.1263248324394226,
+   "retr1": 0.0035
+  }
+ ],
+ "seconds": 0.4146146774291992,
+ "train_log": null
+}

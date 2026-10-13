@@ -1,0 +1,7 @@
+{"backbone": "bp", "layer": "emb", "tau_gain": 0.1413, "full_vs_copy": 0.3956}  copy:nmse=0.5037,retr=0.159 no_tau:nmse=0.3546,retr=0.126 full:nmse=0.3045,retr=0.228
+{"backbone": "bp", "layer": "h7", "tau_gain": 0.4669, "full_vs_copy": 0.6944}  copy:nmse=0.5424,retr=0.053 no_tau:nmse=0.3109,retr=0.054 full:nmse=0.1657,retr=0.398
+{"backbone": "bp", "layer": "h3", "tau_gain": 0.4377, "full_vs_copy": 0.7004}  copy:nmse=0.9763,retr=0.030 no_tau:nmse=0.5203,retr=0.024 full:nmse=0.2925,retr=0.272
+{"backbone": "rand", "layer": "emb", "tau_gain": 0.5263, "full_vs_copy": 0.7554}  copy:nmse=1.7899,retr=0.005 no_tau:nmse=0.9243,retr=0.002 full:nmse=0.4379,retr=0.039
+{"backbone": "rand", "layer": "h7", "tau_gain": 0.558, "full_vs_copy": 0.7728}  copy:nmse=1.8001,retr=0.007 no_tau:nmse=0.9250,retr=0.003 full:nmse=0.4089,retr=0.052
+{"backbone": "rand", "layer": "h3", "tau_gain": 0.5418, "full_vs_copy": 0.7647}  copy:nmse=1.8063,retr=0.007 no_tau:nmse=0.9275,retr=0.003 full:nmse=0.4250,retr=0.054
+TARGET LAYER: emb

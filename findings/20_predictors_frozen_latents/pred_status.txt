@@ -1,0 +1,22 @@
+11:32 start backend gpu
+11:33 gates: 12 PASS
+11:35 target layer: emb
+11:50 ff grid done: 12 runs
+11:59 sdpc selected: {"lam":0.01,"beta":0.3,"lam_decay":0.3,"T_inf":50,"steps":4000,"val_k1_nmse":0.39060503244400024,"val_k1_nmse_range":[0.39060503244400024,0.3908371329307556],"rule":"lowestvalk=1nmseoverthe8-configsweep(pred_sdpc_prereg.json)"}
+12:00 done copy_bp_s0
+12:00 done copy_rand_s0
+12:00 done ffbp_bp_s0
+12:01 done ffpcA_bp_s0
+12:01 done ffbp_bp_s1
+12:02 done ffpcA_bp_s1
+12:02 done ffbp_bp_s2
+12:02 done ffpcA_bp_s2
+12:04 done bpset_bp_s0
+12:05 done bpset_bp_s1
+12:06 done bpset_bp_s2
+12:10 done sdpc_bp_s0
+12:13 done sdpc_bp_s1
+12:17 done sdpc_bp_s2
+12:17 done bpset_rand_s0
+12:21 done sdpc_rand_s0
+12:21 ALL DONE

@@ -1,0 +1,13 @@
+[bpset s1] step 2000 loss 17.119 17s
+[bpset s1] step 4000 loss 15.202 22s
+[bpset s1] step 6000 loss 13.733 28s
+bpset  bp s1 pairs   clean        k=1 T=     nmse 0.2913 cos 0.8139 retr1 0.2747
+bpset  bp s1 k_seen  clean        k=1 T=     nmse 0.2928 cos 0.8117 retr1 0.2823
+bpset  bp s1 k_seen  clean        k=2 T=     nmse 0.2515 cos 0.8395 retr1 0.3322
+bpset  bp s1 k_seen  clean        k=3 T=     nmse 0.2355 cos 0.8474 retr1 0.3580
+bpset  bp s1 robust  noise=0.1    k=1 T=     nmse 0.7279 cos 0.5625 retr1 0.0487
+bpset  bp s1 robust  noise=0.2    k=1 T=     nmse 1.5619 cos 0.2820 retr1 0.0093
+bpset  bp s1 robust  occlude=0.25 k=1 T=     nmse 2.0179 cos 0.1616 retr1 0.0072
+bpset  bp s1 robust  noise=0.1    k=2 T=     nmse 0.3847 cos 0.7469 retr1 0.1600
+bpset  bp s1 robust  noise=0.2    k=2 T=     nmse 0.7065 cos 0.5665 retr1 0.0488
+bpset  bp s1 robust  occlude=0.25 k=2 T=     nmse 0.7766 cos 0.5329 retr1 0.0360

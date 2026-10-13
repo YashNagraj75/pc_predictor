@@ -1,0 +1,132 @@
+{
+ "rows": [
+  {
+   "backbone": "bp",
+   "layer": "emb",
+   "copy": {
+    "nmse": 0.5037305951118469,
+    "cos": 0.713381826877594,
+    "retr1": 0.15858333333333333
+   },
+   "full": {
+    "nmse": 0.30445659160614014,
+    "cos": 0.8045470118522644,
+    "retr1": 0.22808333333333333
+   },
+   "no_tau": {
+    "nmse": 0.35455086827278137,
+    "cos": 0.7755231857299805,
+    "retr1": 0.125625
+   },
+   "tau_gain": 0.14128939215599415,
+   "full_vs_copy": 0.39559638711534
+  },
+  {
+   "backbone": "bp",
+   "layer": "h7",
+   "copy": {
+    "nmse": 0.5423921942710876,
+    "cos": 0.645919144153595,
+    "retr1": 0.05266666666666667
+   },
+   "full": {
+    "nmse": 0.1657380759716034,
+    "cos": 0.8845764994621277,
+    "retr1": 0.397625
+   },
+   "no_tau": {
+    "nmse": 0.31089556217193604,
+    "cos": 0.7710979580879211,
+    "retr1": 0.05370833333333333
+   },
+   "tau_gain": 0.4669011200618409,
+   "full_vs_copy": 0.6944313031747512
+  },
+  {
+   "backbone": "bp",
+   "layer": "h3",
+   "copy": {
+    "nmse": 0.9762529730796814,
+    "cos": 0.4354654848575592,
+    "retr1": 0.029833333333333333
+   },
+   "full": {
+    "nmse": 0.2925317585468292,
+    "cos": 0.8147140145301819,
+    "retr1": 0.27191666666666664
+   },
+   "no_tau": {
+    "nmse": 0.5202548503875732,
+    "cos": 0.6164378523826599,
+    "retr1": 0.024458333333333332
+   },
+   "tau_gain": 0.43771450025136255,
+   "full_vs_copy": 0.7003525043063271
+  },
+  {
+   "backbone": "rand",
+   "layer": "emb",
+   "copy": {
+    "nmse": 1.7898857593536377,
+    "cos": 0.08969374746084213,
+    "retr1": 0.004916666666666666
+   },
+   "full": {
+    "nmse": 0.4378514289855957,
+    "cos": 0.7013922333717346,
+    "retr1": 0.03883333333333333
+   },
+   "no_tau": {
+    "nmse": 0.9243001341819763,
+    "cos": 0.22163668274879456,
+    "retr1": 0.00225
+   },
+   "tau_gain": 0.5262886882807793,
+   "full_vs_copy": 0.7553746507577599
+  },
+  {
+   "backbone": "rand",
+   "layer": "h7",
+   "copy": {
+    "nmse": 1.8000714778900146,
+    "cos": 0.08856295794248581,
+    "retr1": 0.006625
+   },
+   "full": {
+    "nmse": 0.40891018509864807,
+    "cos": 0.7194804549217224,
+    "retr1": 0.05225
+   },
+   "no_tau": {
+    "nmse": 0.9250460863113403,
+    "cos": 0.22455306351184845,
+    "retr1": 0.0031666666666666666
+   },
+   "tau_gain": 0.5579569589562889,
+   "full_vs_copy": 0.7728366955861334
+  },
+  {
+   "backbone": "rand",
+   "layer": "h3",
+   "copy": {
+    "nmse": 1.8062807321548462,
+    "cos": 0.08889777958393097,
+    "retr1": 0.006958333333333334
+   },
+   "full": {
+    "nmse": 0.42501938343048096,
+    "cos": 0.714047372341156,
+    "retr1": 0.05391666666666667
+   },
+   "no_tau": {
+    "nmse": 0.9275228381156921,
+    "cos": 0.22607311606407166,
+    "retr1": 0.00325
+   },
+   "tau_gain": 0.5417693603168537,
+   "full_vs_copy": 0.7646991545309549
+  }
+ ],
+ "choice": "emb",
+ "rule": "target-space rule (written before the check was run, 2026-10-12):\non the BP backbone, for each layer, tau_gain = (nmse_noTau - nmse_full) / nmse_noTau.\nUse \"emb\" if its tau_gain >= 0.10 AND full beats copy by >= 10 % relative nmse;\notherwise the layer with the largest tau_gain among those where full beats copy by\n>= 10 %; if none qualifies, STOP -- no layer of this encoder carries enough view\ninformation and the predictor experiment needs a different target (patch level, or\na non-invariant backbone).  The same layer is then used for the untrained backbone."
+}
