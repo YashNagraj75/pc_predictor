@@ -160,7 +160,9 @@ def gn_lambda(p, s0, Ph, H, iters=25):
     p, s0 = jax.lax.stop_gradient(p), jax.lax.stop_gradient(s0)
     f = lambda s: topdown(p, s, Ph, H)[1]
     _, vjp = jax.vjp(f, s0)
-    v = jax.random.normal(jax.random.PRNGKey(23), s0.shape)
+    # SAME start vector for every sample (a per-row random start made each sample's step depend on its position
+    # in the batch: reordering a batch changed BP inference by 11% on the GPU, 2026-10-13)
+    v = jnp.broadcast_to(jnp.linspace(1.0, 2.0, s0.shape[-1]), s0.shape)
     v = v / jnp.linalg.norm(v, axis=-1, keepdims=True)
     def body(_, v):
         w = vjp(jax.jvp(f, (s0,), (v,))[1])[0]

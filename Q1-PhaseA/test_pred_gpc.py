@@ -116,6 +116,11 @@ def main():
         b16 = G.ad_infer(p, s0, Z, Ph, dataclasses.replace(cfg, T=50))[0]
         bi = max(float(jnp.max(jnp.abs(a4 - a16[:4]))), float(jnp.max(jnp.abs(b4 - b16[:4]))))
         check(f"d{depth} inference independent of the batch (PC and BP)", bi < 1e-5, f"{bi:.1e}")
+        perm = jnp.arange(16)[::-1]; inv = jnp.argsort(perm)
+        pp = G.pc_infer(p, s0[perm], Z[perm], Ph[perm], dataclasses.replace(cfg, T=50))[0][inv]
+        bpp = G.ad_infer(p, s0[perm], Z[perm], Ph[perm], dataclasses.replace(cfg, T=50))[0][inv]
+        pi_ = max(float(jnp.max(jnp.abs(pp - a16))), float(jnp.max(jnp.abs(bpp - b16))))
+        check(f"d{depth} inference invariant to reordering the batch (PC and BP)", pi_ < 1e-5, f"{pi_:.1e}")
         # prediction depends on the seen views (not vacuous), and T=0 with amortised start is G(s0)
         for rule in ("pc", "bp"):
             cc = dataclasses.replace(cfg, rule=rule, start="amort", T=30)
