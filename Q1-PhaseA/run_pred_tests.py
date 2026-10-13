@@ -9,12 +9,12 @@ Writes pred_runs/tests/<method>_<backbone>_s<seed>.json : rows of {test, conditi
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
-import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B, pred_gpc as G
+import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B
 
 CORR = [("noise", 0.1), ("noise", 0.2), ("occlude", 0.25)]
 
 
-def corrupted_latents(backbone, zstats, seen_first):
+def corrupted_latents(backbone, zstats, seen_first, seed=0):
     """Re-encode the test views with the first seen view corrupted; standardise like pred_ff.load."""
     import data as D, encoder as E
     from run_probes import load_run
@@ -29,14 +29,14 @@ def corrupted_latents(backbone, zstats, seen_first):
     mu, sd = zstats
     out = {}
     for kind, lvl in CORR:
-        z = PE.encode(p, cfg.enc, PE.corrupt(pix, seen_first, kind, lvl, seed=0))
+        z = PE.encode(p, cfg.enc, PE.corrupt(pix, seen_first, kind, lvl, seed=seed))
         out[(kind, lvl)] = (z - mu) / sd
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("method", choices=["sdpc", "bpset", "ff", "copy", "gpc"])
+    ap.add_argument("method", choices=["sdpc", "bpset", "ff", "copy"])
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--arm", default="bp"); ap.add_argument("--sel", default="pred_runs/sdpc_selected.json")
     ap.add_argument("--steps", type=int, default=None)
@@ -58,14 +58,6 @@ def main():
     elif a.method == "bpset":
         model = B.train(B.BCfg(seed=a.seed, width=384, steps=a.steps or 6000), ztr, ttr)
         predict = B.make_predict(model); extra = {"n_params": B.n_params(model)}; Tsweep = {}
-    elif a.method == "gpc":
-        c = json.load(open(a.gsel))[f"gpc_{a.rule}_d{a.depth}_{a.start}"]["c"]
-        cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, seed=a.seed, c=c, steps=a.steps or 6000)
-        p, am, log = G.train(cfg, ztr, ttr, verbose=True)
-        predict = G.make_predict(p, am, cfg)
-        extra = {"log": log, "n_params": G.n_params(p) + (G.n_params(eqx.filter(am, eqx.is_inexact_array)) if am is not None else 0),
-                 "n_params_generator": G.n_params(p), "cfg": cfg.__dict__}
-        Tsweep = {T: G.make_predict(p, am, cfg, T=T) for T in (5, 10, 25, 50, 100, 200, 400)}
     elif a.method == "ff":
         f = f"pred_runs/ff_{a.arm}_{a.backbone}_emb_s{a.seed}.eqx"
         predict = PF.make_pair_predict(PF.load_model(f, seed=a.seed)); Tsweep = {}
