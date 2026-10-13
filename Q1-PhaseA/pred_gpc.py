@@ -342,10 +342,20 @@ def make_predict(p, amort, cfg, T=None):
     return lambda Zs, Ts, Tt: _p(p, amort, jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
 
 
-def exploded(log, factor=10.0):
-    """Finite but exploded: any logged settled energy > factor x the median (review N3)."""
-    E = np.array([r["E"] for r in log if "E" in r and np.isfinite(r["E"])])
-    return bool(len(E) and E.max() > factor * np.median(E))
+def exploded(log, factor=5.0, warm=2):
+    """Finite but blown up (review N3).  Compares each logged value with the BEST value seen BEFORE it, so the
+    large energy of an untrained model at step 1 is never flagged (the first version compared with the run's median
+    and flagged every run, 2026-10-13).  Primary signal: held-out prediction error of the batch (what prediction
+    uses); secondary: settled energy, with an absolute floor because PC's seen-view energy can approach 0."""
+    P = [r["pred_err"] for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
+    E = [r["E"] for r in log if "E" in r and np.isfinite(r["E"])]
+    for i in range(warm, len(P)):
+        if P[i] > factor * min(P[:i]):
+            return True
+    for i in range(warm, len(E)):
+        if E[i] > 10.0 * min(E[:i]) + 1.0:
+            return True
+    return False
 
 
 def _clean(o):

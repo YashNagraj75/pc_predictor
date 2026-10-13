@@ -145,6 +145,12 @@ def main():
     zt = np.asarray(jax.random.normal(jax.random.PRNGKey(1), (64, 4, 128))); tt = np.asarray(0.5 * jax.random.normal(jax.random.PRNGKey(2), (64, 4, 9)))
     pd, _, ld, div = G.train(cd, zt, tt, verbose=False, log_every=1)
     check("divergence detected and the returned weights are finite", div and all(bool(jnp.all(jnp.isfinite(x))) for x in jax.tree_util.tree_leaves(pd)))
+    # blow-up check: a normal decaying run is NOT flagged; a late blow-up IS
+    dec = [{"step": i, "E": 200.0 * 0.5 ** i + 0.03, "pred_err": 300.0 * 0.7 ** i + 70.0} for i in range(12)]
+    blow = dec + [{"step": 12, "E": 0.05, "pred_err": 900.0}]
+    blowE = dec + [{"step": 12, "E": 40.0, "pred_err": 71.0}]
+    check("exploded(): decaying run not flagged; late blow-up in held-out error or in energy flagged",
+          (not G.exploded(dec)) and G.exploded(blow) and G.exploded(blowE))
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
 
