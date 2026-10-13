@@ -9,7 +9,7 @@ Writes pred_runs/tests/<method>_<backbone>_s<seed>.json : rows of {test, conditi
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
-import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B
+import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B, pred_gpc as G
 
 CORR = [("noise", 0.1), ("noise", 0.2), ("occlude", 0.25)]
 
@@ -36,10 +36,12 @@ def corrupted_latents(backbone, zstats, seen_first):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("method", choices=["sdpc", "bpset", "ff", "copy"])
+    ap.add_argument("method", choices=["sdpc", "bpset", "ff", "copy", "gpc"])
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--arm", default="bp"); ap.add_argument("--sel", default="pred_runs/sdpc_selected.json")
     ap.add_argument("--steps", type=int, default=None)
+    ap.add_argument("--rule", default="pc"); ap.add_argument("--depth", type=int, default=3)
+    ap.add_argument("--start", default="zero"); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     a = ap.parse_args()
     ztr, ttr, zte, tte, *_ = PF.load("pred_latents.npz", a.backbone, "emb")
     raw = np.load("pred_latents.npz")[f"{a.backbone}_emb_tr"].reshape(-1, 128)
@@ -56,6 +58,14 @@ def main():
     elif a.method == "bpset":
         model = B.train(B.BCfg(seed=a.seed, width=384, steps=a.steps or 6000), ztr, ttr)
         predict = B.make_predict(model); extra = {"n_params": B.n_params(model)}; Tsweep = {}
+    elif a.method == "gpc":
+        c = json.load(open(a.gsel))[f"gpc_{a.rule}_d{a.depth}_{a.start}"]["c"]
+        cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, seed=a.seed, c=c, steps=a.steps or 6000)
+        p, am, log = G.train(cfg, ztr, ttr, verbose=True)
+        predict = G.make_predict(p, am, cfg)
+        extra = {"log": log, "n_params": G.n_params(p) + (G.n_params(eqx.filter(am, eqx.is_inexact_array)) if am is not None else 0),
+                 "n_params_generator": G.n_params(p), "cfg": cfg.__dict__}
+        Tsweep = {T: G.make_predict(p, am, cfg, T=T) for T in (5, 10, 25, 50, 100, 200, 400)}
     elif a.method == "ff":
         f = f"pred_runs/ff_{a.arm}_{a.backbone}_emb_s{a.seed}.eqx"
         predict = PF.make_pair_predict(PF.load_model(f, seed=a.seed)); Tsweep = {}
@@ -76,7 +86,7 @@ def main():
             for (kind, lvl), zc in corr.items():
                 zs = zte.copy(); zs[np.arange(len(zte)), seen[:, 0]] = zc[np.arange(len(zte)), seen[:, 0]]
                 rows.append({"test": "robust", "condition": f"{kind}={lvl}", "k": k, **PE.run_cases(predict, zte, tte, seen, tgt, zseen=zs)})
-    name = a.method if a.method != "ff" else f"ff{a.arm}"
+    name = {"ff": f"ff{a.arm}", "gpc": f"gpc_{a.rule}_d{a.depth}_{a.start}"}.get(a.method, a.method)
     os.makedirs("pred_runs/tests", exist_ok=True)
     out = f"pred_runs/tests/{name}_{a.backbone}_s{a.seed}.json"
     json.dump({"method": name, "backbone": a.backbone, "seed": a.seed, "rows": rows, "seconds": time.time() - t0,
