@@ -19,3 +19,13 @@ _*.py
 /probes_*.json
 /recon_*.png
 /tsne_*.png
+InteractionMap/
+# local scratch / smoke outputs and large generated data (canonical results live in findings/)
+Q1-PhaseA/pred_latents.npz
+Q1-PhaseA/pred_runs/
+Q1-PhaseA/runs_smoke*/
+Q1-PhaseA/runs_smoke*.json
+Q1-PhaseA/runs_smoke*.csv
+Q1-PhaseA/heads_smoke*
+Q1-PhaseA/sel_*.json
+Q1-PhaseA/dose_*.json
