@@ -1,0 +1,28 @@
+10-13_16:01 backend gpu
+2966, 161 MiB, /usr/libexec/gnome-remote-desktop-daemon
+10-13_16:09 GATES FAILED
+10-13_16:21 backend gpu
+2966, 161 MiB, /usr/libexec/gnome-remote-desktop-daemon
+10-13_16:31 gates pass: 85
+10-13_16:43 preflight ok
+10-13_17:53 resubmitted at 7468692 (blow-up check fixed; old sweep set aside)
+10-13_17:53 backend gpu
+2966, 161 MiB, /usr/libexec/gnome-remote-desktop-daemon
+10-13_18:04 gates pass: 87
+10-13_20:04 selected: {'gpc_bp_d10_amort': (0.25, True), 'gpc_bp_d10_zero': (0.25, True), 'gpc_bp_d3_amort': (0.25, True), 'gpc_bp_d3_zero': (1.0, False), 'gpc_pc_d10_amort': (2.0, True), 'gpc_pc_d10_zero': (2.0, True), 'gpc_pc_d3_amort': (2.0, True), 'gpc_pc_d3_zero': (2.0, True)}
+10-13_20:47 rc=0 --rule bp --depth 3 --start zero --backbone bp
+10-13_21:01 rc=0 --rule pc --depth 3 --start zero --backbone bp
+10-13_21:32 rc=0 --rule pc --depth 10 --start zero --backbone bp
+10-13_21:42 rc=0 --rule bp --depth 10 --start zero --backbone bp
+10-13_21:58 rc=0 --rule pc --depth 3 --start amort --backbone bp
+10-13_22:08 rc=0 --rule bp --depth 3 --start amort --backbone bp
+10-13_22:35 rc=0 --rule pc --depth 3 --start zero --backbone bp --width 256
+10-13_22:52 rc=0 --rule bp --depth 10 --start amort --backbone bp
+10-13_22:54 rc=0 --rule bp --depth 3 --start zero --backbone bp --width 256
+10-13_23:03 rc=0 --rule pc --depth 10 --start amort --backbone bp
+10-13_23:42 rc=0 --rule bp --depth 3 --start zero --backbone rand
+10-13_23:46 rc=0 --rule pc --depth 3 --start zero --backbone rand
+10-14_00:17 rc=0 --rule pc --depth 10 --start zero --backbone bp --hid-prec 9
+10-14_00:34 rc=0 --rule bp --depth 10 --start zero --backbone rand
+10-14_00:42 rc=0 --rule pc --depth 10 --start zero --backbone rand
+10-14_00:42 STAGE 1 DONE: 15 results, 0 diverged
