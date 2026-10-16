@@ -1,8 +1,3 @@
-"""Backprop SET predictor (baseline for the generative predictors): any number of seen views.
-
-    zhat_t = g( mean_{v in S} h(z_v, tau_v), tau_t ),   h, g MLPs (ReLU, width 256), trained by backprop.
-Training: each batch draws k in {1,2,3}; per image a random view permutation, first k seen, the other 4-k are targets.
-"""
 import dataclasses, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -28,8 +23,8 @@ class SetPred(eqx.Module):
         self.h = eqx.nn.MLP(d + dt, w, w, 1, activation=jax.nn.relu, key=k1)
         self.g = eqx.nn.MLP(w + dt, d, w, 2, activation=jax.nn.relu, key=k2)
 
+    # Zs (k, d), Ts (k, 9), Tt (m, 9) -> (m, d)
     def __call__(self, Zs, Ts, Tt):
-        """Zs (k, d), Ts (k, 9), Tt (m, 9) -> (m, d)"""
         pool = jnp.mean(jax.vmap(self.h)(jnp.concatenate([Zs, Ts], -1)), 0)
         return jax.vmap(lambda t: self.g(jnp.concatenate([pool, t])))(Tt)
 

@@ -1,17 +1,3 @@
-"""Run the latent-quality suite on one or more SAVED runs.
-
-    ./.venv/bin/python run_probes.py runs/bp_sigreg runs/pc_sigreg_T16_coupled
-    ./.venv/bin/python run_probes.py runs_smoke/* --fast
-
-Reads each run directory's `config.json` + `params.eqx`, rebuilds the encoder,
-embeds a fixed evaluation split, and writes `probes.json` + two figures INTO
-that run directory.  Nothing is re-trained.
-
-Why a separate entry point rather than folding this into train.py's
-`evaluate`: the decoder and the MLP probes cost real time, so they should not
-run at every eval step -- and a post-hoc runner means the suite applies to runs
-that finished before the suite existed, as long as their params were saved.
-"""
 import argparse
 import json
 import os
@@ -30,9 +16,9 @@ import sparse as SP
 from config import DataCfg, EncoderCfg, OptCfg, PCCfg, RunCfg, SIGRegCfg, SparseCfg
 
 
+# Rebuild RunCfg from saved config.json (nested dataclasses).
+# to_json wrote tuples as lists; reconstruct them here.
 def cfg_from_dict(d):
-    """Rebuild RunCfg from a saved config.json (nested dataclasses, and
-    to_json wrote tuples as lists)."""
     def mk(kls, sub):
         fields = {f.name: f.type for f in kls.__dataclass_fields__.values()}
         kw = {}
@@ -57,13 +43,11 @@ def load_run(run_dir):
     return cfg, params
 
 
+# Deterministic centre view -> (Z, imgs_as_seen).
+# imgs_as_seen is the RESHAPED encoder input, not the raw dataset image.
+# Probe targets must be measured on pixels the encoder actually got,
+# including resize to cfg.data.img_size and any grayscaling.
 def embed_split(params, cfg, X, n, seed=0):
-    """Deterministic centre view -> (Z, imgs_as_seen).
-
-    `imgs_as_seen` is the RESHAPED encoder input, not the raw dataset image:
-    probe targets have to be measured on the pixels the encoder actually got,
-    including the resize to cfg.data.img_size and any grayscaling.
-    """
     idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
     xb = D.eval_batch(jax.numpy.asarray(X[idx]), cfg.data)
     z, _ = SP.forward(params, xb, cfg)      # deployed net; == E.forward for case none
@@ -72,20 +56,12 @@ def embed_split(params, cfg, X, n, seed=0):
     return np.asarray(z), imgs, idx
 
 
+# ONE augmented view per image -> (Z, boxes, aug_params).
+# Separate from embed_split: scene-quantity probes need deterministic centre view
+# (deployment condition); augmentation-invariance probes need aug views + params.
+# Keeps only first view per image so rows stay independent (no train/test leakage
+# since two views of same image share a target).
 def embed_augmented(params, cfg, X, n, seed=0):
-    """ONE augmented view per image -> (Z, boxes, aug_params).
-
-    Separate from `embed_split` on purpose.  The scene-quantity probes must
-    read the deterministic centre view, because that is the deployment
-    condition for an encoder.  The augmentation-invariance probes cannot use
-    that view at all: they ask whether the crop offset and rotation APPLIED TO
-    A VIEW survive into its embedding, so they need embeddings of augmented
-    views paired with the parameters that generated them.
-
-    Only the first view of each image is kept, so rows stay independent --
-    two views of one image share a target and would leak across the
-    train/test probe split.
-    """
     idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
     key = jax.random.PRNGKey(10_000 + seed)
     views, boxes, prms = D.make_views_labeled(

@@ -1,4 +1,3 @@
-"""Why does the feedforward PC predictor lose to BP and blow up late?  Dense log of one PC run (bp backbone, seed 0)."""
 import sys, json; sys.path.insert(0, ".")
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx, optax, pred_ff as P
 cfg = P.Cfg(backbone="bp", layer="emb", arm="pc", seed=int(sys.argv[1]) if len(sys.argv) > 1 else 0, steps=6000, T=20, eta_h=0.05, adaptive_eta=len(sys.argv) > 2 and sys.argv[2] == "adaptive")

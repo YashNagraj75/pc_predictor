@@ -1,28 +1,3 @@
-"""Case D analysis: are the sparse side-head codes useful and robust?
-
-    ./.venv/bin/python diag_heads.py runs/<run> [...] --heads-json heads_selected.json --csv diag_heads.csv
-
-Spec: wiki 'Method - Sparse side-head arm plan', Analysis.  Every row has a ROLE
-(review D-M2/D8/N6), so trained, floor and reference rows can never pool:
-
-  trained_D            a trained case-D run (K = number of heads)
-  trained_enc_init_D   the same trained encoder with its dictionaries put back to
-                       the initial draw: code(trained D) - code(init D) on the SAME
-                       encoder is the headline dictionary-learning effect (D7)
-  floor_init           untrained encoder + initial K=5 heads; also probes every nested
-                       head subset so K<5 runs have a matched floor (D7)
-  reused_headfree      reused PC-ALM / BP runs (K = 0): embedding only
-  reused_enc_init_D    the same reused encoders with the initial K=5 heads attached
-
-Metrics: embed_* (embedding, written once), f_* (the head layer's own activity f_l
-and the concatenation over heads -- the layer-matched reference for codes, D6),
-code_* per head and per concatenation at t = 0 and t = T_test, code_active /
-supports / dead atoms, delta_inf_code_* = code(T) - code(0), input_spread and
-layer_norm per layer.  Probes are fit on CLEAN training features and evaluated on
-(possibly corrupted) test features; codes use a per-feature scale floor of
-0.1 x median (D10).  Probe differences on 2000 test rows carry a binomial SE of
-about 1 pp -- read small deltas accordingly (D9).
-"""
 import argparse
 import csv
 
@@ -64,13 +39,13 @@ def k5_sparse(heads_json):
                      beta_r=sel.get("beta_r", 0.0), code_k=sel.get("code_k", 1))
 
 
+# Initial dictionaries of cfg's heads (same key folds as init_params).
 def init_D(cfg):
-    """The INITIAL dictionaries of cfg's heads (same key folds as init_params)."""
     return SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)[2]
 
 
+# Same encoder, mu, and pixel mean; dictionaries D (and case-E G) at initial draw.
 def with_init_dicts(params, cfg):
-    """Same encoder, mu and pixel mean; dictionaries D (and case-E G) at their initial draw."""
     p0 = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     out = list(params)
     out[2] = p0[2]
@@ -79,16 +54,16 @@ def with_init_dicts(params, cfg):
     return tuple(out)
 
 
+# Head-free (case none) encoder with cfg's heads at their initial draw.
+# mu (and xbar) measured on THIS encoder's stream.
 def attach_init_heads(params, cfg, Xtr):
-    """A head-free (case none) encoder with cfg's heads at their initial draw; mu (and xbar)
-    measured on THIS encoder's stream."""
     p0 = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     return SP.init_mu((params[0], params[1], *p0[2:]), SP.mu_rows(Xtr, cfg), cfg)
 
 
+# Returns: (embedding, activities per layer, codes per head).
 @eqx.filter_jit
 def readout(params, x, cfg, t):
-    """-> (embedding, activities per layer, codes per head)."""
     if cfg.sparse.case == "D":
         acts, ex = SP.deploy(params, x, cfg, t=t)
         return acts[-1], tuple(acts), tuple(ex["a"])
@@ -104,9 +79,10 @@ def _feats(params, cfg, X, t):
     return z, acts, codes
 
 
+# One (params, cfg) under one role.
+# subsets: concatenation sets to probe besides 'all'
+# (the floor gets every nested prefix so K<5 runs have a match).
 def analyse_one(params, cfg, role, tag, data, rows, emb=True, subsets=None):
-    """One (params, cfg) under one role.  subsets: concatenation sets to probe
-    besides 'all' (the floor gets every nested prefix so K<5 runs have a match)."""
     xtr, ytr_, xte, yte_ = data
     sp = cfg.sparse
     K = len(sp.heads) if (sp.case == "D" and role == "trained_D") else 0

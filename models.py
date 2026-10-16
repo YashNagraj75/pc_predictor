@@ -1,8 +1,3 @@
-"""Model definitions for mu-PC experiments.
-
-Kept in a module (rather than a notebook cell) so the definitions survive
-notebook save/restore cycles.
-"""
 
 import math
 from typing import Callable, List
@@ -13,8 +8,8 @@ import jax.random as jr
 import jpc
 
 
+# Linear transformation with scaling applied
 class ScaledLinear(eqx.Module):
-    "Scaled Linear tranformations"
     linear: nn.Linear
     scaling: float = eqx.static_field()
 
@@ -32,8 +27,8 @@ class ScaledLinear(eqx.Module):
         return self.scaling * self.linear(x)
 
 
+# Identity residual block, scaled linear block
 class ResNetBlock(eqx.Module):
-    "Identity residual blaock scaled linear block"
     scaled_linear: eqx.Module
     act_fn: Callable = eqx.static_field()
 
@@ -55,7 +50,6 @@ class ResNetBlock(eqx.Module):
 
 
 class Readout(eqx.Module):
-    "Final layer which runs the act_fn and linear layer"
     scaled_linear: eqx.Module
     act_fn: Callable = eqx.static_field()
 
@@ -75,8 +69,8 @@ class Readout(eqx.Module):
         return self.scaled_linear(x)
 
 
+# Fully connected ResNet compatible with different parametrisations
 class FCResnet(eqx.Module):
-    "Fully connected Resnet compatible with different parametrisations"
     layers: List[eqx.Module]
 
     def __init__(self, key, in_dim, out_dim, *, width, depth, act_fn="linear", use_bias=False, param_type="sp"):

@@ -1,4 +1,3 @@
-"""Validation sweep for the SDPC predictor (bp backbone, seed 0). Selection: lowest val k=1 nmse."""
 import sys, json, itertools, time; sys.path.insert(0, ".")
 import numpy as np, pred_ff as PF, pred_sdpc as S, pred_eval as PE
 ztr, ttr, *_ = PF.load("pred_latents.npz", "bp", "emb")

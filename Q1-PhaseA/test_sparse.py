@@ -1,14 +1,3 @@
-"""Gates on the sparse arms (cases B and C).  Must pass before any GPU job.
-
-    ./.venv/bin/python test_sparse.py
-
-Spec: vault PCWM/Methods/'Method - Sparse PC-ALM arms spec.md'.
-
-Order matters.  The first block pins that the edits did not change the
-ORIGINAL code path at all (golden outputs frozen before the edits by
-_golden_pcalm.py).  The second pins the architecture change against jpc.  The
-rest pin the maths of B and C, the batch-size bookkeeping and the controls.
-"""
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,10 +39,10 @@ def _data():
     return _X["X"]
 
 
+# Tiny encoder: depth 4 -> L = 6 layers, width 16, on real images.
 def small(case="none", s=2, alpha=1.0, T=3, B=8, use_sigreg=True, projector="bn",
           beta=0.3, gamma=0.05, beta_g=1.0, eta=0.0625, below_hard=True, seed=0,
           normalise_fs=True, s_step=0.5):
-    """Tiny encoder (depth 4 -> L = 6 layers, width 16) on real images."""
     enc = EncoderCfg(depth=4, width=16, embed_dim=16)
     sp = SparseCfg(case=case, layer=s, beta=beta, gamma=gamma, beta_g=beta_g,
                    T_test=8, below_hard=below_hard, normalise_fs=normalise_fs,
@@ -79,16 +68,11 @@ def maxrel(a, b):
 
 # ------------------------------------------------ 1. original path unchanged
 
+# Checks case 'none' reproduces PRE-EDIT pcalm.relax/pcalm.grads bit for bit.
+# Reference regenerated on THIS machine via _golden_pcalm.py vs golden_ref/ (pre-sparsity pcalm/encoder/config).
+# Cross-machine refs are NOT bit-identical: CPU diffs appear in 7th sig digit (335.496826 vs 335.496857),
+# which failed the first GPU job's gates. Compare runs on the same machine to keep test strict.
 def test_golden_case_none():
-    """case none reproduces the PRE-EDIT pcalm.relax / pcalm.grads bit for bit.
-
-    The reference is regenerated on THIS machine by running _golden_pcalm.py
-    against the pre-sparsity source in golden_ref/ (pcalm/encoder/config as of
-    the commit before the sparse work).  A reference frozen on one machine
-    cannot be bit-identical on another: the GPU host's CPU differs from the
-    laptop's in the 7th significant digit (335.496826 vs 335.496857), which
-    failed the first GPU job's gates.  Comparing two runs on the same machine
-    keeps the test strict."""
     import subprocess, tempfile
     import _golden_pcalm as G
     with tempfile.TemporaryDirectory() as d:
@@ -149,8 +133,8 @@ def test_architecture_change():
     check("variance match: ||z_s|| / ||z_{s-1}|| is O(1)", 0.2 < r < 5.0, f"ratio={r:.3f}")
 
 
+# Residuals must equal jpc's energy evaluated on the modified net with skip[s]=None.
 def test_al_energy_matches_jpc_with_missing_skip():
-    """Our residuals must equal jpc's energy on the modified (skip[s]=None) net."""
     params, Zin, A, cfg = small(case="B")
     x = Zin[0]
     z, hs = E.forward(params, x, cfg.enc)
@@ -189,9 +173,9 @@ def test_B_deploy_is_threshold():
           f"active frac={frac:.3f}")
 
 
+# Test-time fixed point with g_s = 0: iterating PC-B update on z_s alone
+# (gradient on rho/2||z - f||^2, then prox) must reach S_{beta/rho}(f).
 def test_B_prox_iteration_converges_to_closed_form():
-    """Test-time fixed point with g_s = 0: iterating the PC-B update on z_s alone
-    (gradient on rho/2||z - f||^2, then the prox) must reach S_{beta/rho}(f)."""
     params, Zin, A, cfg = small(case="B", beta=0.3)
     _, ex = SP.deploy(params, Zin[0], cfg)
     f = ex["f_s"]
@@ -203,9 +187,9 @@ def test_B_prox_iteration_converges_to_closed_form():
           f"rel err={err:.2e}")
 
 
+# beta=0, alpha=0: case B reduces to original PC relaxation on modified network
+# prox is identity and no multipliers exist in this case
 def test_B_beta0_equals_plain_relax():
-    """beta = 0, alpha = 0: case B is exactly the original PC relaxation on the
-    modified network (the prox is the identity and no multipliers exist)."""
     # normalisation off and the layer-s step equal to eta_h: then case B is
     # literally the old relaxation on the modified net
     params, Zin, A, cfg = small(case="B", beta=0.0, alpha=0.0, normalise_fs=False,
@@ -286,9 +270,8 @@ def test_blend_is_the_z_minimiser():
           f"{lhs:.6f} vs {rhs:.6f}")
 
 
+# alpha=0 removes dual ascent; with coupled output drive, F+L must not increase over relaxation (small step).
 def test_C_relax_descends_at_alpha0():
-    """alpha = 0 removes dual ascent, so with the coupled output drive the sum
-    F + L must not increase over the relaxation (small step)."""
     params, Zin, A, cfg = small(case="C", alpha=0.0, T=12, eta=0.02, use_sigreg=False,
                                 projector="none")
     _, _, h = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -326,10 +309,10 @@ def test_project_and_serialise():
 
 # ---------------------------------------------- 5. batch-size bookkeeping
 
+# Per-sample objective (SIGReg and BN projector off): sample 0's settled z_s and code
+# must not depend on batch size B.
+# Catches an eta_h * B leaking into a prox threshold or a code step.
 def test_batch_invariance():
-    """Per-sample objective (SIGReg and the BN projector off): sample 0's settled
-    z_s and code must not depend on B.  This is the test that catches an
-    eta_h * B leaking into a prox threshold or a code step."""
     sizes = (2, 8, 32)
     for case in ("B", "C"):
         params, Zin_full, A, cfg = small(case=case, alpha=1.0, T=6, B=max(sizes),
@@ -379,9 +362,9 @@ def test_pc_grads_finite_and_logged():
               f"active={float(aux['active_frac']):.3f} act_growth={float(aux['act_growth']):.3f}")
 
 
+# BP controls differentiate task loss + deployed sparse-layer energy
+# Energy is SUMMED over views (not averaged) -- the bug all 3 reviewers found
 def test_control_objective_composition():
-    """The BP controls differentiate task loss + the deployed sparse-layer energy
-    SUMMED over views (not averaged -- the bug all three reviewers found)."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, alpha=1.0)
         cb = dataclasses.replace(cfg, arm="bp")
@@ -397,20 +380,12 @@ def test_control_objective_composition():
               ok, f"total={float(tot):.5f} task={float(task):.5f} sum_v head={head:.5f}")
 
 
+# PC arm vs BP control w/ task drive removed (identical views, SIGReg off): grads from sparse layer energy alone.
+# GATED on grad-norm ratios (separates bug class from correct code, seeds 0-4, measured 2026-10-07):
+# B, layers<=s: 0.73-1.36; C, dictionary: 0.57-0.64. Head energy avg over views would give ~4x those.
+# Cosines PRINTED not gated: seed-sensitive on 4-layer width-16 net (B 0.65-0.95; C w/ task drive 0.40-0.87); also image-split dependent.
+# Not measured: B w/ task drive (train at S(f_s+g_s/rho) vs C1-B at S(f_s)) -- case B's train/test gap, the hypothesis under test, not a bug.
 def test_pc_agrees_with_its_bp_control_below_s():
-    """PC arm vs its BP control with the task drive REMOVED (identical views,
-    SIGReg off): both gradients then come from the sparse layer's energy alone.
-
-    GATED on gradient-NORM ratios, which separate the bug class from correct
-    code robustly across seeds 0-4 (measured 2026-10-07): B, layers <= s,
-    0.73-1.36; C, dictionary, 0.57-0.64.  A head energy averaged over views
-    would give ~4x those.  Cosines are PRINTED, not gated: on this 4-layer,
-    width-16 net a single-batch cosine is seed-sensitive (B 0.65-0.95; C with
-    the task drive 0.40-0.87, and it also depends on which images are used --
-    the laptop's cached split differs from the GPU host's).
-    Not measured here: B with the task drive, where a converged PC-B trains at
-    the task-informed support S(f_s + g_s/rho) and C1-B at S(f_s) -- case B's
-    train/test gap, the hypothesis under test, not a bug."""
     def cos(a, b):
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
@@ -438,9 +413,9 @@ def test_pc_agrees_with_its_bp_control_below_s():
               cos(gp[2], gb[2]) > 0.9 and 0.4 <= r <= 1.5, f"cos={cos(gp[2], gb[2]):.3f} ratio={r:.2f}")
 
 
+# Sparse layer's prediction is per-sample normalised to fs_norm,
+# consistently in BOTH the deployed network and the relaxation energy.
 def test_fs_normalisation():
-    """The sparse layer's prediction is per-sample normalised to fs_norm in BOTH
-    the deployed network and the relaxation energy, consistently."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, beta=0.0 if case == "B" else 0.3)
         s, c = cfg.sparse.layer, cfg.sparse.fs_norm
@@ -464,11 +439,11 @@ def test_fs_normalisation():
     check("normalised f_s is invariant to rescaling W_s", maxrel(e2["f_s"], e1["f_s"]) < 1e-5)
 
 
+# Case B's own step at s, tested on FULL-SIZE architecture (small test net not representative:
+# its layer-s curvature differs, and 0.5/rho oscillated there).
+# Measured 2026-10-07 at init, B=64: spec fixed-point residual at s
+# 0.324 (shared eta_h) -> 0.036 (s_step=0.5) at T=16.
 def test_B_layer_s_step_converges():
-    """Case B's own step at s, on the FULL-SIZE architecture (the small test net
-    is not representative here: its layer-s curvature differs, and 0.5/rho
-    oscillated there).  Measured 2026-10-07 at init, B=64: spec fixed-point
-    residual at s 0.324 (shared eta_h) -> 0.036 (s_step=0.5) at T=16."""
     import diag_sparse as DS
     Xtr = _data()
     res = {}
@@ -482,10 +457,10 @@ def test_B_layer_s_step_converges():
           f"shared eta_h: {res[0.0625]:.3f}  s_step=0.5: {res[0.5]:.3f}")
 
 
+# All-black augmented view (f_s = 0 exactly) must not produce NaN.
+# Regression test for job b3c717c6: such a view at step 68 made every
+# arm's gradient NaN via f / ||f||.
 def test_all_zero_view_gives_finite_gradients():
-    """An all-black augmented view (f_s = 0 exactly) must not produce NaN.
-    Regression for job b3c717c6: one such view at step 68 made every arm's
-    gradient NaN through f / ||f||."""
     for case in ("B", "C"):
         for arm in ("pc", "bp"):
             params, Zin, A, cfg = small(case=case, alpha=1.0, T=4)
@@ -499,9 +474,9 @@ def test_all_zero_view_gives_finite_gradients():
 
 # ------------------------------------------------------- case D: side heads
 
+# Tiny encoder (L = 6) with case-D side heads on residual layers.
 def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=True,
            projector="bn", seed=0, eta=0.0625):
-    """Tiny encoder (L = 6) with case-D side heads on residual layers."""
     # defaults calibrated like production: gamma ~ 20 % active on the normalised
     # head input, w small (head energy well below the task loss), T_test == T.
     # An uncalibrated w (head energy 2.5x task) made the tiny relaxation unstable.
@@ -520,9 +495,10 @@ def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=Tru
     return params, Zin, A, cfg
 
 
+# Encoder identical to case none; D_l depends only on (seed, l),
+# so nested head sets share dictionaries;
+# every multiplier kept; no normalisation.
 def test_D_init_and_nesting():
-    """Encoder identical to case none; D_l depends only on (seed, l), so nested
-    head sets share dictionaries; every multiplier kept; no normalisation."""
     pD, _, _, cD = smallD(heads=(2, 3))
     pN, _, _, cN = small(case="none")
     same_enc = all(np.array_equal(a, b) for a, b in zip(leaves((pD[0], pD[1])), leaves(pN)))
@@ -543,8 +519,8 @@ def test_D_init_and_nesting():
           not bad, f"accepted: {bad}")
 
 
+# w_l = 0: heads are inert, so relax/grads equal plain PC-ALM.
 def test_D_zero_weight_equals_pcalm():
-    """w_l = 0: the heads are inert, so relax / grads equal plain PC-ALM."""
     pD, Zin, A, cD = smallD(heads=(2, 3), ws=[0.0, 0.0])
     pN, _, _, cN = small(case="none", alpha=1.0, T=8)
     aD, _, _ = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
@@ -558,8 +534,8 @@ def test_D_zero_weight_equals_pcalm():
           da < 1e-5 and dg < 1e-5 and dD == 0.0, f"acts {da:.2e} grads {dg:.2e} |dD| {dD:.1e}")
 
 
+# Deployed codes approach the FISTA optimum of each head's LASSO as t grows.
 def test_D_codes_solve_lasso():
-    """Deployed codes approach the FISTA optimum of each head's LASSO as t grows."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     x = Zin[0]
     out = []
@@ -577,9 +553,9 @@ def test_D_codes_solve_lasso():
           " ".join(f"{v:.2e}" for v in out))
 
 
+# During PC relaxation, codes descend each head's energy at the RELAXED z_l.
+# With all multipliers on, z_l stays near f_l.
 def test_D_relaxation_codes_track_layer():
-    """During the PC relaxation the codes descend each head's energy at the
-    RELAXED z_l, and with all multipliers on z_l stays near f_l."""
     pD, Zin, A, cD = smallD(heads=(2, 3), T=40)
     acts, duals, h = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
     preds = pcalm.layer_predictions(pD, acts[0], Zin[0], cD.enc)
@@ -590,9 +566,10 @@ def test_D_relaxation_codes_track_layer():
           fin and max(r) < 0.1, "rel resid " + " ".join(f"{v:.3f}" for v in r))
 
 
+# BP-D = task + head energy SUMMED over views.
+# With task drive removed, PC-D's gradient matches BP-D's
+# on the dictionaries and on layers <= max head.
 def test_D_control_objective_and_agreement():
-    """BP-D = task + head energy SUMMED over views; with the task drive removed
-    PC-D's gradient matches BP-D's on the dictionaries and on the layers <= max head."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     cb = dataclasses.replace(cD, arm="bp")
     tot, aux = TR.bp_objective(pD, Zin, A, cb)
@@ -647,9 +624,9 @@ def test_D_batch_invariance_and_zero_view():
     check("D: an all-zero view gives finite PC and BP gradients", all(fin), str(fin))
 
 
+# A few training steps per arm: finite, D re-normalised, round-trips through
+# load_run, and the pair gate reads the case-D health rows.
 def test_D_train_project_serialise_and_gate():
-    """A few training steps per arm: finite, D re-normalised, round-trips through
-    load_run, and the pair gate reads the case-D health rows."""
     import gate_pilot as GP
     from run_probes import load_run
     tmp = tempfile.mkdtemp()
@@ -672,10 +649,10 @@ def test_D_train_project_serialise_and_gate():
     check("D: pair gate evaluates case-D criteria without schema errors", readable, str(reasons)[:300])
 
 
+# Heads explain sqrt(n) f/||f||: codes and head energy are invariant to
+# rescaling the head layer, so shrinking it cannot lower the energy
+# (the route the smoke run showed). BP-D's code is detached.
 def test_D_head_reads_normalised_copy():
-    """Heads explain sqrt(n) f/||f||: deployed codes and the head energy are
-    invariant to rescaling the head layer, so shrinking it cannot lower the
-    energy (the route the smoke run showed).  BP-D's code is detached."""
     pD, Zin, A, cD = smallD(heads=(2,))
     x = Zin[0]
     acts, ex = SP.deploy(pD, x, cD)
@@ -719,8 +696,8 @@ def test_D_head_reads_normalised_copy():
 
 # ------------------------------------------------- case E: reconstruction anchor
 
+# smallD with the code -> pixel anchor (beta_r > 0); params are a 6-tuple.
 def smallE(heads=(2, 3), beta_r=0.05, **kw):
-    """smallD with the code -> pixel anchor (beta_r > 0); params are a 6-tuple."""
     pD, Zin, A, cD = smallD(heads=heads, **kw)
     cE = dataclasses.replace(cD, sparse=dataclasses.replace(cD.sparse, beta_r=beta_r))
     pE = SP.init_params(jax.random.PRNGKey(cE.opt.seed), cE, cE.data.input_dim)
@@ -728,9 +705,9 @@ def smallE(heads=(2, 3), beta_r=0.05, **kw):
     return pE, Zin, A, cE
 
 
+# beta_r = 0 is case D exactly (4-tuple, same codes); beta_r > 0 adds unit-norm G_l
+# and the pixel mean, encoder/D/mu identical to case D, labels cover all 6 parts.
 def test_E_init_and_reduction():
-    """beta_r = 0 is case D exactly (4-tuple, same codes); beta_r > 0 adds unit-norm G_l
-    and the pixel mean, encoder/D/mu identical to case D, labels cover all 6 parts."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     pE, _, _, cE = smallE(heads=(2, 3))
     x = Zin[0]
@@ -747,9 +724,9 @@ def test_E_init_and_reduction():
           f"same={same} unitG={unitG} xbar={xbar} labels={labs} codes_eq={codes_eq}")
 
 
+# Deployed codes approach FISTA optimum of EXPLICIT anchored energy:
+# beta_g/2||f~ - D a||^2 + beta_r/2||xbar - G a||^2 + gamma||a||_1.
 def test_E_codes_solve_anchored_lasso():
-    """Deployed codes approach the FISTA optimum of the EXPLICIT anchored energy
-    beta_g/2||f~ - D a||^2 + beta_r/2||xbar - G a||^2 + gamma||a||_1."""
     pE, Zin, A, cE = smallE(heads=(2, 3))
     x = Zin[0]; sp = cE.sparse
     xc = SP.anchor_target(x, pE[5])
@@ -769,8 +746,9 @@ def test_E_codes_solve_anchored_lasso():
           out[0] >= out[1] >= out[2] and out[2] < 1e-3 and min(out) > -1e-4, " ".join(f"{v:.2e}" for v in out))
 
 
+# head_smooth includes the anchor.
+# a_step is a prox step on its exact gradient.
 def test_E_relaxation_hooks_match_autodiff():
-    """head_smooth includes the anchor, and a_step is a prox step on its exact gradient."""
     pE, Zin, A, cE = smallE(heads=(2, 3))
     x = Zin[0]; sp = cE.sparse
     acts, ex = SP.deploy(pE, x, cE, t=3)
@@ -792,9 +770,10 @@ def test_E_relaxation_hooks_match_autodiff():
           maxrel(hs, manual) < 1e-5 and err < 1e-4 and lip, f"energy {maxrel(hs, manual):.1e} step {err:.1e} lip={lip}")
 
 
+# Zero task drive, long relaxation: PC's G and D gradients match BP-E's.
+# Then a few training steps per arm: G unit-norm, xbar unchanged, round-trip,
+# R^2 logged, gate reads it.
 def test_E_pc_bp_agree_and_train():
-    """Zero task drive, long relaxation: PC's G and D gradients match BP-E's.  Then a few
-    training steps per arm: G unit-norm, xbar unchanged, round-trip, R^2 logged, gate reads it."""
     def cos(u, v):
         u, v = np.ravel(u), np.ravel(v); return float(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-30))
     pE, Zin, A, cE = smallE(heads=(2, 3), T=200, use_sigreg=False, projector="none")
@@ -826,12 +805,12 @@ def test_E_pc_bp_agree_and_train():
     check("E: pair gate reads the reconstruction criteria", "head_recon_r2_first_last" in info["pc"], str(reasons)[:200])
 
 
+# (1) Anchor target removes each view's brightness: zero row mean; deployed code/energy
+# invariant to adding per-view constant to x.
+# (2) code_k: one a_step with code_k=k equals k a_steps with code_k=1; deployed default
+# runs T_test * code_k steps.
+# (3) Distinct views at production-like beta_r: relaxation energy uses each view's OWN pixels.
 def test_E_target_codek_and_views():
-    """(1) The anchor target removes each view's brightness: zero row mean, and the
-    deployed code and energy are invariant to adding a per-view constant to x.
-    (2) code_k: one a_step with code_k = k equals k a_steps with code_k = 1, and the
-    deployed default runs T_test * code_k steps.  (3) Distinct views at production-like
-    beta_r: the relaxation energy uses each view's OWN pixels."""
     pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0)
     x = Zin[0]
     t = SP.anchor_target(x, pE[5])
@@ -863,9 +842,9 @@ def test_E_target_codek_and_views():
           f"({float(own):.3g} vs {float(swapped):.3g})")
 
 
+# At fixed codes, PC gradient on G_l is -sum_v w_l beta_r (xc_v - G a_v)^T a_v / B
+# Local, Hebbian update; tested at production-like beta_r with distinct views.
 def test_E_G_gradient_is_local_hebbian():
-    """At fixed codes, PC's gradient on G_l is  -sum_v w_l beta_r (xc_v - G a_v)^T a_v / B  (local, Hebbian),
-    at production-like beta_r and with distinct views."""
     pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0, T=4)
     sp = cE.sparse
     acts_v = [SP.deploy(pE, Zin[v], cE)[0] for v in range(Zin.shape[0])]

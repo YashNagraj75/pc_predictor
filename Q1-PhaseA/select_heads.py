@@ -1,32 +1,3 @@
-"""Pre-registered choices for case D (side dictionary heads), all K at once.
-
-    ./.venv/bin/python select_heads.py --out heads_selected.json
-
-Spec: wiki 'Method - Sparse side-head arm plan' (user decisions 2026-10-07).
-  * Nested head sets growing outward from layer 5:
-        K=1 {5}, K=2 {4,5}, K=3 {4,5,6}, K=4 {3,4,5,6}, K=5 {3,4,5,6,7}.
-  * Heads explain the normalised activity f~_l = sqrt(n) f_l/||f_l|| (sparse.head_in).
-  * gamma_l per head: bisection on log(gamma) so that a_l^(T_test) is 20 % active
-    at INITIALISATION, seed 0, deterministic centre views of TRAINING images only.
-    The encoder is the unchanged original and D_l is drawn from a fold keyed by l,
-    so gamma_l is the same in every head set that contains l.
-  * Head weights, FIXED TOTAL split equally, calibrated by GRADIENT (user decision
-    2026-10-07, after the energy calibration gave a head pull of only 2-6 % of the
-    task gradient on the encoder):
-      - split: within a K, heads contribute equal ENERGY (w_l proportional to 1/e_l,
-        e_l = unweighted per-view head energy as the BP-D objective counts it);
-      - scale: one factor c_K so that, at init on one training batch,
-            || dHead/dW_{0..max head} || = 0.25 || dTask/dW_{0..max head} ||
-        (BP gradients, encoder weight matrices of layers 0 .. max head).
-    The gradient is linear in the weights, so c_K is exact from one measurement.
-  * CASE E (--anchor, user decisions 2026-10-08): each code also reconstructs the
-    centred view, beta_r/2 ||xbar - G_l a_l||^2.  beta_r (one scalar) is set so the
-    reconstruction and head energies are EQUAL at init (mean over the five heads,
-    codes from the anchored LASSO; two fixed-point rounds of beta_r <-> gamma);
-    gamma_l is selected on the anchored LASSO; the total pull is 0.1x (not 0.25x).
-    Spec: wiki 'Method - Reconstruction-anchored sparse heads plan'.
-Nothing here is re-tuned after a pilot.
-"""
 import argparse
 import json
 import os
@@ -113,8 +84,8 @@ def main():
             g[l] = (mid, fm)
         return g
 
+    # Mean over heads of the unweighted head and (beta_r = 1) reconstruction errors.
     def energy_split(params, cfg_all, acts, gammas):
-        """mean over heads of the unweighted head and (beta_r = 1) reconstruction errors."""
         eh, er = [], []
         for (l, Dl, mu, Gl, xc) in SP._heads(params, cfg_all, x):
             f = SP.head_in(acts[l], mu)

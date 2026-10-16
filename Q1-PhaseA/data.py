@@ -1,22 +1,3 @@
-"""Dataset loading and multi-view generation for Phase A.
-
-Two datasets:
-  galaxy10 -- Galaxy10 SDSS (astroNN), 69x69x3, 10 morphology classes.
-              Full rotation is a VALID augmentation: galaxy images have no
-              canonical orientation.
-  mnist    -- already unpacked in ../data/MNIST/raw.  Useful as a fast smoke
-              dataset and because the muPC notebook is calibrated on it.
-              Set max_rotation=0.0: digits DO have a canonical orientation.
-
-View generation uses a single affine sampling grid per view per sample, so
-random-resized-crop + arbitrary-angle rotation + flip are one bilinear
-resample rather than three.  Fully vmap-able and jit-able.
-
-`make_views` also returns the crop bounding box for every view.  Phase A does
-not use it; Phase B's position-conditioned predictor does (position = the
-crop's box, since a fully-connected encoder has no patch tokens).  Returning
-it here costs nothing and avoids re-deriving the augmentation later.
-"""
 import os, struct, gzip
 from functools import partial
 import numpy as np
@@ -26,24 +7,12 @@ from jax.scipy.ndimage import map_coordinates
 
 
 # ------------------------------------------------------------------ loading
+# Returns (Xtr, ytr, Xte, yte); X float32 (N,size,size,3) in [0,1].
+# Uses Galaxy10_DECals_NoDuplicated.h5 (DECaLS 256x256x3) to avoid train/test leakage from dupes.
+# Raw data is 3.5GB uint8/14GB f32; read in chunks + bilinear downsample. size=69 matches old SDSS res.
+# H5 read+resample ~60s; downsampled array cached as .npz (~3.9s reload). Delete .npz to force re-read.
 def load_galaxy10(root="../data", n_train=-1, n_test=2000, seed=0,
                   size=69, chunk=512):
-    """-> (Xtr, ytr, Xte, yte) with X float32 (N,size,size,3) in [0,1].
-
-    astroNN no longer serves the 69x69 SDSS Galaxy10; the only files it hosts
-    now are the DECaLS variants at 256x256x3.  We use the de-duplicated one
-    (Galaxy10_DECals_NoDuplicated.h5) because the original DECaLS release
-    repeats galaxies, and a duplicate straddling the train/test split would
-    inflate the k-NN probe.
-
-    The raw array is 3.5 GB uint8 / 14 GB as float32, so it is read in chunks
-    and bilinearly downsampled on the way in.  `size=69` reproduces the old
-    SDSS resolution and leaves crop headroom above the 32x32 the encoder sees.
-
-    Reading + resampling the h5 takes ~60 s, so the downsampled array is
-    cached alongside it as an .npz (~3.9 s to reload).  Delete the .npz to
-    force a re-read.
-    """
     cache = os.path.join(root, "galaxy10", f"g10_{size}.npz")
     if os.path.exists(cache):
         z = np.load(cache)
@@ -76,8 +45,8 @@ def _read_galaxy10_h5(root, size, chunk):
     return X, labs
 
 
+# Returns (Xtr, ytr, Xte, yte); X float32 shape (N,28,28,1), scaled to [0,1]
 def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
-    """-> (Xtr, ytr, Xte, yte) with X float32 (N,28,28,1) in [0,1]."""
     d = os.path.join(root, "MNIST", "raw")
     def rd(name):
         p = os.path.join(d, name)
@@ -109,15 +78,12 @@ def load_dataset(cfg):
 
 
 # ------------------------------------------------------------ augmentation
+# One augmented view of one image via a single affine sampling grid.
+# Returns (view (out,out,C), box (4,), params (4,))
+# box = (cx, cy, w, h): centre in [-1,1], w,h = crop's linear fraction of image.
 @partial(jax.jit, static_argnames=("out_size", "hflip"))
 def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
               hflip, brightness, contrast):
-    """One augmented view of one image via a single affine sampling grid.
-
-    Returns (view (out,out,C), box (4,), params (4,)) where box = (cx, cy, w, h)
-    with the
-    centre in [-1,1] and w,h the crop's linear fraction of the image.
-    """
     H, W, C = img.shape
     k = jax.random.split(key, 6)
     area = jax.random.uniform(k[0], (), minval=area_lo, maxval=area_hi)
@@ -146,20 +112,12 @@ def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
             jnp.stack([theta, jnp.where(fx < 0, 1.0, 0.0), b, c_ - 1.0]))
 
 
+# imgs: (B,H,W,C) float32 in [0,1].
+# Zin: (V,B,input_dim) flattened augmented views for encoder
+# boxes: (V,B,4) crop boxes (cx,cy,w,h) -- unused Phase A, needed Phase B pos conditioning
+# params: (V,B,4) (theta, flipped, brightness, contrast_delta) -- only probes.py reads these
+# make_views is the 2-value training wrapper; keep training call sites on that one
 def make_views_labeled(key, imgs, cfg):
-    """imgs: (B,H,W,C) float32 in [0,1].
-
-    Returns
-      Zin   : (V, B, input_dim) flattened augmented views, for the encoder
-      boxes : (V, B, 4) crop boxes (cx, cy, w, h) -- unused in Phase A, needed
-              for Phase B position conditioning
-      params: (V, B, 4) (theta, flipped, brightness, contrast_delta) -- only
-              probes.py reads these
-
-    `make_views` is the two-value training-path wrapper around this; keep the
-    training call sites on that one so the augmentation bookkeeping stays out
-    of the hot loop's signature.
-    """
     B = imgs.shape[0]
     keys = jax.random.split(key, cfg.n_views * B).reshape(cfg.n_views, B, 2)
     fn = jax.vmap(lambda kk, im: _one_view(
@@ -176,15 +134,17 @@ def make_views_labeled(key, imgs, cfg):
     return jnp.stack(views), jnp.stack(boxes), jnp.stack(params)
 
 
+# Training-path view generation.
+# Returns (Zin, boxes). See make_views_labeled.
 def make_views(key, imgs, cfg):
-    """Training-path view generation.  -> (Zin, boxes).  See make_views_labeled."""
     views, boxes, _ = make_views_labeled(key, imgs, cfg)
     return views, boxes
 
 
+# Deterministic centre view for evaluation -- no augmentation.
+# Avoids contaminating probe metrics with augmentation noise.
+# Output shape: (B, input_dim).
 def eval_batch(imgs, cfg):
-    """Deterministic centre view for evaluation -- no augmentation, so probe
-    metrics are not contaminated by augmentation noise.  (B, input_dim)."""
     x = jax.image.resize(imgs, (imgs.shape[0], cfg.img_size, cfg.img_size,
                                 imgs.shape[-1]), method="bilinear")
     if cfg.grayscale and x.shape[-1] == 3:
@@ -192,8 +152,8 @@ def eval_batch(imgs, cfg):
     return x.reshape(imgs.shape[0], -1)
 
 
+# Infinite shuffled batch iterator (numpy indexing, cheap).
 def batches(key, X, y, batch_size, n_steps):
-    """Infinite shuffled batch iterator (numpy indexing, cheap)."""
     n = len(X)
     for i in range(n_steps):
         key, sub = jax.random.split(key)

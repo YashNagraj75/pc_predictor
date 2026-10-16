@@ -1,10 +1,3 @@
-"""Phase A configuration.  Every knob for both arms lives here; nothing else
-   should hard-code a hyperparameter.
-
-Defaults for the SIGReg block are taken from LeJEPA Algorithm 1 and Table 1(a).
-Defaults for the encoder block mirror the mu_pc.ipynb notebook so the existing
-muPC machinery transfers unchanged.
-"""
 from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional, Tuple
 import json
@@ -40,9 +33,9 @@ class DataCfg:
         return self.img_size * self.img_size * c
 
 
+# muPC-parameterised fully-connected residual net (see mu_pc.ipynb).
 @dataclass(frozen=True)
 class EncoderCfg:
-    """muPC-parameterised fully-connected residual net (see mu_pc.ipynb)."""
     depth: int = 8                  # number of residual blocks
     width: int = 128
     embed_dim: int = 128            # K -- dimension SIGReg acts on
@@ -50,9 +43,9 @@ class EncoderCfg:
     parameterisation: Literal["mupc", "sp"] = "mupc"
 
 
+# LeJEPA Definition 2 + Algorithm 1.
 @dataclass(frozen=True)
 class SIGRegCfg:
-    """LeJEPA Definition 2 + Algorithm 1."""
     num_slices: int = 256           # |A|; Table 1(a) sweeps 512/2048, 256 is cheap
     t_max: float = 5.0              # integration range [-t_max, t_max]
     n_points: int = 17              # quadrature points; Table 1(a): 5/17/41 all fine
@@ -63,9 +56,9 @@ class SIGRegCfg:
     lambd: float = 0.05             # weight on SIGReg vs the invariance term
 
 
+# Predictive-coding inference (relaxation) settings.
 @dataclass(frozen=True)
 class PCCfg:
-    """Predictive-coding inference (relaxation) settings."""
     T: int = 16                     # inference steps per weight update.
                                     # THE independent variable of this study.
     # PER-SAMPLE activity step (the paper's eta_h).  Replaces the old
@@ -96,17 +89,13 @@ class PCCfg:
     output_drive: Literal["coupled", "frozen"] = "coupled"
 
 
+# Sparse prior on one layer. Spec: wiki 'Method - Sparse PC-ALM arms spec'.
+# "none": original encoder, must reproduce bit-for-bit (golden_pcalm_alpha*.npz).
+# "B": L1 prior on z_s, multiplier at s removed; z_s = S_{beta/rho}(f_s)
+# "C": multiplier removed + dict head: (beta_g/2)||z_s-D a||^2 + gamma||a||_1, via t ISTA steps
+# B and C make layer s NON-residual and rescale W_s by sqrt(L) at init.
 @dataclass(frozen=True)
 class SparseCfg:
-    """Sparse prior on one layer.  Spec: wiki 'Method - Sparse PC-ALM arms spec'.
-
-    case "none" is the original encoder and must reproduce it bit for bit
-    (pinned by test_sparse.py against golden_pcalm_alpha*.npz).
-      "B": L1 prior on z_s, multiplier at s removed; deployed z_s = S_{beta/rho}(f_s)
-      "C": multiplier at s removed + top-down dictionary head
-           (beta_g/2)||z_s - D a||^2 + gamma ||a||_1, deployed via t ISTA steps
-    Both B and C make layer s NON-residual and rescale W_s by sqrt(L) at init.
-    """
     case: Literal["none", "B", "C", "D"] = "none"
     layer: int = 5                  # s: index into the activity list (interior)
     beta: float = 0.0               # case B L1 weight; threshold beta/rho
@@ -189,8 +178,9 @@ class RunCfg:
 
 
 # The 2x2 (x2) grid Q1 actually needs.
+# arm x use_sigreg -> the four Phase A runs.
+# See README section 'The runs'.
 def q1_grid(**overrides):
-    """arm x use_sigreg -> the four Phase A runs.  See README section 'The runs'."""
     out = []
     for arm in ("bp", "pc"):
         for use_sigreg in (True, False):

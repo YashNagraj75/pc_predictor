@@ -1,33 +1,3 @@
-"""Did the encoder LEARN?  Per-layer weight displacement + probe trajectory.
-
-    ./.venv/bin/python diag_learning.py runs/bp_sigreg_e400 runs/pc_sigreg_T16_coupled_e400
-    ./.venv/bin/python diag_learning.py runs/* --csv diag_learning.csv
-
-WHY THIS EXISTS
----------------
-probes.py answers "what does the final embedding contain".  It cannot answer
-"did training do anything", and those came apart badly here: the PC arm's
-probe scores sat inside the range of an UNTRAINED encoder, so every
-representation number it produced was describing the random initialisation
-rather than anything the learning rule had built.
-
-Two measurements, both cheap, both read off artifacts that already exist:
-
-1. Per-layer relative weight displacement ||W_end - W_init|| / ||W_init||,
-   recomputing W_init from the run's own seed.  This localises the learning
-   signal by DEPTH.  A rule whose updates reach only the last few layers
-   leaves the deep stack -- which is what builds the representation the probe
-   reads -- at initialisation, and no amount of probing the embedding will
-   tell you that is what happened.
-
-2. The kNN trajectory already logged during training, reported as
-   best-minus-first rather than last-minus-first.  If the best value over the
-   whole run is the value at step 0, training never improved the
-   representation at any point, which is a categorically different statement
-   from "it ended lower" and rules out "needs a longer budget".
-
-Run this BEFORE interpreting any probe table from a new arm.
-"""
 import argparse
 import json
 import os
@@ -49,13 +19,11 @@ def _arrays(tree):
             jax.tree_util.tree_leaves(eqx.filter(tree, eqx.is_inexact_array))]
 
 
+# Returns (per_layer list, overall float, shapes list).
+# W_init is REBUILT from the run's recorded seed, not stored.
+# Works on any run that saved params.eqx + config.json,
+# including runs predating this diagnostic.
 def weight_displacement(run_dir):
-    """-> (per_layer list, overall float, shapes list).
-
-    W_init is REBUILT from the run's recorded seed rather than stored, so this
-    works on any run that saved params.eqx + config.json -- including runs that
-    finished long before this diagnostic existed.
-    """
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
     init = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     trained = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"), init)
@@ -75,12 +43,9 @@ def weight_displacement(run_dir):
     return per, num / den, [a.shape for a in A]
 
 
+# Returns dict from training log: first/best/last kNN and grad-norm scale.
+# best_minus_first is the key value: <= 0 means encoder never beat init.
 def probe_trajectory(run_dir):
-    """-> dict from the training log: first/best/last kNN and grad-norm scale.
-
-    `best_minus_first` is the number that matters.  <= 0 means the encoder was
-    never better than its initialisation at any evaluated step.
-    """
     p = os.path.join(run_dir, "log.json")
     if not os.path.exists(p):
         return {}

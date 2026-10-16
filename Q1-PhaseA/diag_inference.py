@@ -1,39 +1,3 @@
-"""Is the PC inference step size right?  Batch-invariance + stability sweep.
-
-    ./.venv/bin/python diag_inference.py --run runs/pc_sigreg_T16_coupled_e400
-
-WHY THIS EXISTS
----------------
-`jpc.pc_energy_fn` returns a MEAN over the batch, so the energy gradient with
-respect to one sample's activity is 1/B of that sample's own gradient.  An
-`activity_lr` applied directly to that gradient therefore does not mean what it
-looks like: the realised per-sample step is `activity_lr / B`, and it shrinks as
-the batch grows.  At batch_size=256 our nominal 0.5 was a realised 0.002, about
-two orders of magnitude under the stable optimum, and the relaxation barely
-moved off the feedforward initialisation.
-
-That is the whole depth-starvation signature: with too small a step, the credit
-wave launched at the output decays before it reaches the deep layers, so the
-deep weights see no gradient and only weight decay moves them.  It looks exactly
-like a fundamental limitation of predictive coding and is in fact a step-size
-bug.
-
-Two checks, both cheap, run on ONE batch at initialisation:
-
-1. Batch invariance.  One sample's settled activity must not depend on how many
-   other samples share its batch.  Fails iff the 1/B factor is unhandled.  This
-   mirrors the regression test in SakanaAI/pc-alm, which documents the same
-   pitfall and fixes it with `effective_lr = state_lr * batch_size`.
-
-2. Stability sweep.  Sweep the step and report, per step size, the final energy,
-   the final objective, whether the objective fell monotonically, and how many
-   layers actually moved.  The usable step is the largest one that is still
-   monotone; above it the iteration overshoots and then diverges.
-
-Run this whenever depth, width, batch size, or the objective changes -- the
-stable step depends on sigma_max of the constraint operator and therefore on all
-four.
-"""
 import argparse
 import csv
 import dataclasses
@@ -54,8 +18,8 @@ import train as T
 from run_probes import cfg_from_dict
 
 
+# Forward activities in same order as pc_relax: [h_1..h_{L-1}, z_out].
 def _feedforward_layers(params, zin, enc):
-    """Forward activities in the same [h_1..h_{L-1}, z_out] order as pc_relax."""
     z, hs = E.forward(params, zin, enc)
     return [*hs, z]
 
@@ -68,12 +32,10 @@ def _objective(params, Zin, A, cfg):
                                scale_by_n=cfg.sig.scale_by_n)[0])
 
 
+# Returns list of (B, relative movement of sample 0's embedding).
+# Constant across B => per-sample step is batch-invariant (correct).
+# Falling with B => the 1/B mean factor is unhandled (bug).
 def batch_invariance(params, Xtr, A, cfg, key, sizes=(2, 8, 32)):
-    """-> list of (B, relative movement of sample 0's embedding).
-
-    Constant across B  => the per-sample step is batch-invariant (correct).
-    Falling with B      => the 1/B mean factor is unhandled (bug).
-    """
     out = []
     for B in sizes:
         Zin, _ = D.make_views(key, jnp.asarray(Xtr[:B]), cfg.data)
@@ -84,8 +46,8 @@ def batch_invariance(params, Xtr, A, cfg, key, sizes=(2, 8, 32)):
     return out
 
 
+# Returns list of row dicts, one per candidate eta_h (PER-SAMPLE step).
 def stability_sweep(params, Xtr, A, cfg, key, lrs, batch=64):
-    """-> list of row dicts, one per candidate eta_h (PER-SAMPLE step)."""
     Zin, _ = D.make_views(key, jnp.asarray(Xtr[:batch]), cfg.data)
     ffl = _feedforward_layers(params, Zin[0], cfg.enc)
     rows = []

@@ -1,19 +1,3 @@
-"""
-Reference solutions for every exercise in graph_pc_walkthrough.ipynb.
-
-Graph-structured predictive coding, following Millidge, Tschantz & Buckley (2020),
-"Predictive Coding Approximates Backprop along Arbitrary Computation Graphs".
-
-Use it two ways:
-
-    python graph_pc_solutions.py            # run every check, print every number
-    python graph_pc_solutions.py --fast     # skip the ~2 min training sweep
-
-    from graph_pc_solutions import infer, pc_weight_grads   # or import one piece
-
-Every printed value below was produced by running this file. If your notebook cell
-disagrees with the number here, the notebook cell is the thing to fix.
-"""
 
 import time
 import jax
@@ -34,8 +18,8 @@ jax.config.update("jax_platform_name", "cpu")
 # parents. So invert it -- and record which argument slot the parent occupies,
 # because a merge node's two parents are not interchangeable.
 
+# children_of(nodes)[i] = [(j, slot), ...]: node j has node i as parent #slot.
 def children_of(nodes):
-    """children_of(nodes)[i] = [(j, slot), ...]: node j has node i as parent #slot."""
     ch = [[] for _ in nodes]
     for j, (parents, _) in enumerate(nodes):
         for slot, p in enumerate(parents):
@@ -49,8 +33,8 @@ def children_of(nodes):
 # Algorithm 1's first loop. Nodes are in topological order, so a single sweep
 # upward is enough: every parent is computed before its children.
 
+# Feedforward pass. Returns v, which at this point equals mu (the predictions).
 def forward(nodes, thetas, x):
-    """Feedforward pass. Returns v, which at this point equals mu (the predictions)."""
     v = [x] + [None] * (len(nodes) - 1)
     for i in range(1, len(nodes)):
         parents, fn = nodes[i]
@@ -65,8 +49,9 @@ def loss_fn(nodes, thetas, x, target):
 
 # ---- given in the notebook: the autodiff reference and the VJP helper --------
 
+# dL/dv_i by autodiff, for every node.
+# This is what PC has to reproduce.
 def true_node_grads(nodes, thetas, x, target):
-    """dL/dv_i by autodiff, for every node. This is what PC has to reproduce."""
     v_ff = forward(nodes, thetas, x)
     grads = []
     for i in range(len(nodes)):
@@ -81,8 +66,8 @@ def true_node_grads(nodes, thetas, x, target):
     return grads
 
 
+# jT(j, slot, parent_vals, e) = (d fn_j / d parent[slot])^T @ e.
 def jT_factory(nodes, thetas):
-    """jT(j, slot, parent_vals, e) = (d fn_j / d parent[slot])^T @ e."""
     def jT(j, slot, parent_vals, e):
         f = lambda vp: nodes[j][1](
             [vp if k == slot else parent_vals[k] for k in range(len(parent_vals))],
@@ -114,12 +99,10 @@ def jT_factory(nodes, thetas):
 #    at the frozen feedforward parents (True) or the current relaxed ones (False).
 #    With False you must also recompute mu at the end of each step.
 
+# Relax free vertices under Eq. 2.
+# Returns (v, mu, eps_hist); eps_hist[t][i] = epsilon_i BEFORE step t.
+# entry 0 = feedforward state, entry n_steps = final state.
 def infer(nodes, thetas, x, target, n_steps, lr, fixed_prediction=True):
-    """Relax the free vertices under Eq. 2.
-
-    Returns (v, mu, eps_hist) where eps_hist[t][i] is epsilon_i BEFORE step t,
-    so entry 0 is the feedforward state and entry n_steps the final state.
-    """
     N  = len(nodes) - 1
     ch = children_of(nodes)
     jT = jT_factory(nodes, thetas)
@@ -158,8 +141,9 @@ def infer(nodes, thetas, x, target, n_steps, lr, fixed_prediction=True):
     return v, mu, eps_hist
 
 
+# F = 1/2 sum_i ||eps_i||^2.
+# Must settle; if it grows without bound you are ascending.
 def energy(eps):
-    """F = 1/2 sum_i ||eps_i||^2. Must settle; if it grows without bound you are ascending."""
     return 0.5 * sum(float(jnp.sum(e ** 2)) for e in eps[1:])
 
 
@@ -191,8 +175,8 @@ def pc_input_grad(nodes, thetas, x, eps, v_ff):
 D = 4
 
 
+# v_i = tanh(W_i v_{i-1}). The control.
 def mk_chain(L, key):
-    """v_i = tanh(W_i v_{i-1}). The control."""
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     for i in range(L):
@@ -201,13 +185,10 @@ def mk_chain(L, key):
     return nodes, thetas
 
 
+# v_i = tanh(W_i v_{i-1}) + v_{i-1}, skip folded INSIDE the edge function.
+# Same function as mk_resid_explicit, but graph stays a chain:
+# identity path lives inside one Jacobian, so no node gains a second child.
 def mk_resid_folded(L, key):
-    """v_i = tanh(W_i v_{i-1}) + v_{i-1}, skip folded INSIDE the edge function.
-
-    Computes the same function as mk_resid_explicit, but the graph is still a
-    chain: the identity path lives inside one Jacobian, so no node gains a
-    second child.
-    """
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     for i in range(L):
@@ -216,29 +197,12 @@ def mk_resid_folded(L, key):
     return nodes, thetas
 
 
+# a_i = tanh(W_i v_{i-1}); v_i = v_{i-1} + a_i (ViT-style residual).
+# Pitfalls: read `a = len(nodes)-1` BEFORE appending sublayer, else merge gets [prev,prev].
+# `prev` must advance to the sublayer node, not the merge, or residual stream breaks.
+# Merge's thetas entry must be a real matrix, not None (None skipped by pc_weight_grads).
+# Lambdas don't close over loop var `i` by reference; use `ks[i]` evaluated immediately.
 def mk_resid_explicit(L, key):
-    """a_i = tanh(W_i v_{i-1}); v_i = v_{i-1} + a_i. The ViT form.
-
-    Three bookkeeping decisions, each with a wrong version that still runs:
-
-      * `a = len(nodes) - 1` is read AFTER appending the sublayer, so it names
-        that node. Read it before and the merge gets parents [prev, prev] --
-        it computes v0 + v0 and the sublayer feeds nothing.
-
-      * `prev` advances to the MERGE, not the sublayer. Point it at the sublayer
-        and the graph still reports 3 multi-child nodes, so the check cell passes,
-        but the residual stream is never carried forward.
-
-      * the merge's thetas entry is None. `p[0] + p[1]` has no weight in it, and
-        pc_weight_grads skips None entries. Give it a matrix and you compute a
-        gradient for a parameter the forward pass never uses. It is also what
-        makes the node counts match the chain, so the comparison tests topology
-        rather than capacity.
-
-    Note that no lambda here mentions the loop variable `i`: closures capture by
-    reference, so every lambda would see the final `i`. Only `ks[i]`, evaluated
-    immediately, may use it.
-    """
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     prev = 0                                    # index of this block's input
@@ -262,8 +226,8 @@ def mk_resid_explicit(L, key):
 # path to the output -- which makes that distance the MINIMUM inference budget T.
 # Necessary, not sufficient: reaching a node is not the same as converging there.
 
+# Shortest number of edges from each node to the output node.
 def graph_dist_to_output(nodes):
-    """Shortest number of edges from each node to the output node."""
     ch, N = children_of(nodes), len(nodes) - 1
     INF = 10 ** 9
     d = [INF] * len(nodes)
@@ -279,8 +243,8 @@ def graph_dist_to_output(nodes):
     return d
 
 
+# First inference step at which each node's error becomes nonzero.
 def front(nodes, thetas, xv, tgt, n_steps=14, lr=0.05, tol=1e-14):
-    """First inference step at which each node's error becomes nonzero."""
     _, _, hist = infer(nodes, thetas, xv, tgt, n_steps=n_steps, lr=lr)
     N   = len(nodes) - 1
     out = []
@@ -315,8 +279,9 @@ def pc_weight_grads(nodes, thetas, v, mu, N):
     return out
 
 
+# Train mk_resid_explicit(3) by backprop or by PC.
+# Deliberately un-jitted.
 def train(mode, xv, tgt, key, epochs=25, T=100, lr_w=0.05, lr_v=0.05):
-    """Train mk_resid_explicit(3) by backprop or by PC. Deliberately un-jitted."""
     nodes, thetas = mk_resid_explicit(3, key)
     losses = []
     for ep in range(epochs):

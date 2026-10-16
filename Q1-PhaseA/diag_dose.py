@@ -1,13 +1,3 @@
-"""Per-arm head 'dose': ||dHead/dW_l|| / ||dTask/dW_l|| at init, for PC and BP.
-
-    ./.venv/bin/python diag_dose.py sel.json [--K 1 5] [--write-pc out.json]
-
-The head weights are calibrated so this ratio is GRAD_RATIO for BP (select_heads.py).
-For PC, both terms are measured through the relaxation itself: g_head = g(heads on) -
-g(head_ws = 0), g_task = g(head_ws = 0), at the production PC setting (T=16, eta_h
-0.0625, alpha 1), on select_heads' calibration batch.  --write-pc rescales the PC
-head_ws (once, then re-measured) so PC's own ratio is the same GRAD_RATIO.
-"""
 import argparse, copy, dataclasses, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jax, jax.numpy as jnp, numpy as np, equinox as eqx

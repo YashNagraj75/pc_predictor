@@ -1,5 +1,3 @@
-"""Freeze pcalm.relax / pcalm.grads outputs on a fixed input BEFORE the sparsity
-edits.  test_sparse.py asserts the sparse.case == "none" path reproduces these."""
 import os, sys
 # GOLDEN_REF (set by test_sparse.py) points at the PRE-EDIT source; it must come
 # first on the path so `import pcalm` etc. resolve to the old modules.

@@ -1,28 +1,3 @@
-"""Is PC inference valid, and does it do useful work at test time?
-
-    ./.venv/bin/python diag_sparse.py runs/<run> [runs/<run> ...] --csv diag_sparse.csv
-
-Spec: 'Method - Sparse PC-ALM arms spec', section Analysis.  Groups:
-
-  A  inference validity   C: LASSO KKT violation and suboptimality vs FISTA(2000)
-                             against test-time steps t; every PC arm: the proximal-
-                             gradient fixed-point residual of the TRAINING relaxation
-                             against the inference budget T.
-  B  useful work          probe accuracy against t (C: ISTA steps; B: iterated prox
-                             from the dense f_s, which must converge to the closed
-                             form -- the built-in negative control); amortisation gap;
-                             the beta_g dial (beta_g = 0 asserted equal to the plain
-                             forward pass); dictionary health; rescaling cheat (log).
-  C  robustness           Gaussian noise / random-square occlusion at TEST time only,
-                             identical seeds for every arm; probes fit on CLEAN train
-                             features; Delta_inf = probe(t=T) - probe(t=0); kappa at s.
-  D  learning             per-layer cosine of the PC weight gradient against BACKPROP
-                             THROUGH THE SAME DEPLOYED NETWORK; clip fraction.
-
-Runs with sparse.case == "none" (the reused BP / PC-ALM arms) get group C at the
-feedforward readout only, so they share the robustness axes as references.
-Output: one long-format CSV row per (run, group, metric, condition, t).
-"""
 import argparse
 import csv
 import dataclasses
@@ -52,15 +27,12 @@ CORRUPT_SEED = 12345                 # shared by every arm
 
 # ------------------------------------------------------------- readouts
 
+# Deployed embedding with t test-time inference steps.
+# C: t ISTA steps (deploy). B: t iterated prox-gradient steps on z_s alone,
+# starting from DENSE f_s (eta=0.5/rho): t=0 = no inference, t->inf = closed form S_{beta/rho}(f_s).
+# none: feedforward pass (t ignored).
+# Returns (z_out, z_s, f_s) -- z_s, f_s are None for case none.
 def readout(params, x, cfg, t=None, beta_g=None):
-    """Deployed embedding with t test-time inference steps.
-
-    C: t ISTA steps (deploy).  B: t iterated prox-gradient steps on z_s alone,
-    starting from the DENSE f_s (eta = 0.5 / rho): t = 0 is the network with
-    no inference, t -> inf is the closed form S_{beta/rho}(f_s).  none: the
-    feedforward pass (t ignored).
-    Returns (z_out, z_s, f_s) -- z_s, f_s are None for case none.
-    """
     sp = cfg.sparse
     if sp.case == "none":
         z, _ = SP.forward(params, x, cfg)
@@ -94,8 +66,9 @@ def batched(fn, X, bs=1000):
 
 # --------------------------------------------------------------- probes
 
+# Closed-form ridge regression on one-hot encoded labels.
+# Lambda (regularization) tuned on a 20% split of TRAIN.
 def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), seed=0, sd_floor=1e-3):
-    """Closed-form ridge on one-hot labels; lambda on a 20% split of TRAIN."""
     # floor the per-dimension scale: a near-constant dimension would otherwise
     # be amplified up to 1e6x on corrupted inputs (review)
     mu, sd = Ztr.mean(0), Ztr.std(0)
@@ -125,8 +98,8 @@ def probe_pair(Ztr, ytr, Zte, yte, sd_floor=1e-3):
 
 # ------------------------------------------------------------ corruption
 
+# Test-time corruption in pixel space; xflat is eval_batch output in [0,1].
 def corrupt(xflat, cfg, kind, level, seed=CORRUPT_SEED):
-    """Test-time corruption in pixel space; xflat is eval_batch output in [0,1]."""
     if kind == "clean" or level == 0:
         return xflat
     c = 1 if cfg.data.grayscale else 3
@@ -166,24 +139,12 @@ def lasso_curve(params, x, cfg):
     return rows
 
 
+# step_rel_l = ||z_l - prox_l(z_l - eta*grad_l)|| / ||z_l||: one more relax step's rel change -> 0 at stationary
+# grad_l = per-sample grad relaxation uses (B*dF_smooth/dz_l + coupled output drive); prox_l = S_{eta*beta} at s for case B
+# Normalized by STATE not start mapping (start mapping is 0 on feasible layers -> old version read 1e12)
+# resid_rel_l = ||r_l||/||z_l|| (primal feasibility); dual_step_rel_l = alpha_l*||r_l||/||lambda_l||
+# Case B fp residual: fp_B = ||z_s - S_{beta/rho}(f_s+g_s/rho)||/||z_s||, with f_s+g_s/rho = z_s - grad_s/rho, grad_s = rho(z_s-f_s)-g_s, lambda_s=0; coupled drive only
 def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0):
-    """Is the TRAINING relaxation at its fixed point?  Sparse PC arms only.
-
-    Per layer l, at the relaxed state for each budget T (same batch every T):
-      step_rel_l = ||z_l - prox_l(z_l - eta * grad_l)|| / ||z_l||
-          the relative change ONE more relaxation step would make; grad_l is the
-          per-sample gradient the relaxation itself uses (B * dF_smooth/dz_l plus
-          the coupled output drive), prox_l = S_{eta beta} at s for case B.
-          -> 0 means stationary.  Normalised by the STATE, not by the mapping at
-          the relaxation start: that start mapping is exactly 0 on every
-          feasible layer, which made the first version read 1e12 (review).
-      resid_rel_l = ||r_l|| / ||z_l||      primal feasibility
-      dual_step_rel_l = alpha_l ||r_l|| / ||lambda_l||   how fast lambda still moves
-    and, for case B, the spec's own fixed-point residual at s:
-      fp_B = ||z_s - S_{beta/rho}(f_s + g_s/rho)|| / ||z_s||,
-    using f_s + g_s/rho = z_s - grad_s/rho (grad_s = rho(z_s - f_s) - g_s with
-    lambda_s = 0).  Coupled output drive only; other runs are skipped.
-    """
     if cfg.pc.output_drive != "coupled":
         print("   [A] skipped: fixed-point check implemented for the coupled drive only")
         return []
@@ -238,8 +199,8 @@ def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0
 
 # ------------------------------------------------------------- group D
 
+# Per-layer cosine: PC weight gradient vs BP through the same deployed net.
 def grad_cosines(params, cfg, Xtr, B=256, seed=0):
-    """Per-layer cosine: PC weight gradient vs BP through the same deployed net."""
     key = jax.random.PRNGKey(seed + 1)
     kb, kv, ka, kg = jax.random.split(key, 4)
     idx = np.random.default_rng(seed).choice(len(Xtr), B, replace=False)
@@ -383,8 +344,8 @@ def analyse(run_dir, n_train, n_test, fast=False):
     return rows
 
 
+# Plain forward pass of the MODIFIED network (no sparse step), via jpc.
 def E_plain(params, x, cfg):
-    """Plain forward pass of the MODIFIED network (no sparse step), via jpc."""
     import encoder as E
     return E.forward(params, x, cfg.enc)[0]
 

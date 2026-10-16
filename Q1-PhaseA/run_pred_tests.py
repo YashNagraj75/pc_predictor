@@ -1,11 +1,3 @@
-"""Apply the pre-registered tests (pred_sdpc_prereg.json) to one trained predictor.
-
-    ./.venv/bin/python run_pred_tests.py sdpc  --backbone bp --seed 0 [--sel pred_runs/sdpc_selected.json]
-    ./.venv/bin/python run_pred_tests.py bpset --backbone bp --seed 0
-    ./.venv/bin/python run_pred_tests.py ff    --backbone bp --seed 0 --arm bp|pcA      (k = 1 tests only)
-    ./.venv/bin/python run_pred_tests.py copy  --backbone bp
-Writes pred_runs/tests/<method>_<backbone>_s<seed>.json : rows of {test, condition, k, T, nmse, cos, retr1}.
-"""
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
@@ -14,8 +6,9 @@ import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B
 CORR = [("noise", 0.1), ("noise", 0.2), ("occlude", 0.25)]
 
 
+# Re-encode test views with the first seen view corrupted.
+# Standardise like pred_ff.load.
 def corrupted_latents(backbone, zstats, seen_first, seed=0):
-    """Re-encode the test views with the first seen view corrupted; standardise like pred_ff.load."""
     import data as D, encoder as E
     from run_probes import load_run
     d0 = np.load("pred_latents.npz")

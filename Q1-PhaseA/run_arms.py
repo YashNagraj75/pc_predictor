@@ -1,20 +1,3 @@
-"""Train arms across seeds and SAVE THEIR WEIGHTS, so probes.py can measure them.
-
-    # seed-replication floor for the two baselines (400-epoch budget)
-    ./.venv/bin/python run_arms.py --steps 17200 --seeds 0 1 2 --tag seedgrid
-
-WHY THE OVERWRITE GUARD EXISTS
-------------------------------
-`RunCfg.name` is derived from the arm and its hyperparameters, NOT from the
-seed -- so two runs differing only in seed collide on one directory, and a
-re-run silently destroys the weights already there.  That has happened once in
-this project: a 2000-step re-run landed on `runs/bp_sigreg` and
-`runs/pc_sigreg_T16_coupled` and overwrote 400-epoch weights that could not be
-regenerated cheaply.  Every seed therefore gets the seed in its `tag`, and this
-script REFUSES to write into a directory that already holds a params.eqx
-unless --force is passed.  Trained weights are the one artifact here that no
-log or figure can reconstruct.
-"""
 import argparse
 import os
 import sys

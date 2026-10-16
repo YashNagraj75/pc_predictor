@@ -1,8 +1,3 @@
-"""Gate tests for pred_gpc.py (revision 2).  All must pass before any training run.
-
-    python test_pred_gpc.py                 float32 gates (run on CPU and on the GPU backend)
-    JAX_ENABLE_X64=1 python test_pred_gpc.py   float64: PC == BP auto-decoder in the observation-weight -> 0 limit
-"""
 import dataclasses, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp
@@ -30,8 +25,8 @@ def cos(a, b):
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
 
 
+# Targets a planted generator can explain: Z = G(s_true, tau) + noise.
 def planted(p, cfg, b=32, k=4, noise=0.1, seed=3):
-    """Targets a planted generator can explain: Z = G(s_true, tau) + noise."""
     ks, kt, kn = jax.random.split(jax.random.PRNGKey(seed), 3)
     s_true = jax.random.normal(ks, (b, G.M))
     T9 = 0.5 * jax.random.normal(kt, (b, k, 9))

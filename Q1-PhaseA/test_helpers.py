@@ -1,11 +1,3 @@
-"""Verification of the completed helpers.
-
-These are not decoration.  sigreg.py and metrics.py are handed over as
-finished code, so their behaviour has to be pinned down by tests, otherwise
-they are a liability rather than a help.  Run:
-
-    ../.venv/bin/python3 test_helpers.py
-"""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # sandbox sets PYTHONSAFEPATH=1, which strips the script dir from sys.path
 
@@ -27,18 +19,11 @@ def t_directions():
     ok("directions: shape + unit-norm columns", f"|a|=1.0 for all 64")
 
 
+# Power against shape alternatives, measured vs NULL BAND (spread of stat under H0 over 20 Gaussian draws).
+# At N=1024 w/ paper defaults: little power vs MILD shape alts (unit-var uniform scores inside band);
+# large power vs variance/mean misfit.
+# SIGReg is anti-collapse mechanism, so the latter matters -- not a general shape test.
 def t_ep_ordering():
-    """Power against shape alternatives, measured against the NULL BAND.
-
-    A single Gaussian draw fluctuates, so "gaussian < alternative" is only
-    meaningful relative to the spread of the statistic under H0.  This test
-    estimates that spread over 20 Gaussian draws and asks which alternatives
-    sit outside it.  Worth knowing: at N=1024 with the paper's defaults the
-    statistic has little power against MILD shape alternatives (a uniform with
-    unit variance scores *inside* the Gaussian band), and large power against
-    variance/mean misfit.  Since SIGReg is the anti-collapse mechanism, what
-    matters is the second kind -- but do not read it as a general shape test.
-    """
     N, Kd, M = 1024, 16, 128
     A = S.sample_directions(K, Kd, M)
     null = []
@@ -72,9 +57,9 @@ def t_ep_ordering():
        " ".join(f"{n.split()[0]}={x:.3g}" for n, x in v.items()))
 
 
+# SIGReg tests against N(0,1) including mean and variance.
+# Must NOT be scale invariant, or it would not constrain embedding's scale.
 def t_ep_not_scale_invariant():
-    """SIGReg tests against N(0,1) including mean and variance -- it must NOT
-    be scale invariant, or it would not constrain the embedding's scale."""
     k1, k2 = jax.random.split(K)
     A = S.sample_directions(k1, 16, 128)
     z = jax.random.normal(k2, (1024, 16))
@@ -83,9 +68,9 @@ def t_ep_not_scale_invariant():
     ok("epps-pulley: penalises scale and shift", f"z={a:.3f} 2z={b:.3f} z+2={c:.3f}")
 
 
+# End-to-end: descending SIGReg on embeddings turns anisotropic cloud isotropic
+# (paper's Figure 6 setup)
 def t_ep_minimisation():
-    """End-to-end: descending SIGReg on the embeddings themselves must turn an
-    anisotropic cloud into an isotropic one (the paper's Figure 6 setup)."""
     k1, k2 = jax.random.split(K)
     N, Kd = 512, 16
     z = jax.random.normal(k1, (N, Kd)) * jnp.linspace(0.1, 4.0, Kd)
@@ -108,9 +93,9 @@ def t_ep_minimisation():
        f"trace {before['trace']:.1f}->{after['trace']:.1f}")
 
 
+# Tests claim: row n of dSIGReg/dZ depends on the OTHER rows.
+# Perturb row 0, watch row 5 move (motivates the two output_drive variants).
 def t_batch_coupling():
-    """The claim that motivates the two output_drive variants: row n of
-    dSIGReg/dZ depends on the OTHER rows.  Perturb row 0, watch row 5 move."""
     k1, k2 = jax.random.split(K)
     A = S.sample_directions(k1, 8, 64)
     z = jax.random.normal(k2, (64, 8))
@@ -134,10 +119,9 @@ def t_prediction_loss():
        f"identical={float(S.prediction_loss(Zv,4)):.2e} perturbed={float(S.prediction_loss(Zv2,4)):.3f}")
 
 
+# Pin down Appendix B.6 discrepancy found earlier; backs comment in sigreg.py with a test.
+# Compares Eq (5) all-pairs form vs Eq (7) distance-from-centre form.
 def t_b6_discrepancy():
-    """Pin down the Appendix B.6 problem found earlier, so the comment in
-    sigreg.py is backed by a test rather than a memory.
-    Eq (5) all-pairs form vs Eq (7) distance-from-centre form."""
     z = np.asarray(jax.random.normal(K, (6, 32, 8)))
     Vg, V = 2, 6
     mu = z[:Vg].mean(0)
@@ -188,8 +172,8 @@ def t_knn():
     ok("knn: separable ~1.0, random ~chance", f"separable={a:.3f} random={b:.3f} (chance=0.2)")
 
 
+# Gaussian data on a d-dim linear subspace embedded in 40-d.
 def t_twonn():
-    """Gaussian data on a d-dim linear subspace embedded in 40-d."""
     got = {}
     for d in (2, 5, 10):
         k = jax.random.PRNGKey(d)

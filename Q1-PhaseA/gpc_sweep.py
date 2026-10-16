@@ -1,9 +1,3 @@
-"""Per-arm step-scale selection (spec rev 2).  c in C_GRID; the FULL 4000-step schedule, stopped at --stop (review N8);
-first 90% of train images, seed 0; lowest validation k=1 nmse at the training budget T.  A diverged or exploded run is
-excluded.  If the winner sits on the grid edge it is flagged (edge=True) and reported, not re-tuned.
-    python gpc_sweep.py --arm gpc_pc_d10_zero [--stop 800]          (one arm; run arms in parallel)
-    python gpc_sweep.py --collect                                    (writes pred_runs/gpc_selected.json)
-"""
 import argparse, glob, json, os, sys, time; sys.path.insert(0, ".")
 import numpy as np, pred_ff as PF, pred_eval as PE, pred_gpc as G
 ap = argparse.ArgumentParser(); ap.add_argument("--arm"); ap.add_argument("--stop", type=int, default=800)

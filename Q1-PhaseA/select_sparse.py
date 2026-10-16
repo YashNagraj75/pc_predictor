@@ -1,16 +1,3 @@
-"""Choose beta (case B) and gamma (case C) by the pre-registered rule D5.
-
-    ./.venv/bin/python select_sparse.py --out sparse_selected.json
-
-Rule (spec: 'Method - Sparse PC-ALM arms spec', Hyperparameters):
-  * TRAINING images only, deterministic centre views, never labels or test data.
-  * At initialisation (seed 0), target active fraction 0.2 at the sparse variable:
-      B:  beta  = rho * quantile(|f_s|, 0.8)          (closed form)
-      C:  beta_g = rho = 1 fixed a priori (mu = 1/2); gamma by bisection on
-          log(gamma) so that the active fraction of a^(T_test) is 0.2.
-The pilot then checks the fraction is still inside [0.1, 0.3] after 2000 steps;
-nothing here is re-tuned after seeing a pilot.
-"""
 import argparse
 import dataclasses
 import json

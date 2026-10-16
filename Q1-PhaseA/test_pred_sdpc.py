@@ -1,4 +1,3 @@
-"""Gate tests for pred_sdpc.py.  All must pass before any training run."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp

@@ -1,24 +1,3 @@
-"""Pilot gate for one sparse PAIR (PC arm + its BP control), rule D5.
-
-    ./.venv/bin/python gate_pilot.py runs/<pc_pilot_dir> runs/<bp_pilot_dir>
-    exit 0 = pass, 1 = fail
-
-Criteria (spec: 'Method - Sparse PC-ALM arms spec'), applied to BOTH arms:
-  * every logged value finite, no DIVERGED marker
-  * encoder gradient clipping fired on < 5 % of steps (for case C the encoder
-    group; the dictionary group is unclipped by design)
-  * DEPLOYED active fraction (eval rows, SP.health) at the last eval in [0.1, 0.3]
-    -- the deployed network is what is probed, so that is what is gated
-PC arm only:
-  * act_growth = max_l ||z_l^(T)|| / max_k ||z_k^(0)|| <= 10 over the last 200 steps
-Pair:
-  * the two config.json files differ ONLY in `arm`, and the PC arm has alpha > 0
-A failing pair is skipped and reported -- never re-tuned against the pilot.
-
-Review history: the first version gated the PC arm alone and on the RELAXED
-sparse variable; three reviewers flagged that the past clipping confound could
-recur on the BP control and that relaxed != deployed sparsity.
-"""
 import json
 import math
 import os

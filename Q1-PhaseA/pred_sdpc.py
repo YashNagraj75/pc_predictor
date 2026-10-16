@@ -1,17 +1,3 @@
-"""Phase P: pure SDPC-style generative predictor on FROZEN latents (5 sparse layers, local learning).
-
-Per image a hierarchy of non-negative sparse codes a_1..a_5 (a_5 = top belief), sizes SIZES.
-Energy over the OBSERVED views S of one image:
-    E = sum_{v in S} 1/2 ||z_v - D_1(a_1 (x) phi(tau_v))||^2 + sum_{l=2..5} beta/2 ||a_{l-1} - D_l a_l||^2
-        + sum_l lam_l ||a_l||_1 ,      phi(tau) = [tau, 1]  (10-d),   D_1 : (d, n_1, 10)  bilinear.
-Inference: ISTA on all codes jointly from zero, prox = max(0, a - eta_l lam_l) (non-negative, SDPC);
-per-layer step eta_l = 0.9 / G_l, G_l a Gershgorin bound on the block row of the code Hessian
-(diagonal block norm + coupling norms), from the current dictionaries (Fujita-style per-layer step).
-Learning: each dictionary gets the gradient of E at the FIXED inferred codes (local and Hebbian:
-dE/dD_1 = -sum_v eps_v (a_1 (x) phi_v)^T, dE/dD_l = -beta (a_{l-1} - D_l a_l) a_l^T), averaged over the
-batch, AdamW, then unit-norm dictionary columns.  Nothing backpropagates through inference.
-Prediction for a target view t: zhat_t = D_1(a_1* (x) phi(tau_t)) with a* inferred from the seen views only.
-"""
 import argparse, dataclasses, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -50,13 +36,14 @@ def normalise(Ds):
     return [D1] + [D / (jnp.linalg.norm(D, axis=0, keepdims=True) + 1e-12) for D in Ds[1:]]
 
 
+# a1 (b, n1), ph (b, m, 10) -> (b, m, d)
 def bottom(D1, a1, ph):
-    """a1 (b, n1), ph (b, m, 10) -> (b, m, d)."""
     return jnp.einsum("dkp,bk,bmp->bmd", D1, a1, ph)
 
 
+# Per-image smooth energy, summed over the batch.
+# Z (b, k, d), Ph (b, k, 10); mask (b, k) of observed views.
 def smooth_energy(Ds, codes, Z, Ph, beta, mask=None):
-    """Per-image smooth energy, summed over the batch.  Z (b, k, d), Ph (b, k, 10); mask (b, k) of observed views."""
     eps = Z - bottom(Ds[0], codes[0], Ph)
     e = 0.5 * jnp.sum(eps ** 2, -1)
     if mask is not None:
@@ -67,8 +54,9 @@ def smooth_energy(Ds, codes, Z, Ph, beta, mask=None):
     return E
 
 
+# Gershgorin bound G_l per image for layer l, shape (b,) or scalar
+# step size = 0.9 / G_l
 def steps_per_layer(Ds, Ph, beta, mask=None):
-    """Gershgorin bound G_l per image for layer l (b,) or scalar; step 0.9 / G_l."""
     M = jnp.einsum("dkp,bmp->bmdk", Ds[0], Ph)                          # (b, m, d, n1) per-view bottom maps
     sq = jnp.sum(M ** 2, axis=(2, 3))                                    # Frobenius^2 >= spectral^2 (cheap, safe)
     if mask is not None:
@@ -106,13 +94,14 @@ def infer(Ds, Z, Ph, cfg, mask=None, T=None, return_hist=False):
     return (codes, hist) if return_hist else codes
 
 
+# Gradient of E w.r.t. the dictionaries at FIXED codes, batch mean.
 def dict_grads(Ds, codes, Z, Ph, cfg, mask=None):
-    """Gradient of E w.r.t. the dictionaries at FIXED codes, batch mean."""
     return jax.grad(lambda D: smooth_energy(D, codes, Z, Ph, cfg.beta, mask))(Ds)
 
 
+# Same computation, written as explicit local outer products.
+# Used as gate test target.
 def local_dict_grads(Ds, codes, Z, Ph, cfg):
-    """The same, written as explicit local outer products (gate test target)."""
     eps = Z - bottom(Ds[0], codes[0], Ph)                                # (b, k, d)
     g = [-jnp.einsum("bmd,bk,bmp->dkp", eps, codes[0], Ph)]
     for l in range(1, len(Ds)):

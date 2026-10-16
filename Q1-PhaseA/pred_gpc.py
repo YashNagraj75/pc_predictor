@@ -1,24 +1,3 @@
-"""Phase P: nonlinear generative PC predictor on FROZEN latents, and its BP auto-decoder control.
-
-Spec: wiki 'Methods/Method - Generative PC predictor plan' (revision 2, after the three-reviewer pass).
-
-Shared belief s (b, m) per image; per view hidden activities x_1..x_H (b, k, n); observation x_0 = z.
-Top-down predictions (residual levels at both depths):
-    mu_H = W_top [s, phi(tau)] + b_top
-    mu_l = x_{l+1} + (1/sqrt(H)) relu(x_{l+1}) W_{l+1}^T          (1 <= l < H)
-    mu_0 = relu(x_1) W_1^T + b_0
-    E = out_w/2 sum ||z - mu_0||^2 + hid_prec/2 sum_{l=1..H} ||x_l - mu_l||^2 + prior/2 ||s||^2   (summed over views, batch)
-Depth = H + 1 weight layers.
-
-PREDICTIVE training (user decision 2026-10-13): each batch draws k in {1,2,3}; per example a random subset of k views is
-SEEN.  s* is inferred from the seen views only (T steps); then
-  rule "pc": hidden levels of ALL 4 views relaxed with s fixed at s* (T2 steps; seen views warm-started from phase 1),
-             weight gradient = dE/dW over all 4 views at those activities (local: each W sees only the levels it joins);
-  rule "bp": auto-decoder; s* by GD on the seen-view loss; weights by backprop of the loss on ALL 4 views at s*.
-start "zero": s = 0;  "amort" (Fujita): s0 = mean over seen views of A(z_v, tau_v), A regressed onto s* (stop-grad),
-           trained by plain PC in PC arms and by backprop in BP arms.
-Prediction: infer from the seen views only, then zhat_t = G(s*, tau_t) (top-down pass).
-"""
 import dataclasses, json, math, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -112,8 +91,9 @@ def topdown(p, s, Ph, H):
     return xs, mu_bot(p, xs[0])
 
 
+# Unweighted per-level energies [level 0 (observation), 1, ..., H]
+# summed over views and batch.
 def level_energies(p, s, xs, Z, Ph, H):
-    """Unweighted per-level energies [level 0 (observation), 1, ..., H] summed over views and batch."""
     e = [0.5 * jnp.sum((Z - mu_bot(p, xs[0])) ** 2)]
     for l in range(1, H):
         e.append(0.5 * jnp.sum((xs[l - 1] - mu_mid(p["mid"][l - 1], xs[l], H)) ** 2))
@@ -135,8 +115,9 @@ def _E(cfg):
 
 
 # ------------------------------------------------------------------ step sizes
+# Spectral norm via power iteration from a fixed start (review N5/G9: no SVD in step)
+# Applies 2% safety margin
 def _sn(W, iters=20):
-    """Spectral norm by power iteration from a fixed start (review N5/G9: no SVD in the step), 2% safety margin."""
     W = jax.lax.stop_gradient(W)
     v = jax.random.normal(jax.random.PRNGKey(17), (W.shape[1],))
     v = v / jnp.linalg.norm(v)
@@ -146,8 +127,8 @@ def _sn(W, iters=20):
     return 1.02 * jnp.linalg.norm(W @ v)
 
 
+# [eta_s, eta_x1..eta_xH] = c * 0.9 / (own curvature + 2 * curvature of the term below).
 def pc_etas(p, k, cfg):
-    """[eta_s, eta_x1..eta_xH] = c * 0.9 / (own curvature + 2 * curvature of the term below)."""
     H, h = cfg.H, cfg.hid_prec
     below = [cfg.out_w * _sn(p["bot"][0]) ** 2] + [h * (1.0 + _sn(W) / math.sqrt(H)) ** 2 for W in p["mid"]]
     eta_x = [cfg.c * 0.9 / (h + 2.0 * L) for L in below]
@@ -155,8 +136,9 @@ def pc_etas(p, k, cfg):
     return [eta_s] + eta_x
 
 
+# Per-sample lambda_max(J^T J), where J = dG/ds evaluated at s0.
+# Computed via batched power iteration from a fixed random start.
 def gn_lambda(p, s0, Ph, H, iters=25):
-    """Per-sample lambda_max(J^T J), J = dG/ds at s0, batched power iteration from a fixed random start."""
     p, s0 = jax.lax.stop_gradient(p), jax.lax.stop_gradient(s0)
     f = lambda s: topdown(p, s, Ph, H)[1]
     _, vjp = jax.vjp(f, s0)
@@ -186,8 +168,8 @@ def start_s(p, amort, Z, T9, cfg):
     return PF.forward(amort, x).reshape(b, k, M).mean(1)
 
 
+# Returns: s, xs, energy history (T,), size of next s step relative to |s| (convergence diagnostic).
 def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None):
-    """-> s, xs, energy history (T,), size of the next s step relative to |s| (convergence diagnostic)."""
     T = cfg.T if T is None else T
     xs0 = topdown(p, s0, Ph, cfg.H)[0] if xs0 is None else xs0
     etas = pc_etas(p, Z.shape[1], cfg)
@@ -220,8 +202,8 @@ def ad_infer(p, s0, Z, Ph, cfg, T=None):
     return s, hist, rel
 
 
+# Belief from the given (seen) views: returns (s*, s0, energy history, relative last step).
 def infer_s(p, amort, Z, T9, cfg, T=None):
-    """Belief from the given (seen) views: (s*, s0, energy history, relative last step)."""
     Ph = phi(T9)
     s0 = start_s(p, amort, Z, T9, cfg)
     if T == 0:
@@ -255,8 +237,8 @@ def amort_grads(amort, Z, T9, s, cfg):
     return PF.bp_grads(amort, x, y, None)
 
 
+# PC phase 2 / BP: gradients on all 4 views at the belief s inferred from the seen views.
 def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
-    """PC phase 2 / BP: gradients on all 4 views at the belief s inferred from the seen views."""
     if cfg.rule == "pc":
         ii = jnp.arange(Zall.shape[0])[:, None]
         xs0 = topdown(p, s, Pall, cfg.H)[0]
@@ -342,11 +324,12 @@ def make_predict(p, amort, cfg, T=None):
     return lambda Zs, Ts, Tt: _p(p, amort, jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
 
 
+# Finite but blown up (review N3).
+# Compares each logged value with BEST value seen BEFORE it (not run median)
+#   -- first version used median and flagged every run, 2026-10-13.
+# Primary signal: held-out prediction error of batch; secondary: settled energy,
+#   with absolute floor since PC's seen-view energy can approach 0.
 def exploded(log, factor=5.0, warm=2):
-    """Finite but blown up (review N3).  Compares each logged value with the BEST value seen BEFORE it, so the
-    large energy of an untrained model at step 1 is never flagged (the first version compared with the run's median
-    and flagged every run, 2026-10-13).  Primary signal: held-out prediction error of the batch (what prediction
-    uses); secondary: settled energy, with an absolute floor because PC's seen-view energy can approach 0."""
     P = [r["pred_err"] for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
     E = [r["E"] for r in log if "E" in r and np.isfinite(r["E"])]
     for i in range(warm, len(P)):
@@ -370,8 +353,8 @@ def _clean(o):
     return o
 
 
+# Atomic write (review N7); non-finite floats become null (strict JSON).
 def dump_json(obj, path):
-    """Atomic write (review N7); non-finite floats become null (strict JSON)."""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(_clean(obj), f, indent=1, default=str)

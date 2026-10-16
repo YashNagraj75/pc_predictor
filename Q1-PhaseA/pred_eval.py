@@ -1,24 +1,3 @@
-"""Shared, pre-registered evaluation for the Phase P predictors (SDPC, BP set, feedforward, later generative PC).
-
-A predictor is a callable   predict(Zs, Ts, Tt) -> Zhat
-    Zs (n, k, d)  standardised latents of the k SEEN views     Ts (n, k, 9) their transforms
-    Tt (n, m, 9)  transforms of the m TARGET views             Zhat (n, m, d)
-
-Cases (fixed, seeded, identical for every method):
-    k_cases(k): for each test image a permutation of its 4 views from rng(1000 + k); the first k
-                are seen, the remaining 4 - k are targets.
-    pair_cases(): all 12 ordered pairs (A -> B), exactly the feedforward track's pairs.
-Metrics exactly as pred_ff.evaluate: nmse = E||zhat - z||^2 / E||z||^2 (standardised latents),
-mean cosine, retrieval@1 = zhat's nearest neighbour among the 2000 test images' latents of the
-SAME target view index is the right image.
-
-Corruption (robustness test): the stored test latents came from pred_data.py (key 202, chunks of
-512 folded in, data.make_views_labeled).  test_views() reproduces those pixels exactly and
-encode() re-encodes them; callers must check clean re-encodings match the stored latents
-(check_reproduction) before trusting corrupted ones.  One SEEN view per image is corrupted:
-Gaussian noise (sigma on [0,1] pixels, clipped) or a 16x16 (25 % area) occlusion square at a
-seeded position, filled with 0.
-"""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -53,8 +32,9 @@ def _metrics(P, Z, img, tview, zte_all, n_retr=2000):
     return {"nmse": nmse, "cos": cos, "retr1": float(np.mean(np.concatenate(hits)))}
 
 
+# zseen: optional replacement latents for the seen views (n, 4, d)
+# e.g. corrupted re-encodings.
 def run_cases(predict, zte, tte, seen, tgt, zseen=None, batch=500):
-    """zseen: optional replacement latents for the seen views (n, 4, d) -- e.g. corrupted re-encodings."""
     n = zte.shape[0]
     src = zte if zseen is None else zseen
     ii = np.arange(n)[:, None]
@@ -68,8 +48,8 @@ def run_cases(predict, zte, tte, seen, tgt, zseen=None, batch=500):
     return _metrics(P.reshape(-1, P.shape[-1]), Z.reshape(-1, Z.shape[-1]), img, tview, zte)
 
 
+# The 12 ordered pairs, pooled -- comparable to pred_ff.evaluate.
 def eval_pairs(predict, zte, tte, zseen=None):
-    """The 12 ordered pairs, pooled -- comparable to pred_ff.evaluate."""
     n = zte.shape[0]
     Ps, Zs, imgs, tv = [], [], [], []
     ii = np.arange(n)[:, None]
@@ -100,8 +80,9 @@ def encode(params, cfg_enc, pix, batch=1024):
     return z.reshape(pix.shape[0], pix.shape[1], -1)
 
 
+# Corrupt view which[i] of image i.
+# kind='noise': level = sigma; kind='occlude': level = area fraction.
 def corrupt(pix, which, kind, level, img_size=32, seed=0):
-    """Corrupt view which[i] of image i.  kind 'noise' (level = sigma) or 'occlude' (level = area fraction)."""
     rng = np.random.default_rng(seed)
     out = pix.copy()
     n = pix.shape[0]

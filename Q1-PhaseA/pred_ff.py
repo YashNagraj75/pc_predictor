@@ -1,41 +1,10 @@
-"""Phase P, track 1: feedforward predictor, PC vs backprop, on FROZEN latents.
-
-    ./.venv/bin/python pred_ff.py check  --data pred_latents.npz            # target-space check
-    ./.venv/bin/python pred_ff.py train  --data pred_latents.npz --backbone bp --layer emb --arm pc --seed 0
-    ./.venv/bin/python pred_ff.py gates                                    # CPU gate tests
-
-Task (I-JEPA analogue at image level): from view A's frozen latent and BOTH views'
-transforms, predict view B's latent:   z_B_hat = g(z_A, tau_A, tau_B).
-All 12 ordered pairs (A != B) of the 4 recorded views of each image.  Latents are
-standardised per dimension with TRAIN statistics; the loss is 1/2 ||z_B - g||^2.
-
-Arms share architecture, init, batches, optimiser (AdamW, same lr, clip 1.0) and
-schedule; they differ ONLY in how the weight gradient is obtained:
-  bp : autodiff of the loss
-  pc : jpc PC energy, hidden activities initialised feedforward, T steps of activity
-       GD with PER-SAMPLE step eta_h (jpc's energy is a batch mean, so the applied
-       step is eta_h * B), then jpc.compute_pc_param_grads.  Output clamped to z_B.
-At test time BOTH arms are scored by the same feedforward pass.
-
-Baselines: copy (z_B_hat = z_A), mean (z_B_hat = 0, nmse 1), and a no-tau MLP g(z_A)
-trained by backprop.
-
-Metrics on the 2000 test images: nmse = E||z_hat - z||^2 / E||z||^2 (standardised, so
-1 = predicting the mean), cosine, and retrieval@1 = z_hat's nearest neighbour among
-the 2000 test images' view-B latents is the right image.
-
-PRE-REGISTERED target-space rule (written before the check was run, 2026-10-12):
-on the BP backbone, for each layer, tau_gain = (nmse_noTau - nmse_full) / nmse_noTau.
-Use "emb" if its tau_gain >= 0.10 AND full beats copy by >= 10 % relative nmse;
-otherwise the layer with the largest tau_gain among those where full beats copy by
->= 10 %; if none qualifies, STOP -- no layer of this encoder carries enough view
-information and the predictor experiment needs a different target (patch level, or
-a non-invariant backbone).  The same layer is then used for the untrained backbone.
-"""
 import argparse, dataclasses, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import jax, jax.numpy as jnp, equinox as eqx, optax, jpc
+
+# Pre-registered rule for choosing the target layer (pred_ff.py check); stored verbatim in its output JSON.
+TARGET_RULE = 'target-space rule (written before the check was run, 2026-10-12):\non the BP backbone, for each layer, tau_gain = (nmse_noTau - nmse_full) / nmse_noTau.\nUse "emb" if its tau_gain >= 0.10 AND full beats copy by >= 10 % relative nmse;\notherwise the layer with the largest tau_gain among those where full beats copy by\n>= 10 %; if none qualifies, STOP -- no layer of this encoder carries enough view\ninformation and the predictor experiment needs a different target (patch level, or\na non-invariant backbone).  The same layer is then used for the untrained backbone.'
 
 WIDTH, DEPTH, ACT = 256, 3, "relu"
 PAIRS = [(a, b) for a in range(4) for b in range(4) if a != b]
@@ -68,8 +37,8 @@ def load(path, backbone, layer):
             d["ytr"], d["yte"])
 
 
+# Returns X (N*12, in), Y (N*12, d), and (img, a, b) index arrays.
 def pairs(z, tau, use_tau=True):
-    """-> X (N*12, in), Y (N*12, d), (img, a, b) index arrays."""
     A = np.array([p[0] for p in PAIRS]); Bv = np.array([p[1] for p in PAIRS])
     za, zb = z[:, A], z[:, Bv]                                   # (N, 12, d)
     parts = [za] + ([tau[:, A], tau[:, Bv]] if use_tau else [])
@@ -122,16 +91,17 @@ def pc_grads(model, x, y, cfg, return_acts=False):
     return (g, acts, F) if return_acts else g
 
 
+# f_l(z_{l-1}) for every layer, same order as acts
+# jpc 'sp' mode: no scalings, no skips
 def _layer_preds(model, acts, x):
-    """f_l(z_{l-1}) for every layer, same order as acts (jpc 'sp': no scalings, no skips)."""
     return [jax.vmap(model[l])(x if l == 0 else acts[l - 1]) for l in range(len(model))]
 
 
+# PC-ALM augmented Lagrangian, completing-the-square form (pcalm.al_energy, rho=1), batch mean like jpc:
+# L = 1/(2B) [ sum_{l<L} ||r_l + lam_l||^2 + ||y - f_L(z_{L-1})||^2 ],  r_l = z_l - f_l(z_{l-1}).
+# Output clamped to target y, carries no multiplier (supervised PC-ALM, SakanaAI Algorithm 1).
+# duals = None or all zero reproduces jpc.pc_energy_fn exactly (gated).
 def alm_energy(model, acts, x, y, duals):
-    """PC-ALM augmented Lagrangian, completing-the-square form (pcalm.al_energy, rho = 1), batch mean like jpc:
-        L = 1/(2B) [ sum_{l<L} ||r_l + lam_l||^2 + ||y - f_L(z_{L-1})||^2 ],  r_l = z_l - f_l(z_{l-1}).
-    The output is clamped to the target y and carries no multiplier (supervised PC-ALM, SakanaAI Algorithm 1).
-    duals = None or all zero reproduces jpc.pc_energy_fn exactly (gated)."""
     preds = _layer_preds(model, acts, x)
     r = [a - f for a, f in zip(acts[:-1], preds[:-1])] + [y - preds[-1]]
     if duals is not None:
@@ -139,10 +109,11 @@ def alm_energy(model, acts, x, y, duals):
     return 0.5 * sum(jnp.sum(ri ** 2) for ri in r) / x.shape[0]
 
 
+# PC-ALM weight gradient: T primal steps on L (same curvature-tracking step as plain-PC arm),
+# each followed by dual step lam_l += alpha * r_l, except after the last step.
+# Weights taken from L at the final state.
+# alpha = 0 reduces exactly to plain PC (pc_grads).
 def alm_grads(model, x, y, cfg, return_acts=False):
-    """PC-ALM weight gradient: T primal steps on L (same curvature-tracking step as the plain-PC arm), each
-    followed by the dual step lam_l += alpha * r_l except after the last; weights from L at the final state.
-    alpha = 0 is plain PC (pc_grads) exactly."""
     acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
     B = x.shape[0]
     sq = [jnp.linalg.norm(jax.lax.stop_gradient(l.layers[1].weight if hasattr(l, "layers") else l.weight), 2) ** 2
@@ -263,7 +234,7 @@ def check(data_path, out="pred_target_check.json", steps=4000):
         choice = max(ok, key=lambda l: ok[l]["tau_gain"])
     else:
         choice = None
-    json.dump({"rows": rows, "choice": choice, "rule": __doc__.split("PRE-REGISTERED")[1].strip()}, open(out, "w"), indent=1)
+    json.dump({"rows": rows, "choice": choice, "rule": TARGET_RULE}, open(out, "w"), indent=1)
     print("TARGET LAYER:", choice)
 
 
@@ -368,8 +339,8 @@ def load_model(path, din=146, dout=128, seed=0):
     return eqx.tree_deserialise_leaves(path, make(jax.random.PRNGKey(seed), din, dout))
 
 
+# pred_eval-compatible predict for k=1: zhat_t = g(z_A, tau_A, tau_t) for every target t.
 def make_pair_predict(model):
-    """pred_eval-compatible predict for k = 1: zhat_t = g(z_A, tau_A, tau_t) for every target t."""
     f = eqx.filter_jit(lambda x: forward(model, x))
     def predict(Zs, Ts, Tt):
         Zs, Ts, Tt = np.asarray(Zs), np.asarray(Ts), np.asarray(Tt)

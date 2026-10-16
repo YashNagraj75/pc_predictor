@@ -20,11 +20,9 @@ from config import RunCfg
 import data as D
 
 
+# Shared objective. Zin: (V, B, input_dim) -> (scalar, aux).
+# Both arms optimise this. Only the gradient mechanism differs.
 def loss_from_views(params, Zin, A, cfg: RunCfg):
-    """Shared objective.  Zin: (V, B, input_dim) -> (scalar, aux).
-
-    Both arms optimise this.  Only the gradient mechanism differs.
-    """
     Zv = jnp.stack([SP.forward(params, Zin[v], cfg)[0] for v in range(Zin.shape[0])])
     return S.lejepa_loss(Zv, A, cfg.data.n_global_views, cfg.sig.lambd,
                          cfg.use_sigreg, projector=cfg.projector,
@@ -32,27 +30,20 @@ def loss_from_views(params, Zin, A, cfg: RunCfg):
                          n_points=cfg.sig.n_points,
                          scale_by_n=cfg.sig.scale_by_n)
 
+# TODO: reverse-mode gradient of loss_from_views via single jax.grad call.
+# Reference arm; expected to be ~5 lines.
 @eqx.filter_jit
 def bp_grads(params, Zin, A, cfg):
-    """TODO -- reverse-mode gradient of `loss_from_views`.  One jax.grad call.
-    This arm is the reference; it should be ~5 lines."""
     (loss, aux),g = eqx.filter_value_and_grad(bp_objective, has_aux=True) (params,Zin,A,cfg)
     return g, {**aux, "loss": loss}
 
 
+# BP arm objective == loss_from_views for case 'none'.
+# Sparse controls add DEPLOYED sparse-layer energy (PC arm's z_s energy at deployed z_s):
+# C1-B: Huber_{beta,rho}(f_s)=rho/2||f_s-S(f_s)||^2+beta||S(f_s)||_1 (Moreau env. of beta||.||_1)
+# C2: mu/2||f_s-D a^(T)||^2+gamma||a^(T)||_1; SUMMED over views (not mean) to match PC energy scale.
+# Mean would make C2 prior 4x weaker than PC-C (review finding). loss_ff logged stays task loss only.
 def bp_objective(params, Zin, A, cfg):
-    """What the BP arm differentiates.  == loss_from_views for case none.
-
-    For the sparse controls it adds the DEPLOYED energy of the sparse layer --
-    the energy the PC arm minimises over z_s, evaluated at the deployed z_s:
-      C1-B: Huber_{beta,rho}(f_s) = rho/2||f_s - S(f_s)||^2 + beta||S(f_s)||_1
-            (the Moreau envelope of beta||.||_1 that PC-B's weight gradient follows)
-      C2  : mu/2||f_s - D a^(T)||^2 + gamma||a^(T)||_1
-    SUMMED over views, exactly as the PC energy is (pcalm sums the batch-mean
-    energies over the V views while the task loss enters as one term).  A mean
-    over views made C2's prior 4x weaker than PC-C's -- found in review.
-    Spec: 'Method - Sparse PC-ALM arms spec'.  loss_ff in the log stays the
-    task loss alone, so it remains comparable across arms."""
     loss, aux = loss_from_views(params, Zin, A, cfg)
     if SP.active(cfg):
         h = sum(SP.deployed_head_energy(params, Zin[v], cfg)
@@ -62,18 +53,18 @@ def bp_objective(params, Zin, A, cfg):
     return loss, aux
 
 
+# Jitted task loss at the deployed network, for the per-step log.
+# Eager calls re-traced and re-compiled the ISTA loop every step
+# (~0.2 s/step for case C on CPU) -- found in review.
 @eqx.filter_jit
 def loss_ff_fn(params, Zin, A, cfg):
-    """Jitted task loss at the deployed network, for the per-step log.  Eager
-    calls re-traced and re-compiled the ISTA loop every step (~0.2 s/step for
-    case C on CPU) -- found in review."""
     return loss_from_views(params, Zin, A, cfg)[0]
 
 
+# AdamW + linear warmup then cosine decay (LeJEPA MINIMAL.md L157-161:
+# LinearLR(start_factor=0.01, 1 epoch) -> CosineAnnealingLR).
+# Previously a bare constant LR with optax's default weight decay.
 def optim(cfg): # Optimizer for both the arms
-    """AdamW + linear warmup then cosine decay (LeJEPA MINIMAL.md
-    L157-161: LinearLR(start_factor=0.01, 1 epoch) -> CosineAnnealingLR).
-    Previously a bare constant LR with optax's default weight decay."""
     if cfg.opt.lr_schedule == "warmup_cosine":
         sched = optax.warmup_cosine_decay_schedule(
             init_value=cfg.opt.param_lr * 0.01,
@@ -108,31 +99,22 @@ def grad_update(params,g, opt_state,opt):
     upd, opt_state = opt.update(g,opt_state,flt)
     return eqx.apply_updates(params,upd), opt_state
 
+# Delegates to pcalm.relax (strict generalisation); PC is cfg.pc.alpha==0 case of PC-ALM.
+# Duals stay zero so augmented Lagrangian collapses to PC energy -- one impl, no drift.
+# alpha=0 equivalence pinned by test_pcalm.py.
+# Returns (acts, hist); duals dropped to keep old 2-value contract diag_inference.py relies on.
+# Use pcalm.relax directly if duals are needed.
 def pc_relax(params, Zin, A, cfg, key):
-    """Relaxation.  Delegates to pcalm.relax, which is a strict generalisation.
-
-    The PC arm is the `cfg.pc.alpha == 0` special case of PC-ALM: the duals stay
-    zero and the augmented Lagrangian collapses to the PC energy, so there is
-    ONE relaxation implementation rather than two that can drift apart.  The
-    alpha=0 equivalence is pinned by test_pcalm.py.
-
-    Returns (acts, hist) -- the duals are dropped here to keep the old
-    two-value contract that diag_inference.py depends on.  Use pcalm.relax
-    directly if you need them.
-    """
     acts, _duals, hist = PA.relax(params, Zin, A, cfg, key)
     return acts, hist
 
 
+# Weight gradients from the relaxed primal-dual state.
+# After relaxation, each weight's gradient is LOCAL: layer l uses only its own
+# composite credit (rho * r_l + lam_l) and activity below it. No backward pass.
+# At alpha=0, lam_l term vanishes and this reduces to the plain PC update.
 @eqx.filter_jit
 def pc_grads(params, Zin, A, cfg, key):
-    """Weight gradients from the relaxed primal-dual state.
-
-    Once relaxed, each weight's gradient is LOCAL: layer l sees only its own
-    composite credit (rho * r_l + lam_l) and the activity below it.  No
-    backward pass through the network.  At alpha=0 the lam_l term vanishes and
-    this is the plain PC update.
-    """
     return PA.grads(params, Zin, A, cfg, key)
 
 
@@ -232,18 +214,11 @@ def train(cfg: RunCfg, verbose=True):
 
 
 # --------------------------------------------------------------- evaluation
+# Q1 measurement pass: runs deterministic centre view (no augmentation) through encoder,
+# applies metric suite at every layer, returns nested dict ready to json.dump.
+# Both arms use this exact function; at eval time no target is attached, so zero-energy
+# config is the feedforward pass for both arms. Entire difference between arms is in weights.
 def evaluate(params, Xtr, ytr, Xte, yte, cfg: RunCfg, n_probe=4000, seed=0):
-    """COMPLETE -- the Q1 measurement pass.  No TODOs here.
-
-    Runs the deterministic centre view (no augmentation) through the encoder,
-    then applies the metric suite at every layer.  Returns a nested dict ready
-    to json.dump.
-
-    Both arms are evaluated by exactly this function, and at evaluation time
-    there is no target attached -- so the zero-energy configuration is the
-    feedforward pass for both.  The entire difference between arms is in the
-    weights.
-    """
     rng = np.random.default_rng(seed)
     itr = rng.choice(len(Xtr), min(n_probe, len(Xtr)), replace=False)
     ite = rng.choice(len(Xte), min(n_probe, len(Xte)), replace=False)
@@ -282,9 +257,10 @@ def evaluate(params, Xtr, ytr, Xte, yte, cfg: RunCfg, n_probe=4000, seed=0):
     return out
 
 
+# COMPLETE -- cross-arm comparison: layer-wise CKA and the projected
+# two-sample test.
+# Needs both arms' parameters and MATCHED inputs.
 def compare_arms(eval_a, params_a, eval_b, params_b, Xte, cfg, n=4000, seed=0, cfg_b=None):
-    """COMPLETE -- cross-arm comparison: layer-wise CKA and the projected
-    two-sample test.  Needs both arms' parameters and MATCHED inputs."""
     xb = D.eval_batch(jnp.asarray(Xte[:n]), cfg.data)
     # the DEPLOYED networks (E.forward would silently drop the threshold / ISTA
     # of sparse arms -- found in review).  cfg_b defaults to cfg.

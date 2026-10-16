@@ -1,28 +1,3 @@
-"""Why does PC collapse the sparse arms where backprop does not?  (pilot job 629aa534)
-
-    ./.venv/bin/python diag_collapse.py --steps 300 --eval-every 10 --out runs_diagcollapse
-
-Re-trains the four pilot arms (PC-B, C1-B, PC-C, C2) from the same init and key
-stream as the pilots, but evaluates densely and logs, on top of SP.health:
-
-  deployed network, 1024 deterministic training views
-    supports        distinct active patterns at the sparse variable
-    embed_std/norm  is the embedding input-dependent / alive?
-    spread_*        1 - median cosine to the mean direction, for z_{s-1},
-                    the raw f_s (before normalisation) and f~_s -- where does the
-                    input information disappear?
-    relu_on         fraction of phi(z_{s-1}) > 0 (the gate feeding layer s)
-  training relaxation, one FIXED batch (PC arms only)
-    gap_s           ||z_s^relax - z_s^deploy|| / ||z_s^deploy||  (train/test gap of
-                    removing lambda_s)
-    relax_active    active fraction of the relaxed sparse variable
-    relax_embed     relaxed vs deployed embedding norm
-    move_below      per-layer relative movement of z_l, l < s, from the deployed
-                    start: does the output drive reach below s at all?
-    lam_next        ||lambda_{s+1}|| / ||z_{s+1}||
-
-Diagnostic only: it extends SP.health in this process; no training code changes.
-"""
 import argparse
 import dataclasses
 import json

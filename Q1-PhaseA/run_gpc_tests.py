@@ -1,9 +1,3 @@
-"""Train one generative-PC-predictor arm and apply the pre-registered tests (gpc_prereg.json).
-
-    python run_gpc_tests.py --rule pc --depth 10 --start zero --backbone bp --seed 0 [--width 256] [--hid-prec 9]
-Writes pred_runs/tests/<arm>_<backbone>_s<seed>.json atomically; on divergence retries once at c/2 (pre-registered
-fallback, recorded as c_used); a second divergence writes <...>.diverged.json and exits 3 (never a result row).
-"""
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
@@ -14,13 +8,15 @@ T_LIST = (5, 10, 25, 50, 100, 200, 400, 2000)
 T_SETTLED = 2000
 
 
+# Width-control and precision arms reuse the step scale of their parent arm
+# (declared in the prereg).
 def parent_key(a):
-    """Width-control and precision arms reuse the step scale of their parent arm (declared in the prereg)."""
     return f"gpc_{a.rule}_d{a.depth}_{a.start}"
 
 
+# Degenerate-route checks on test k=2: tau-only, shuffled s,
+# per-level energy shares, convergence.
 def diagnostics(p, am, cfg, zte, tte, rng_seed=0):
-    """Degenerate-route checks on test k=2: tau-only, shuffled s, per-level energy shares, convergence."""
     n = len(zte)
     seen, tgt = PE.k_cases(n, 2)
     ii = np.arange(n)[:, None]

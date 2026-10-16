@@ -1,21 +1,3 @@
-"""Frozen-latent dataset for the predictor experiments (Phase P).
-
-    ./.venv/bin/python pred_data.py --out pred_latents.npz
-
-For every train / test image, V = 4 augmented views from a FIXED key (the same
-augmentation family the encoder trained with), and for each view:
-
-  tau   (9,)  cx, cy, w, h of the crop box, sin(theta), cos(theta), flip,
-              brightness delta, contrast delta  -- what the predictor conditions on
-  lat[backbone][layer]  frozen activations of that view
-
-backbones: "bp"   runs/bp_sigreg_e400 (backprop, LeJEPA+SIGReg, 17200 steps, seed 0;
-                  linear class probe 0.4475 -- the only encoder above its untrained floor)
-           "rand" the same architecture at initialisation (seed 0): the control
-layers:    "emb" (z, 128-d), "h7" (last hidden, 128), "h3" (middle hidden, 128)
-
-Labels are stored so the latents can be class-probed.  Nothing here trains.
-"""
 import argparse, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jax, jax.numpy as jnp, numpy as np

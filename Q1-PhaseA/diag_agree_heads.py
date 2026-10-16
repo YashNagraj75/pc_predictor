@@ -1,22 +1,3 @@
-"""PC-D vs BP-D weight-gradient agreement at the PRODUCTION configuration.
-
-    ./.venv/bin/python diag_agree_heads.py runs/<pc_run_dir> [...] --json agree.json [--init]
-
-Review 2026-10-07 (D-M3, D3): the decisive pair is only interpretable if PC-D's
-gradient is BP-D's at the real width/depth/T.  For each case-D run (PC arm's
-config; --init uses the initialisation instead of the trained weights), on one
-real training batch with the job's key stream:
-
-  task      the full objective (task + heads): per-layer cosine and norm ratio
-            |g_pc| / |g_bp| for every encoder layer and every dictionary
-  heads     the task drive REMOVED (all views = view 0, SIGReg off): the head
-            component alone, which is the positive control that the heads reach
-            the encoder at the same strength in both arms
-  ratio     |g_head| / |g_task| on the encoder (BP): how strongly the heads
-            pull at all
-
-Report-only; never gates.
-"""
 import argparse
 import dataclasses
 import json

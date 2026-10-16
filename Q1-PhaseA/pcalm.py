@@ -1,59 +1,3 @@
-"""PC-ALM -- augmented-Lagrangian predictive coding for the Phase A encoder.
-
-Adds one Lagrange multiplier ("dual") per layer, per sample, per view to the PC
-relaxation.  `alpha = 0` recovers plain PC exactly, so this module is a strict
-generalisation of the old `train.pc_relax` and the alpha=0 path is a built-in
-control rather than a separate code path to keep in sync.
-
-Reference: Seely & Gould, "Augmented Lagrangian Predictive Coding"
-(arXiv:2605.31022v1); reference implementation github.com/SakanaAI/pc-alm.
-
-    PC        :  z <- z - eta * dF/dz                     (F = PC energy)
-    PC-ALM    :  z <- z - eta * dL/dz,  then  lam += alpha * r
-                 where L is the augmented Lagrangian and r the residual.
-
-At the fixed point the activities return to the feedforward pass (r -> 0) and
-lam has integrated to the backprop adjoint at that layer, so the weight update
-computed from L becomes the backprop weight gradient.
-
-
-Why the residuals are rebuilt here instead of taken from jpc
-------------------------------------------------------------
-PC-ALM needs the per-layer residual r_l = z_l - f_l(z_{l-1}) EXPLICITLY.
-`jpc.pc_energy_fn` only returns the energy -- the squared norm -- from which
-r_l cannot be recovered even with `record_layers=True`.  So we have to rebuild
-the prediction f_l.
-
-To stay consistent with jpc rather than re-deriving its skip/scaling
-convention by hand (an earlier hand-derivation of exactly this got the
-convention wrong and produced nonsense residuals), `layer_predictions` calls
-jpc's own `model`, `skip_model` and `_get_param_scalings`, and mirrors the term
-structure of `pc_energy_fn` exactly:
-
-    layer 0       : pred = scalings[0]  * model[0](x)            -- no skip
-    layers 1..L-2 : pred = scalings[l]  * model[l](z_{l-1})
-                           + skip_l(z_{l-1})                     -- skip applied
-    layer L-1     : pred = scalings[-1] * model[-1](z_{L-2})     -- no skip
-
-`test_pcalm.py::test_al_energy_matches_jpc_at_zero_duals` pins this: with
-duals=0 and rho=1, `al_energy` must equal `E.energy` (i.e. `jpc.pc_energy_fn`)
-to floating-point tolerance.  Do NOT edit `layer_predictions` without
-re-running that test.
-
-
-The step size
--------------
-`jpc.pc_energy_fn` returns the energy divided by the batch size (see its
-docstring: "normalised by the batch size").  One sample's activities appear in
-only that sample's energy term, so dF/dz for sample j is 1/B of sample j's own
-gradient, and a step size applied directly to it realises eta/B per sample.
-
-`cfg.pc.eta_h` is therefore defined as the PER-SAMPLE step and multiplied by B
-here.  This is what the old `cfg.pc.activity_lr` failed to do: at
-activity_lr=0.5, batch_size=256 the realised step was 0.002 against a stable
-optimum near 0.25, so the relaxation never left its initialisation and credit
-never reached the deep layers.  See `diag_inference.py`.
-"""
 from typing import List, Optional
 
 import jax
@@ -70,14 +14,11 @@ from config import EncoderCfg, RunCfg
 # --------------------------------------------------------------- residuals
 
 
+# Per-layer prediction f_l(z_{l-1}), same order as `acts`.
+# Mirrors term structure of jpc.pc_energy_fn, term for term (see module docstring).
+# acts = [z_1, ..., z_{L-1}, z_out], z_0 clamped to x and not included.
+# Order matches encoder.forward return order and relaxation order.
 def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=None):
-    """Per-layer prediction f_l(z_{l-1}), in the same order as `acts`.
-
-    Mirrors the term structure of `jpc.pc_energy_fn` term for term -- see the
-    module docstring.  `acts` is [z_1, ..., z_{L-1}, z_out] with z_0 clamped to
-    `x` and not included, which is the order `encoder.forward` returns and the
-    order the relaxation carries.
-    """
     model, skip = params[0], params[1]   # case-C params carry a 3rd entry, D
     scalings = jpc._get_param_scalings(
         model=model,
@@ -102,40 +43,28 @@ def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=
     return preds
 
 
+# r_l = z_l - f_l(z_{l-1}) for every layer, same shapes as `acts`.
+# norm = (s, c) normalises prediction at layer s (sparse arms);
+# None leaves every layer exactly as jpc defines it.
 def residuals(params, acts, x, enc: EncoderCfg, norm=None):
-    """r_l = z_l - f_l(z_{l-1}) for every layer, same shapes as `acts`.
-    norm = (s, c) normalises the prediction at layer s (sparse arms); None
-    leaves every layer exactly as jpc defines it."""
     return [a - p for a, p in zip(acts, layer_predictions(params, acts, x, enc, norm))]
 
 
+# Duals start at zero (Algorithm 1 line 5), one per activity.
 def zero_duals(acts):
-    """Duals start at zero (Algorithm 1 line 5), one per activity."""
     return [[jnp.zeros_like(z) for z in acts_v] for acts_v in acts]
 
 
 # ------------------------------------------------------------------ energy
 
 
+# Augmented Lagrangian, completing-the-square form (paper Eq. 9):
+# L_rho = (1/2B) * rho * sum_l || r_l + lam_l/rho ||^2
+# duals=None -> plain PC energy; at rho=1 matches jpc.pc_energy_fn (test_pcalm.py)
+# Dropped -1/(2 rho) sum_l ||lam_l||^2 term (indep. of activities/weights, no grad effect)
+# No supervised-loss term; LeJEPA grad injected at output node via output_drive during relaxation
 def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
               out_scale: Optional[float] = None, norm=None):
-    """Augmented Lagrangian in the completing-the-square form (paper Eq. 9).
-
-        L_rho = (1 / 2B) * rho * sum_l || r_l + lam_l / rho ||^2
-
-    `duals=None` gives the plain PC energy, so at rho=1 this reproduces
-    `jpc.pc_energy_fn` exactly (pinned by test_pcalm.py).
-
-    The paper's Eq. 9 also carries a -1/(2 rho) sum_l ||lam_l||^2 term, dropped
-    here: it depends on neither the activities nor the weights, so it changes
-    neither the inference gradient nor the weight gradient.
-
-    NOTE there is no supervised-loss term.  Our objective is LeJEPA, which is
-    not a per-sample target -- it enters as a gradient injected at the output
-    node during the relaxation (`output_drive`), exactly as in the previous PC
-    implementation.  The Lagrangian's boundary condition is therefore supplied
-    by that injected gradient rather than by a term in this function.
-    """
     r = residuals(params, acts, x, enc, norm)
     if duals is not None:
         r = [ri + li / rho for ri, li in zip(r, duals)]
@@ -150,8 +79,8 @@ def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
 # -------------------------------------------------------------- relaxation
 
 
+# LeJEPA objective computed on a stack of per-view embeddings.
 def _objective(cfg: RunCfg, A):
-    """The LeJEPA objective on a stack of per-view embeddings."""
     def loss_z(Zv):
         return S.lejepa_loss(
             Zv, A, cfg.data.n_global_views, cfg.sig.lambd, cfg.use_sigreg,
@@ -160,16 +89,12 @@ def _objective(cfg: RunCfg, A):
     return loss_z
 
 
+# Primal-dual relaxation. Returns (acts, duals, history).
+# Algorithm 1: T-1 cycles of {primal step, dual step}, then final primal step.
+# T primal steps total (same budget as old PC) plus T-1 dual updates.
+# If cfg.pc.alpha == 0, duals stay zero, al_energy collapses to PC energy,
+# reduces exactly to old relaxation.
 def relax(params, Zin, A, cfg: RunCfg, key):
-    """Primal-dual relaxation.  Returns (acts, duals, history).
-
-    Algorithm 1 of the paper: `T-1` cycles of {one primal step, one dual step},
-    then a final primal step.  That is T primal steps in total -- the same
-    activity budget as the previous PC implementation -- plus T-1 dual updates.
-
-    At `cfg.pc.alpha == 0` the duals stay zero, `al_energy` collapses to the PC
-    energy, and this reduces to exactly the old relaxation.
-    """
     V, B = Zin.shape[0], Zin.shape[1]
     alpha, rho, T = cfg.pc.alpha, cfg.pc.rho, cfg.pc.T
     # the *B that turns cfg.pc.eta_h into a per-sample step -- see module docstring
@@ -318,15 +243,12 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     return acts, duals_w, hist
 
 
+# Weight gradient from relaxed primal-dual state.
+# Activities and duals held fixed (stop_gradient); differentiate augmented
+# Lagrangian wrt weights only (same pattern as pc_grads / pc-alm method_grad).
+# Update is local: each weight sees only its layer's composite credit
+# rho * r_l + lam_l and the activity below it.
 def grads(params, Zin, A, cfg: RunCfg, key):
-    """Weight gradient from the relaxed primal-dual state.
-
-    Both the activities and the duals are held fixed (stop_gradient) and the
-    augmented Lagrangian is differentiated with respect to the weights only --
-    the same pattern the previous `pc_grads` used, and the same as pc-alm's
-    `method_grad`.  The resulting update is local: each weight sees only its
-    own layer's composite credit `rho * r_l + lam_l` and the activity below it.
-    """
     import equinox as eqx
 
     acts, duals, hist = relax(params, Zin, A, cfg, key)

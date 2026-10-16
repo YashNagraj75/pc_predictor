@@ -1,50 +1,3 @@
-"""Latent-quality test suite -- is the encoder learning content, or noise?
-
-WHY THIS EXISTS
----------------
-`metrics.py` answers "how is the representation SHAPED" (rank, intrinsic
-dimension, isotropy, CKA between arms).  It cannot answer "does the
-representation CONTAIN anything".  A high-effective-rank embedding of pure
-noise scores well on every metric in that file.  The Q1 T-sweep made this
-concrete: PC had higher effective rank AND higher intrinsic dimension than
-backprop while being strictly worse on the probe.  Geometry is not content.
-
-This module is the content side, following the four measurements LeWM uses in
-its "Physical Structure of the Latent Space" section, translated to our
-setting:
-
-  LeWM                              here
-  ------------------------------    -----------------------------------------
-  probe physical quantities         probe scene quantities measured from the
-  (agent location, block angle)     pixels the encoder actually saw
-  decode latents to pixels          same, shared decoder, frozen encoder
-  t-SNE of the latent space         same, coloured by class and by a factor
-  temporal path straightening       `path_straightness` -- see its docstring
-
-CONTRACT -- arrays in, dict out
--------------------------------
-Nothing here imports encoder.py, train.py or config.py.  Every function takes
-plain arrays.  That is deliberate: the suite has to outlive Phase A, survive
-the switch to a position-conditioned predictor, and work on the glimpse
-frontend without edits.  The only thing it assumes is that you can produce an
-(N, D) embedding and the (N, H, W, C) images it came from.
-
-READ THE PROBE NUMBERS THIS WAY
--------------------------------
-Every regression probe reports `nmse` (MSE on the z-scored target) alongside
-Pearson r.  nmse = 1.0 is the score of predicting the target's mean and knowing
-nothing; nmse = 0 is perfect.  Raw MSE is NOT comparable across targets with
-different units, which is why it is not the headline number here.  r is
-reported because LeWM reports it, but r is scale- and offset-blind: a probe
-that recovers a quantity up to an unknown affine map still scores r ~ 1.  When
-nmse and r disagree, nmse is the stricter reading.
-
-A probe is an UPPER bound on what a downstream user can extract, not a measure
-of what the encoder "intends".  A linear probe finding a quantity means it is
-linearly decodable; the MLP probe finding what the linear probe missed means
-the information is present but entangled.  The gap between them is the
-interesting number, and it is the one no metric in metrics.py can see.
-"""
 import json
 import os
 
@@ -56,29 +9,12 @@ import optax
 
 
 # ===================================================== 1. scene quantities
+# imgs: (N,H,W,C) float in [0,1], must be same pixels used for embeddings.
+# Returns {name: (N,) float64}. Flux-weighted image moments + 2 morphology summaries.
+# Targets computed by fixed deterministic rule (no labels needed), unlike LeWM's simulator truth.
+# Orientation = sin/cos of 2x position angle (PA defined mod pi; avoids wrap-around penalty).
+# Measures what embedding retains, not invariance -- see augmentation_factors for that.
 def image_factors(imgs, eps=1e-8):
-    """Quantities measured FROM THE PIXELS, for use as probe targets.
-
-    imgs : (N, H, W, C) float in [0,1] -- must be THE SAME pixels that
-           produced the embeddings, or the probe is measuring nothing.
-
-    Returns {name: (N,) float64}.  These are the analogue of LeWM's "physical
-    quantities of interest".  LeWM has a simulator and can read the true state
-    off it; we do not, so every target here is computed from the image by a
-    fixed deterministic rule.  That is a feature, not a compromise: it means
-    the suite needs no labels at all and works on any image dataset.
-
-    The list is flux-weighted image moments plus two morphology summaries --
-    the standard non-parametric descriptors for an extended source, which is
-    what a galaxy is.  Orientation is returned as sin/cos of TWICE the
-    position angle because the position angle of an ellipse is only defined
-    mod pi; regressing the raw angle would punish a correct probe at the
-    wrap-around.
-
-    NOT invariances.  These say what the embedding retains about the scene.
-    Whether the encoder is invariant to the things we augmented (rotation,
-    crop, brightness) is a different question -- see `augmentation_factors`.
-    """
     X = np.asarray(imgs, np.float64)
     if X.ndim != 4:
         raise ValueError(f"image_factors needs (N,H,W,C), got {X.shape}")
@@ -130,20 +66,12 @@ def image_factors(imgs, eps=1e-8):
     return {k: np.asarray(v, np.float64) for k, v in out.items()}
 
 
+# Probe targets for quantities DELIBERATELY augmented away.
+# boxes: (B,4) crop boxes (cx,cy,w,h) from data.make_views
+# params: (B,4) optional (theta, flip, brightness, contrast)
+# Inverted vs image_factors: low r is GOOD (invariance held).
+# Kept separate from image_factors since goodness direction is opposite.
 def augmentation_factors(boxes, params=None):
-    """Probe targets for the quantities we DELIBERATELY augmented away.
-
-    boxes  : (B, 4) crop boxes (cx, cy, w, h) as returned by data.make_views
-    params : (B, 4) optional (theta, flip, brightness, contrast)
-
-    Read these INVERTED relative to `image_factors`.  The training objective
-    asks the encoder to be invariant to these; a probe that recovers them
-    means the invariance did not take.  Low r here is the good outcome.
-
-    Kept separate from image_factors precisely because the direction of
-    goodness is opposite, and mixing the two into one table invites reading
-    the wrong sign.
-    """
     b = np.asarray(boxes, np.float64)
     out = {"aug_crop_cx": b[:, 0], "aug_crop_cy": b[:, 1], "aug_crop_scale": b[:, 2]}
     if params is not None:
@@ -162,15 +90,12 @@ def _standardise(Ztr, Zte):
     return (Ztr - mu) / sd, (Zte - mu) / sd
 
 
+# Closed-form ridge regression probe. -> {nmse, mse, r, alpha}
+# Ridge not OLS: D can approach N on hidden layers, unregularized fit
+# would report interpolation threshold rather than decodability.
+# alpha chosen on held-out slice of TRAIN -- never on test.
 def ridge_probe(Ztr, ttr, Zte, tte, alphas=(1e-3, 1e-2, 1e-1, 1, 10, 100, 1e3),
                 val_frac=0.2, seed=0):
-    """Closed-form ridge regression probe.  -> {nmse, mse, r, alpha}
-
-    Ridge rather than plain least squares because D can approach N on the
-    hidden layers and an unregularised fit would report the interpolation
-    threshold rather than the decodability.  alpha is chosen on a held-out
-    slice of TRAIN -- never on test.
-    """
     Ztr, Zte = np.asarray(Ztr, np.float64), np.asarray(Zte, np.float64)
     ttr, tte = np.asarray(ttr, np.float64).ravel(), np.asarray(tte, np.float64).ravel()
     Ztr, Zte = _standardise(Ztr, Zte)
@@ -209,26 +134,15 @@ def _reg_scores(pred, targ, tsd):
     return {"nmse": float(mse / (tsd ** 2)), "mse": mse, "r": r}
 
 
+# Two-layer MLP probe, early-stopped. -> {nmse, mse, r, best_step}
+# vs ridge_probe: distinguishes 'discarded' from 'kept but entangled nonlinearly'
+# EARLY STOPPING IS LOAD-BEARING: without it, high-capacity probe overfits
+# and can score WORSE than closed-form ridge (incoherent as a measurement).
+# Holds out slice of TRAIN for best-val params; TEST touched exactly once at end.
 def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
               lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
               eval_every=50,
               weight_decay=1e-4):
-    """Two-layer MLP probe, early-stopped.  -> {nmse, mse, r, best_step}
-
-    The gap between this and `ridge_probe` is the quantity of interest: it
-    separates "the encoder discarded this" from "the encoder kept this but
-    entangled it nonlinearly".  metrics.py cannot distinguish those two.
-
-    EARLY STOPPING IS LOAD-BEARING HERE, not a refinement.  Trained for a
-    fixed step count with no held-out check, a probe with this much capacity
-    overfits a few thousand embeddings and can score WORSE than the
-    closed-form ridge probe -- which is incoherent as a measurement, since a
-    strictly more expressive model cannot have less access to the same
-    information.  When that happens the number describes the probe's
-    optimisation, not the representation.  So a slice of TRAIN is held out,
-    the best-validation parameters are kept, and TEST is touched exactly once
-    at the end.
-    """
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ttr = np.asarray(ttr, np.float64).ravel()
     tte = np.asarray(tte, np.float64).ravel()
@@ -283,31 +197,14 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
     return out
 
 
+# Linear (hidden=None) or MLP softmax probe, early-stopped over small LR grid.
+# Returns {accuracy, chance, best_step, best_lr, val_accuracy}; LR selected on val, not fixed.
+# Complements knn_accuracy (capacity-free, local): this finds globally-linear structure.
+# Model selection uses held-out slice of TRAIN (see mlp_probe) to avoid hidden=256 overfitting.
+# Both variants selected identically so linear-vs-MLP gap stays interpretable.
 def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
                 lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
                 eval_every=50, weight_decay=1e-4):
-    """Linear (hidden=None) or MLP softmax probe, early-stopped over a small
-    learning-rate grid.  -> {accuracy, chance, best_step, best_lr, val_accuracy}
-
-    The learning rate is SELECTED on validation, not fixed.  With a single
-    fixed rate the MLP variant peaked at step 100 of 2000 on every arm --
-    a probe that peaks at 5% of its budget is reporting its own tuning, not
-    the representation's extractable content, and it understates every arm's
-    number by an unknown amount.  Since the linear-vs-MLP gap is the quantity
-    that distinguishes "information absent" from "information entangled", the
-    probe has to be selected properly for that gap to mean anything.
-
-    Complements knn_accuracy in metrics.py: kNN is capacity-free but purely
-    local, so it misses globally-linear class structure that a linear readout
-    would find.  Reporting both separates "clustered" from "linearly
-    separable".
-
-    Model selection on a held-out slice of TRAIN, for the reason given in
-    `mlp_probe`: without it the hidden=256 variant overfits and lands below
-    the linear variant, which cannot be a true statement about the
-    representation.  Both variants are selected the same way so the
-    linear-vs-MLP gap stays interpretable.
-    """
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ytr = np.asarray(ytr).ravel().astype(np.int32)
     yte = np.asarray(yte).ravel().astype(np.int32)
@@ -365,14 +262,12 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
             "best_lr": float(best_lr)}
 
 
+# LeWM Table-1 analogue: every target x {linear, MLP}.
+# targets_* : {name: (N,)} from image_factors / augmentation_factors.
+# Returns {"regression": {name: {"linear": {...}, "mlp": {...}}},
+# "classification": {"linear": {...}, "mlp": {...}}}
 def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
                  mlp=True, seed=0):
-    """LeWM Table-1 analogue: every target x {linear, MLP}.
-
-    targets_* : {name: (N,)} from image_factors / augmentation_factors.
-    Returns {"regression": {name: {"linear": {...}, "mlp": {...}}},
-             "classification": {"linear": {...}, "mlp": {...}}}
-    """
     out = {"regression": {}, "classification": {}}
     for name in sorted(targets_tr):
         row = {"linear": ridge_probe(Ztr, targets_tr[name], Zte,
@@ -391,21 +286,11 @@ def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
 
 
 # ============================================================= 3. decoder
+# Shared decoder: embedding -> pixels. Fixed architecture on purpose, pinned not configurable.
+# Pins arch so SSIM is comparable across all runs; changing this class breaks comparability -- version instead of editing.
+# RECONSTRUCTION IS NEVER PART OF TRAINING: encoder frozen, only decoder learns.
+# Measures what the embedding retained, not what encoder could be made to retain.
 class Decoder(eqx.Module):
-    """Shared decoder: embedding -> pixels.  Fixed architecture on purpose.
-
-    LeWM trains a decoder from a frozen 192-dim embedding and shows the scene
-    comes back; MPC retro-fits a three-layer deconvolutional decoder with
-    GeLUs to frozen latents and reports SSIM.  We do the same thing, and the
-    architecture is pinned here rather than passed in so that a reconstruction
-    number is comparable across every run in the project.  If you change this
-    class, every previously reported SSIM becomes incomparable -- version it
-    instead of editing it.
-
-    RECONSTRUCTION IS NEVER PART OF TRAINING.  The encoder is frozen; only the
-    decoder learns.  This measures what the embedding retained, not what the
-    encoder could be made to retain.
-    """
     fc: eqx.nn.Linear
     convs: list
     head: eqx.nn.Conv2d
@@ -430,12 +315,10 @@ class Decoder(eqx.Module):
         return jax.nn.sigmoid(self.head(h))                        # (C,H,W) in [0,1]
 
 
+# Fit Decoder on FROZEN embeddings -> returns decoder
+# Ztr: (N, embed_dim), Xtr: (N, H, W, C) in [0,1]
 def train_decoder(Ztr, Xtr, embed_dim, img_shape, steps=3000, lr=1e-3,
                   batch=128, width=128, seed=0, verbose=False):
-    """Fit `Decoder` on FROZEN embeddings.  -> decoder
-
-    Ztr : (N, embed_dim), Xtr : (N, H, W, C) in [0,1].
-    """
     H, W, C = img_shape
     assert H == W, "square images assumed"
     key = jax.random.PRNGKey(seed)
@@ -473,14 +356,11 @@ def _gauss_win(size=11, sigma=1.5):
     return np.outer(g, g)
 
 
+# Mean SSIM over a batch. A, B : (N,H,W,C) in [0, data_range].
+# Written out rather than imported so suite has no scikit-image dependency
+# and window/constants are visible and fixed.
+# SSIM numbers only comparable at identical settings; MPC Table 1 omits them.
 def ssim(A, B, data_range=1.0, size=11, sigma=1.5):
-    """Mean SSIM over a batch.  A, B : (N,H,W,C) in [0, data_range].
-
-    Written out rather than imported so the suite has no scikit-image
-    dependency and so the window/constants are visible and fixed -- SSIM
-    numbers are only comparable at identical settings, and MPC's Table 1
-    reports SSIM without stating them.
-    """
     A = np.asarray(A, np.float64); B = np.asarray(B, np.float64)
     w = _gauss_win(size, sigma)
     C1, C2 = (0.01 * data_range) ** 2, (0.03 * data_range) ** 2
@@ -511,8 +391,8 @@ def ssim(A, B, data_range=1.0, size=11, sigma=1.5):
     return float(np.mean(vals))
 
 
+# Returns {mse, psnr, ssim} on held-out images, plus the reconstructions.
 def decode_report(dec, Zte, Xte):
-    """-> {mse, psnr, ssim} on held-out images, plus the reconstructions."""
     recon = np.asarray(jax.vmap(dec)(jnp.asarray(np.asarray(Zte, np.float32))))
     recon = np.transpose(recon, (0, 2, 3, 1))          # -> (N,H,W,C)
     X = np.asarray(Xte, np.float64)
@@ -522,14 +402,11 @@ def decode_report(dec, Zte, Xte):
             "ssim": ssim(X, recon)}, recon
 
 
+# Floor for decode_report: best possible CONSTANT reconstruction.
+# Decoder ignoring embedding, emitting dataset mean image, scores decent SSIM
+# on centred, low-diversity datasets -- SSIM alone is unreadable otherwise.
+# Any claim embedding "retains the scene" must beat this row.
 def baseline_decode_report(Xtr, Xte):
-    """Floor for `decode_report`: the best possible CONSTANT reconstruction.
-
-    Without this the decoder's SSIM is unreadable -- a decoder that ignores
-    the embedding entirely and emits the dataset mean image already scores a
-    respectable SSIM on a centred, low-diversity dataset.  Any claim that the
-    embedding "retains the scene" has to beat this row.
-    """
     mean_img = np.asarray(Xtr, np.float64).mean(0, keepdims=True)
     X = np.asarray(Xte, np.float64)
     rec = np.repeat(mean_img, len(X), 0)
@@ -540,22 +417,12 @@ def baseline_decode_report(Xtr, Xte):
 
 
 # ================================================== 4. path straightness
+# LeWM Eq. 9 analogue. Zseq: (T, B, D) -> {mean, per_step}
+# Mean cosine sim between consecutive velocity vectors v_t = z_{t+1}-z_t.
+# 1.0 = perfectly straight path, 0 = directionless.
+# Phase A: only PC relaxation trace use is available (inference, not representation).
+# Do not report this as the actual LeWM measurement (needs glimpse/saccade sequence).
 def path_straightness(Zseq):
-    """LeWM Eq. 9 analogue.  Zseq : (T, B, D) -> {mean, per_step}
-
-    Mean cosine similarity between consecutive latent VELOCITY vectors
-    v_t = z_{t+1} - z_t.  1.0 = perfectly straight path, 0 = directionless.
-
-    Two uses in this project, and they answer different questions:
-      * PC relaxation trace, (T, B, D) from pc_relax -- does the inference
-        dynamics travel a straight line to its fixed point, or wander?  This
-        is a statement about the INFERENCE, not the representation.
-      * glimpse/saccade sequence, once the frontend lands -- the actual LeWM
-        measurement, a statement about the representation's temporal
-        geometry.
-    Phase A as it stands has no temporal axis on the DATA, so only the first
-    use is available today.  Do not report it as the LeWM measurement.
-    """
     Z = np.asarray(Zseq, np.float64)
     if Z.ndim != 3 or Z.shape[0] < 3:
         raise ValueError(f"path_straightness needs (T>=3, B, D), got {Z.shape}")
@@ -567,8 +434,9 @@ def path_straightness(Zseq):
 
 
 # ====================================================== 5. visualisation
+# 2-D t-SNE.
+# Returns: coords (n,2), index into Z
 def tsne_embedding(Z, seed=0, perplexity=30, max_n=3000):
-    """2-D t-SNE.  -> (coords (n,2), index into Z)"""
     from sklearn.manifold import TSNE
     Z = np.asarray(Z, np.float64)
     idx = np.arange(len(Z))
@@ -591,10 +459,10 @@ def _style():
     })
 
 
+# t-SNE scatter: one panel colored by class, optionally one by continuous factor.
+# Ticks dropped -- t-SNE coordinates have no units.
 def tsne_figure(Z, y, path, colour_by=None, colour_name="", title="",
                 seed=0, class_names=None):
-    """t-SNE scatter, one panel coloured by class and (optionally) one by a
-    continuous factor.  Ticks dropped -- t-SNE coordinates have no units."""
     import matplotlib.pyplot as plt
     _style()
     XY, idx = tsne_embedding(Z, seed=seed)
@@ -630,13 +498,10 @@ def tsne_figure(Z, y, path, colour_by=None, colour_name="", title="",
     return path
 
 
+# Originals / reconstructions / (optional) constant-mean floor.
+# Row 3 is the point: compare row2 vs row1 is meaningless without seeing
+# what a trivial decoder (ignoring embedding) produces as baseline.
 def reconstruction_figure(X, recon, path, n=8, title="", mean_img=None):
-    """Originals / reconstructions / (optional) constant-mean floor.
-
-    The third row is the point of the figure: eyeballing row 2 against row 1
-    tells you almost nothing unless you can see what the trivial decoder that
-    ignores the embedding produces.
-    """
     import matplotlib.pyplot as plt
     _style()
     n = min(n, len(X))
@@ -666,20 +531,15 @@ def reconstruction_figure(X, recon, path, n=8, title="", mean_img=None):
 
 
 # ============================================================ 6. run_suite
+# Runs everything in one call -> dict (json-serialisable), written to disk.
+# Ztr/Zte: (N,D) embeddings from FROZEN encoder; Xtr/Xte: (N,H,W,C) images in [0,1]; ytr/yte: (N,) labels
+# Writes <out_dir>/probes<tag>.json plus two figures.
+# Returns the same dict so a sweep can collect results without re-reading disk.
 def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
               boxes_te=None, aug_params_te=None, boxes_tr=None,
               aug_params_tr=None, Zaug_tr=None, Zaug_te=None,
               decoder_steps=3000, probe_mlp=True,
               make_figures=True, seed=0, verbose=True):
-    """Everything, in one call.  -> dict (json-serialisable), written to disk.
-
-    Ztr/Zte : (N, D) embeddings from the FROZEN encoder
-    Xtr/Xte : (N, H, W, C) the images those embeddings came from, in [0,1]
-    ytr/yte : (N,) class labels
-
-    Writes `<out_dir>/probes<tag>.json` plus two figures.  The return value is
-    the same dict, so a sweep can collect these without re-reading disk.
-    """
     os.makedirs(out_dir, exist_ok=True)
     Xtr = np.asarray(Xtr, np.float32); Xte = np.asarray(Xte, np.float32)
     img_shape = Xtr.shape[1:]
@@ -753,9 +613,9 @@ def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
     return rep
 
 
+# One flat row per run, for cross-run tables. -> dict
 def summarise(rep, targets=("flux", "size_rms", "ellipticity",
                             "concentration", "colour_rg")):
-    """One flat row per run, for cross-run tables.  -> dict"""
     row = {"tag": rep.get("tag", "")}
     for t in targets:
         r = rep.get("scene", {}).get("regression", {}).get(t)
