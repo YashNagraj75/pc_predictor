@@ -55,6 +55,8 @@ class Cfg:
     eta_h: float = 0.05
     use_tau: bool = True
     adaptive_eta: bool = False
+    alpha: float = 1.0          # PC-ALM dual rate (arm 'alm')
+    holdout: bool = False       # train on the first 90% of train images, evaluate on the last 10% (selection only)
 
 
 # ------------------------------------------------------------------ data
@@ -120,6 +122,50 @@ def pc_grads(model, x, y, cfg, return_acts=False):
     return (g, acts, F) if return_acts else g
 
 
+def _layer_preds(model, acts, x):
+    """f_l(z_{l-1}) for every layer, same order as acts (jpc 'sp': no scalings, no skips)."""
+    return [jax.vmap(model[l])(x if l == 0 else acts[l - 1]) for l in range(len(model))]
+
+
+def alm_energy(model, acts, x, y, duals):
+    """PC-ALM augmented Lagrangian, completing-the-square form (pcalm.al_energy, rho = 1), batch mean like jpc:
+        L = 1/(2B) [ sum_{l<L} ||r_l + lam_l||^2 + ||y - f_L(z_{L-1})||^2 ],  r_l = z_l - f_l(z_{l-1}).
+    The output is clamped to the target y and carries no multiplier (supervised PC-ALM, SakanaAI Algorithm 1).
+    duals = None or all zero reproduces jpc.pc_energy_fn exactly (gated)."""
+    preds = _layer_preds(model, acts, x)
+    r = [a - f for a, f in zip(acts[:-1], preds[:-1])] + [y - preds[-1]]
+    if duals is not None:
+        r = [ri + li for ri, li in zip(r[:-1], duals)] + [r[-1]]
+    return 0.5 * sum(jnp.sum(ri ** 2) for ri in r) / x.shape[0]
+
+
+def alm_grads(model, x, y, cfg, return_acts=False):
+    """PC-ALM weight gradient: T primal steps on L (same curvature-tracking step as the plain-PC arm), each
+    followed by the dual step lam_l += alpha * r_l except after the last; weights from L at the final state.
+    alpha = 0 is plain PC (pc_grads) exactly."""
+    acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
+    B = x.shape[0]
+    sq = [jnp.linalg.norm(jax.lax.stop_gradient(l.layers[1].weight if hasattr(l, "layers") else l.weight), 2) ** 2
+          for l in model[1:]]
+    eta = 0.9 / (1.0 + 2.0 * jnp.max(jnp.stack(sq))) if cfg.adaptive_eta else cfg.eta_h
+    duals = [jnp.zeros_like(a) for a in acts[:-1]]
+    gfn = jax.grad(lambda h, lam: alm_energy(model, h + [acts[-1]], x, y, lam))
+
+    def step(carry, t):
+        h, lam = carry
+        g = gfn(h, lam)
+        h = [a - eta * B * ga for a, ga in zip(h, g)]
+        preds = _layer_preds(model, h + [acts[-1]], x)
+        lam = jax.lax.cond(t < cfg.T - 1, lambda L: [li + cfg.alpha * (a - f) for li, a, f in zip(L, h, preds[:-1])],
+                           lambda L: L, lam)
+        return (h, lam), alm_energy(model, h + [acts[-1]], x, y, lam)
+
+    (h, lam), F = jax.lax.scan(step, (acts[:-1], duals), jnp.arange(cfg.T))
+    hs = [jax.lax.stop_gradient(a) for a in h]; lam = [jax.lax.stop_gradient(l) for l in lam]
+    g = eqx.filter_grad(lambda m: alm_energy(m, hs + [acts[-1]], x, y, lam))(model)
+    return (g, hs + [acts[-1]], F, lam) if return_acts else g
+
+
 def optimiser(cfg):
     sched = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 200, cfg.steps)
     return optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(sched, weight_decay=cfg.wd))
@@ -153,12 +199,14 @@ def evaluate(model, z, tau, use_tau=True, copy=False, n_retr=2000):
 # ------------------------------------------------------------------ train
 def train(cfg, data_path, verbose=True):
     ztr, ttr, zte, tte, _, _ = load(data_path, cfg.backbone, cfg.layer)
+    if cfg.holdout:                                       # selection on held-out TRAIN images, never the test set
+        nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
     X, Y, *_ = pairs(ztr, ttr, cfg.use_tau)
     key = jax.random.PRNGKey(cfg.seed)
     model = make(key, X.shape[1], Y.shape[1])
     opt = optimiser(cfg)
     st = opt.init(eqx.filter(model, eqx.is_inexact_array))
-    gfn = bp_grads if cfg.arm == "bp" else pc_grads
+    gfn = {"bp": bp_grads, "pc": pc_grads, "alm": alm_grads}[cfg.arm]
 
     @eqx.filter_jit
     def step(model, st, x, y):
@@ -174,10 +222,15 @@ def train(cfg, data_path, verbose=True):
         model, st, gn, l = step(model, st, jnp.asarray(X[idx]), jnp.asarray(Y[idx]))
         if (s + 1) % 1000 == 0 or s == 0:
             row = {"step": s + 1, "train_loss": float(l), "grad_norm": float(gn)}
-            if cfg.arm == "pc":     # how far PC's gradient is from BP's on this batch, as training proceeds
-                a, b = _flat(pc_grads(model, jnp.asarray(X[idx]), jnp.asarray(Y[idx]), cfg)), _flat(bp_grads(model, jnp.asarray(X[idx]), jnp.asarray(Y[idx]), cfg))
+            if cfg.arm in ("pc", "alm"):     # how far the PC gradient is from BP's on this batch, as training proceeds
+                xb, yb = jnp.asarray(X[idx]), jnp.asarray(Y[idx])
+                ga, gb = gfn(model, xb, yb, cfg), bp_grads(model, xb, yb, cfg)
+                a, b = _flat(ga), _flat(gb)
                 row["cos_pc_bp"] = float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
                 row["ratio_pc_bp"] = float(jnp.linalg.norm(a) / jnp.linalg.norm(b))
+                lw = lambda g, i: _flat(g[i])
+                row["layer_cos"] = [float(lw(ga, i) @ lw(gb, i) / (jnp.linalg.norm(lw(ga, i)) * jnp.linalg.norm(lw(gb, i)) + 1e-30)) for i in range(len(model))]
+                row["layer_ratio"] = [float(jnp.linalg.norm(lw(ga, i)) / (jnp.linalg.norm(lw(gb, i)) + 1e-30)) for i in range(len(model))]
             log.append(row)
             if verbose:
                 print(f"[{cfg.arm} {cfg.backbone}/{cfg.layer} s{cfg.seed}] step {s + 1} loss {float(l):.4f} "
@@ -249,7 +302,38 @@ def gates():
     d = max(float(jnp.max(jnp.abs(a[:8] - b))) for a, b in zip(acts2[:-1], acts1[:-1]))
     good = d < 1e-4; ok &= good
     print(f"[{'PASS' if good else 'FAIL'}] relaxed activities of a sample do not depend on the batch ({d:.1e})")
+    ok &= alm_gates(model, x, y, leaves)
     print("ALL PASS" if ok else "SOME FAIL")
+    return ok
+
+
+def alm_gates(model, x, y, leaves):
+    ok = True
+    cos = lambda a, b: float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
+    acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
+    acts = [a + 0.1 * jax.random.normal(jax.random.PRNGKey(7 + i), a.shape) for i, a in enumerate(acts[:-1])] + [y]
+    e1, e2 = float(alm_energy(model, acts, x, y, None)), float(jpc.pc_energy_fn((model, None), acts, y, x=x, param_type="sp"))
+    good = abs(e1 - e2) < 1e-5 * abs(e2); ok &= good
+    print(f"[{'PASS' if good else 'FAIL'}] ALM energy with no multipliers = jpc PC energy ({e1:.6f} vs {e2:.6f})")
+    d = float(jnp.max(jnp.abs(leaves(alm_grads(model, x, y, Cfg(T=20, alpha=0.0))) - leaves(pc_grads(model, x, y, Cfg(T=20))))))
+    good = d < 1e-5; ok &= good
+    print(f"[{'PASS' if good else 'FAIL'}] alpha = 0: ALM weight gradient = plain PC ({d:.1e})")
+    # large output error (random targets): plain PC's gradient departs from BP's; ALM's should approach it.
+    # Measured on the training configuration (curvature-tracking step).  Pre-registered: at T = 100, alpha = 0.25,
+    # cos(ALM, BP) > 0.97 and at least 0.05 above plain PC; the T = 20 training-budget values are reported.
+    gb = leaves(bp_grads(model, x, y, None))
+    for T in (20, 100):
+        cp = cos(leaves(pc_grads(model, x, y, Cfg(T=T, adaptive_eta=True))), gb)
+        ca = {al: cos(leaves(alm_grads(model, x, y, Cfg(T=T, alpha=al, adaptive_eta=True))), gb) for al in (0.1, 0.25, 0.5, 1.0)}
+        print(f"   random targets, T={T}: cos to BP  plain PC {cp:.4f} | ALM " + " ".join(f"a={k}: {v:.4f}" for k, v in ca.items()))
+        if T == 100:
+            good = ca[0.25] > 0.97 and ca[0.25] > cp + 0.05; ok &= good
+            print(f"[{'PASS' if good else 'FAIL'}] large error, T=100, alpha=0.25: ALM matches BP (cos {ca[0.25]:.4f}) where plain PC does not ({cp:.4f})")
+    g1, a1, _, _ = alm_grads(model, x[:8], y[:8], Cfg(T=20), return_acts=True)
+    g2, a2, _, _ = alm_grads(model, x, y, Cfg(T=20), return_acts=True)
+    d = max(float(jnp.max(jnp.abs(a[:8] - b))) for a, b in zip(a2[:-1], a1[:-1]))
+    good = d < 1e-4; ok &= good
+    print(f"[{'PASS' if good else 'FAIL'}] ALM relaxed activities of a sample do not depend on the batch ({d:.1e})")
     return ok
 
 
@@ -262,13 +346,15 @@ if __name__ == "__main__":
     ap.add_argument("--steps", type=int, default=6000); ap.add_argument("--T", type=int, default=20)
     ap.add_argument("--eta-h", type=float, default=0.05); ap.add_argument("--out", default=None)
     ap.add_argument("--adaptive-eta", action="store_true"); ap.add_argument("--save", action="store_true")
+    ap.add_argument("--alpha", type=float, default=1.0); ap.add_argument("--holdout", action="store_true")
     a = ap.parse_args()
     if a.mode == "gates":
         sys.exit(0 if gates() else 1)
     if a.mode == "check":
         check(a.data)
     else:
-        c = Cfg(backbone=a.backbone, layer=a.layer, arm=a.arm, seed=a.seed, steps=a.steps, T=a.T, eta_h=a.eta_h, adaptive_eta=a.adaptive_eta)
+        c = Cfg(backbone=a.backbone, layer=a.layer, arm=a.arm, seed=a.seed, steps=a.steps, T=a.T, eta_h=a.eta_h, adaptive_eta=a.adaptive_eta,
+                alpha=a.alpha, holdout=a.holdout)
         model, log, res = train(c, a.data)
         out = a.out or f"pred_runs/ff_{a.arm}_{a.backbone}_{a.layer}_s{a.seed}.json"
         os.makedirs(os.path.dirname(out), exist_ok=True)
