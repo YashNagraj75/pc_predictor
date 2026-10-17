@@ -9,12 +9,14 @@ import pred_ff as PF
 M, DT = 128, 10
 WIDTH = {3: 600, 10: 256}
 C_GRID = (0.25, 0.5, 1.0, 2.0)
+RHO_GRID = (1.0, 4.0, 16.0)      # alm penalty (= hidden precision); C2 selection grid
+C_ALM = (0.25, 0.5, 1.0)       # c = 2 diverges for rho >= 4 (gate, 2026-10-17)
 
 
 @dataclasses.dataclass
 class GCfg:
     backbone: str = "bp"
-    rule: str = "pc"            # pc | bp
+    rule: str = "pc"            # pc | bp | alm (PC-ALM: multipliers on the hidden levels)
     start: str = "zero"         # zero | amort
     depth: int = 3
     width: int = 0              # 0 -> WIDTH[depth]
@@ -31,6 +33,9 @@ class GCfg:
     lr: float = 1e-3
     wd: float = 1e-4
     T_amort: int = 20
+    alpha: float = 0.0          # alm: dual rate, lam_l += alpha * r_l
+    k_inner: int = 1            # alm: primal steps per dual step (total primal steps stays T)
+    log_align: bool = True      # credit diagnostic at log steps (pc / alm)
 
     @property
     def H(self):
@@ -43,6 +48,7 @@ class GCfg:
     @property
     def name(self):
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
+        tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule == "alm" else ""
         return f"gpc_{self.rule}_d{self.depth}_{self.start}{tag}"
 
 
@@ -104,6 +110,22 @@ def level_energies(p, s, xs, Z, Ph, H):
 def energy(p, s, xs, Z, Ph, H, prior, out_w=1.0, hid=1.0):
     e = level_energies(p, s, xs, Z, Ph, H)
     return out_w * e[0] + hid * sum(e[1:]) + 0.5 * prior * jnp.sum(s ** 2)
+
+
+# Hidden-level residuals [r_1 .. r_H], same order as level_energies[1:]; r_H = x_H - mu_top(s).
+def hid_residuals(p, s, xs, Ph, H):
+    r = [xs[l - 1] - mu_mid(p["mid"][l - 1], xs[l], H) for l in range(1, H)]
+    return r + [xs[H - 1] - mu_top(p, s, Ph)]
+
+
+# PC-ALM augmented energy (completing-the-square form, rho = hid): the observation term is the objective,
+# every hidden residual carries a multiplier.  lam = None or all zero gives energy() exactly (gated).
+def alm_energy(p, s, xs, Z, Ph, H, prior, out_w, hid, lam):
+    r = hid_residuals(p, s, xs, Ph, H)
+    if lam is not None:
+        r = [ri + li for ri, li in zip(r, lam)]
+    e0 = 0.5 * jnp.sum((Z - mu_bot(p, xs[0])) ** 2)
+    return out_w * e0 + hid * 0.5 * sum(jnp.sum(ri ** 2) for ri in r) + 0.5 * prior * jnp.sum(s ** 2)
 
 
 def ad_loss(p, s, Z, Ph, H, prior):
@@ -188,6 +210,40 @@ def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None):
     return s, xs, hist, rel
 
 
+# PC-ALM relaxation: T primal steps on (s, xs) with the PC step sizes, a dual step lam += alpha * r after every
+# k_inner primal steps (never after the last).  alpha = 0 is pc_infer exactly (gated).  At the converged saddle
+# r = 0, s minimises the auto-decoder loss and the weight gradient equals the BP auto-decoder's.
+def alm_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, lam0=None):
+    T = cfg.T if T is None else T
+    H = cfg.H
+    xs0 = topdown(p, s0, Ph, H)[0] if xs0 is None else xs0
+    lam0 = [jnp.zeros_like(x) for x in xs0] if lam0 is None else lam0
+    etas = pc_etas(p, Z.shape[1], cfg)
+    Lf = lambda s, xs, lam: alm_energy(p, s, xs, Z, Ph, H, cfg.prior, cfg.out_w, cfg.hid_prec, lam)
+    gfn = jax.grad(lambda v, lam: Lf(v[0], v[1], lam))
+
+    def step(c, t):
+        (s, xs), lam = c
+        gs, gx = gfn((s, xs), lam)
+        s = s if freeze_s else s - etas[0] * gs
+        xs = [x - e * g for x, g, e in zip(xs, gx, etas[1:])]
+        do = ((t + 1) % cfg.k_inner == 0) & (t < T - 1)
+        r = hid_residuals(p, s, xs, Ph, H)
+        lam = [jnp.where(do, l + cfg.alpha * ri, l) for l, ri in zip(lam, r)]
+        return ((s, xs), lam), Lf(s, xs, lam)
+
+    ((s, xs), lam), hist = jax.lax.scan(step, ((s0, xs0), lam0), jnp.arange(T))
+    gs = gfn((s, xs), lam)[0]
+    rel = jnp.mean(jnp.linalg.norm(etas[0] * gs, axis=-1) / (jnp.linalg.norm(s, axis=-1) + 1e-8))
+    return s, xs, lam, hist, rel
+
+
+def alm_wgrads(p, s, xs, lam, Z, Ph, cfg):
+    s, xs, lam = jax.lax.stop_gradient(s), jax.lax.stop_gradient(xs), jax.lax.stop_gradient(lam)
+    g = jax.grad(lambda q: alm_energy(q, s, xs, Z, Ph, cfg.H, cfg.prior, cfg.out_w, cfg.hid_prec, lam))(p)
+    return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
+
+
 def ad_infer(p, s0, Z, Ph, cfg, T=None):
     T = cfg.T if T is None else T
     eta = ad_eta(p, s0, Ph, cfg)
@@ -210,6 +266,8 @@ def infer_s(p, amort, Z, T9, cfg, T=None):
         return s0, s0, jnp.zeros(1), jnp.zeros(())
     if cfg.rule == "pc":
         s, _, hist, rel = pc_infer(p, s0, Z, Ph, cfg, T)
+    elif cfg.rule == "alm":
+        s, _, _, hist, rel = alm_infer(p, s0, Z, Ph, cfg, T)
     else:
         s, hist, rel = ad_infer(p, s0, Z, Ph, cfg, T)
     return s, s0, hist, rel
@@ -234,6 +292,8 @@ def amort_grads(amort, Z, T9, s, cfg):
     y = jnp.repeat(jax.lax.stop_gradient(s)[:, None], k, 1).reshape(b * k, M)
     if cfg.rule == "pc":
         return PF.pc_grads(amort, x, y, PF.Cfg(T=cfg.T_amort, adaptive_eta=True))
+    if cfg.rule == "alm":
+        return PF.alm_grads(amort, x, y, PF.Cfg(T=cfg.T_amort, adaptive_eta=True, alpha=cfg.alpha))
     return PF.bp_grads(amort, x, y, None)
 
 
@@ -245,6 +305,14 @@ def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
         xs0 = [x.at[ii, seen].set(xv) for x, xv in zip(xs0, Zs_seen_xs)]       # warm start the seen views
         _, xs, h2, _ = pc_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
         return pc_wgrads(p, s, xs, Zall, Pall, cfg), h2
+    if cfg.rule == "alm":                               # Zs_seen_xs = (xs, lam) of the seen views from phase 1
+        ii = jnp.arange(Zall.shape[0])[:, None]
+        xs_s, lam_s = Zs_seen_xs
+        xs0 = topdown(p, s, Pall, cfg.H)[0]
+        xs0 = [x.at[ii, seen].set(xv) for x, xv in zip(xs0, xs_s)]
+        lam0 = [jnp.zeros_like(x).at[ii, seen].set(lv) for x, lv in zip(xs0, lam_s)]
+        _, xs, lam, h2, _ = alm_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0, lam0=lam0)
+        return alm_wgrads(p, s, xs, lam, Zall, Pall, cfg), h2
     return ad_wgrads(p, s, Zall, Pall, cfg), jnp.zeros(1)
 
 
@@ -267,9 +335,12 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
         Zs, Ts = Zall[ii, seen], Tall[ii, seen]
         Ps, Pall = phi(Ts), phi(Tall)
         s0 = start_s(p, amort, Zs, Ts, cfg)
-        E_init = _E(cfg)(p, s0, topdown(p, s0, Ps, cfg.H)[0], Zs, Ps) if cfg.rule == "pc" else ad_loss(p, s0, Zs, Ps, cfg.H, cfg.prior)
+        E_init = _E(cfg)(p, s0, topdown(p, s0, Ps, cfg.H)[0], Zs, Ps) if cfg.rule in ("pc", "alm") else ad_loss(p, s0, Zs, Ps, cfg.H, cfg.prior)
         if cfg.rule == "pc":
             s, xs_seen, hist, rel = pc_infer(p, s0, Zs, Ps, cfg)
+        elif cfg.rule == "alm":
+            s, xs_a, lam_a, hist, rel = alm_infer(p, s0, Zs, Ps, cfg)
+            xs_seen = (xs_a, lam_a)
         else:
             s, hist, rel = ad_infer(p, s0, Zs, Ps, cfg)
             xs_seen = None
@@ -287,10 +358,37 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
             a_err = jnp.mean(jnp.sum((s0 - s) ** 2, -1)) / (jnp.mean(jnp.sum(s ** 2, -1)) + 1e-12)
         finite = jnp.isfinite(hist[-1]) & jnp.isfinite(gn) & jnp.isfinite(pred_err)
         up = jnp.mean((jnp.diff(hist) > 1e-3 * jnp.abs(hist[0])).astype(jnp.float32))
-        m = {"E_init": E_init / Zs.shape[0], "E": hist[-1] / Zs.shape[0], "pred_err": pred_err, "gnorm": gn,
+        # alm: hist is the AUGMENTED energy (rises as the duals grow), so log the plain energy at the final state
+        E_fin = _E(cfg)(p, s, xs_seen[0], Zs, Ps) if cfg.rule == "alm" else hist[-1]
+        m = {"E_init": E_init / Zs.shape[0], "E": E_fin / Zs.shape[0], "pred_err": pred_err, "gnorm": gn,
              "rel_last_step_s": rel, "frac_up_steps": up, "s_norm": jnp.mean(jnp.linalg.norm(s, axis=-1)),
              "amort_rel_err": a_err, "E2": h2[-1] / Zall.shape[0], "finite": finite}
         return p2, amort2, st, st_a2, m
+
+    # Credit diagnostic at log steps (pc / alm only; never feeds training): cosine of this rule's weight gradient
+    # with the BP auto-decoder gradient at the SAME belief s (global and per block), how far s is from the
+    # auto-decoder's own inference, and the relative size of the hidden-level residuals after phase 1.
+    @eqx.filter_jit
+    def align(p, amort, Zall, Tall, perm, k):
+        ii = jnp.arange(Zall.shape[0])[:, None]
+        seen = perm[:, :k]
+        Zs, Ts = Zall[ii, seen], Tall[ii, seen]
+        Ps, Pall = phi(Ts), phi(Tall)
+        s0 = start_s(p, amort, Zs, Ts, cfg)
+        if cfg.rule == "alm":
+            s, xs, lam, _, _ = alm_infer(p, s0, Zs, Ps, cfg); carry = (xs, lam)
+        else:
+            s, xs, _, _ = pc_infer(p, s0, Zs, Ps, cfg); carry = xs
+        g, _ = weight_grads(p, s, carry, Zall, Pall, seen, cfg)
+        gb = ad_wgrads(p, s, Zall, Pall, cfg)
+        f = lambda t: jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
+        c = lambda a, b: jnp.dot(f(a), f(b)) / (jnp.linalg.norm(f(a)) * jnp.linalg.norm(f(b)) + 1e-30)
+        blocks = [c(g["top"], gb["top"])] + [c(a, b) for a, b in zip(g["mid"], gb["mid"])] + [c(g["bot"], gb["bot"])]
+        s_ad = ad_infer(p, s0, Zs, Ps, cfg)[0]
+        r = hid_residuals(p, s, xs, Ps, cfg.H)
+        res = jnp.sqrt(sum(jnp.sum(x ** 2) for x in r) / (sum(jnp.sum(x ** 2) for x in xs) + 1e-30))
+        return {"cos_ad": c(g, gb), "cos_ad_blocks": jnp.stack(blocks), "ratio_ad": jnp.linalg.norm(f(g)) / (jnp.linalg.norm(f(gb)) + 1e-30),
+                "s_dist_ad": jnp.mean(jnp.linalg.norm(s - s_ad, axis=-1) / (jnp.linalg.norm(s_ad, axis=-1) + 1e-8)), "hid_res_rel": res}
 
     rng = np.random.default_rng(cfg.seed + 4000)
     log, t0, stop = [], time.time(), (cfg.stop_at or cfg.steps)
@@ -309,6 +407,9 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
         p, amort = p_new, am_new
         if (i + 1) % log_every == 0 or i == 0 or i == stop - 1:
             row = {"step": i + 1, "k": k, **{k_: (bool(v) if k_ == "finite" else float(v)) for k_, v in m.items()}}
+            if cfg.rule in ("pc", "alm") and cfg.log_align:
+                a_ = align(p, amort, jnp.asarray(ztr[idx]), jnp.asarray(ttr[idx]), jnp.asarray(perm), k)
+                row.update({k_: (np.asarray(v).round(4).tolist() if np.ndim(v) else float(v)) for k_, v in a_.items()})
             log.append(row)
             if verbose:
                 print(f"[{cfg.name} c{cfg.c} s{cfg.seed}] " + json.dumps({k_: (round(v, 4) if isinstance(v, float) else v) for k_, v in row.items()})

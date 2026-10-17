@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--rule", default="pc"); ap.add_argument("--depth", type=int, default=3); ap.add_argument("--start", default="zero")
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--width", type=int, default=0); ap.add_argument("--hid-prec", type=float, default=1.0)
+    ap.add_argument("--rho", type=float, default=None)   # alm only: force the penalty (ablation); default = selected
     ap.add_argument("--steps", type=int, default=4000); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--outdir", default="pred_runs/tests")
     a = ap.parse_args()
@@ -55,9 +56,13 @@ def main():
     raw = np.load("pred_latents.npz")[f"{a.backbone}_emb_tr"].reshape(-1, 128)
     zstats = (raw.mean(0), raw.std(0) + 1e-6)
     sel = json.load(open(a.gsel))
-    c = sel[parent_key(a)]["c"]
-    cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=a.hid_prec,
-                 seed=a.seed, c=c, steps=a.steps)
+    c, hp, alpha = sel[parent_key(a)]["c"], a.hid_prec, 0.0
+    if a.rule == "alm":
+        alpha = 1.0
+        hp = sel[parent_key(a)]["rho"] if a.rho is None else a.rho
+        c = sel[parent_key(a)]["c"] if a.rho is None else sel[parent_key(a)]["best_c_by_rho"][str(float(a.rho))]
+    cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=hp,
+                 seed=a.seed, c=c, steps=a.steps, alpha=alpha)
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{cfg.name}_{a.backbone}_s{a.seed}.json"
     t0 = time.time()

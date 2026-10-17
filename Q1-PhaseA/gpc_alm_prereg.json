@@ -1,0 +1,13 @@
+{"spec": "wiki Methods/'Method - PC-ALM generative predictor (C2)' (2026-10-17)",
+ "user_request": "C2 at depths 3 and 10; reviewed by agents; does scaling work; why does PC-ALM alignment drift",
+ "model": "generative predictor of pred_gpc.py (stage 1), residual top-down maps, zero start, T=400, T2=100, 4000 steps, batch 256, unit observation weight",
+ "rule": "PC-ALM: multipliers on every hidden residual (r_1..r_H, incl. the top link to s), completing-the-square energy with penalty rho (= hidden precision); scaled method-of-multipliers dual step lam += r after every primal step (alpha=1, k_inner=1), never after the last; phase 2 at fixed s carries the seen views' (x, lam), unseen views start at topdown(s) with lam=0",
+ "selection": {"grid": {"rho": [1, 4, 16], "c": [0.25, 0.5, 1.0]}, "rule": "lowest val k=1 nmse at T=400 after 800 of 4000 scheduled steps, 90/10 train split, seed 0, per depth; diverged/exploded excluded; edge winners flagged, not re-tuned",
+               "why_rho": "float64 gate: at fixed s the multiplier method reaches the BP auto-decoder gradient only for large rho (d10: cos 0.827 at rho=1, 0.984 at 16, 0.997 at 64); larger rho slows the belief s (step ~ 1/rho), so rho is selected, not fixed"},
+ "runs": {"alm": "selected (rho, c) x seeds 0,1,2 per depth", "ablation": "rho=1 ALM seed 0 per depth (its best c) if rho=1 not selected",
+          "controls": "BP auto-decoder and plain PC, zero start, seeds 1,2 (seed 0 = stage 1, findings/21, same code path)"},
+ "readings": {"parity": "ALM vs BP auto-decoder on the identical network per depth: |mean diff| <= max(sd_ALM, sd_BP) over 3 seeds is parity; otherwise win/loss",
+              "scaling": "ALM d10 vs ALM d3 test k=1 nmse (BP: 0.306 -> 0.278 in stage 1, seed 0); 'scales' if d10 is lower by more than max sd",
+              "credit": "logged cos_ad (global and per block) of the ALM weight gradient vs the BP auto-decoder gradient at the same s, every 250 steps; 'holds' if >= 0.95 throughout",
+              "belief": "s_dist_ad: distance of the ALM belief from the auto-decoder's inferred belief from the same start"},
+ "tests": "unchanged from stage 1 (pairs, k_seen 1-3 at T=400 and settled T=2000, T_inf sweep, robustness 3 draws, diagnostics)"}

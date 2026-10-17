@@ -51,8 +51,62 @@ def equivalence():
         _, xh, _, _ = G.pc_infer(p, sf, Zs, Ph, ch, freeze_s=True)
         c2 = cos(G.pc_wgrads(p, sf, xh, Zs, Ph, ch), G.ad_wgrads(p, sf, Zs, Ph, cfg))   # gradient of the SAME (precision-weighted) energy
         check(f"d{depth} (float64) hidden precision 1e4: relaxed hidden levels = top-down pass, gradient = BP direction (cos > 0.999)", c2 > 0.999, f"cos {c2:.6f}")
+        # PC-ALM at fixed s: with a large enough penalty the multiplier method reaches the BP auto-decoder gradient
+        # at unit observation weight (plain PC cannot).  rho = 1 is reported: it stalls at an infeasible point.
+        gb = G.ad_wgrads(p, sf, Z, Ph, cfg)
+        for rho, thr in ((64.0, 0.995), (16.0, None), (1.0, None)):
+            ca = dataclasses.replace(cfg, rule="alm", alpha=1.0, hid_prec=rho, k_inner=20, T=4000)
+            _, xa, la, _, _ = G.alm_infer(p, sf, Z, Ph, ca, freeze_s=True)
+            ce = cos(G.alm_wgrads(p, sf, xa, la, Z, Ph, ca), gb)
+            if thr is None:
+                print(f"     report: d{depth} ALM rho={rho:g} converged credit cos {ce:.5f}")
+            else:
+                check(f"d{depth} (float64) ALM rho={rho:g}, fixed s, unit observation weight: credit = BP auto-decoder (cos > {thr})", ce > thr, f"cos {ce:.6f}")
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
+
+
+def alm_gates():
+    Z, T9 = data(); Ph = G.phi(T9)
+    for depth in (3, 10):
+        cfg = G.GCfg(depth=depth, T=200, rule="alm", alpha=1.0)
+        p = G.init(jax.random.PRNGKey(depth), cfg); H = cfg.H
+        s0 = jnp.zeros((Z.shape[0], G.M))
+        xs0 = G.topdown(p, s0, Ph, H)[0]
+        e1 = float(G.alm_energy(p, s0, xs0, Z, Ph, H, 1.0, 1.0, 1.0, None)); e2 = float(G._E(cfg)(p, s0, xs0, Z, Ph))
+        check(f"d{depth} ALM energy with no multipliers = PC energy", abs(e1 - e2) <= 1e-6 * abs(e2), f"{e1:.4f} {e2:.4f}")
+        # alpha = 0: identical to plain PC (beliefs, hidden levels, weight gradients)
+        c0 = dataclasses.replace(cfg, alpha=0.0)
+        sa, xa, la, _, _ = G.alm_infer(p, s0, Z, Ph, c0)
+        sp, xp, _, _ = G.pc_infer(p, s0, Z, Ph, dataclasses.replace(cfg, rule="pc"))
+        d = max([float(jnp.max(jnp.abs(sa - sp)))] + [float(jnp.max(jnp.abs(a - b))) for a, b in zip(xa, xp)])
+        gd = float(jnp.max(jnp.abs(flat(G.alm_wgrads(p, sa, xa, la, Z, Ph, c0)) - flat(G.pc_wgrads(p, sp, xp, Z, Ph, cfg)))))
+        check(f"d{depth} ALM with alpha=0 = plain PC (inference and weight gradient)", d < 1e-5 and gd < 1e-5, f"{d:.1e} {gd:.1e}")
+        # every grid point stays finite and shrinks the hidden residuals on the free-s problem
+        for rho in G.RHO_GRID:
+            for c in G.C_ALM:
+                cc = dataclasses.replace(cfg, hid_prec=rho, c=c)
+                s, xs, lam, hist, _ = G.alm_infer(p, s0, Z, Ph, cc)
+                r0 = sum(float(jnp.sum(x ** 2)) for x in G.hid_residuals(p, s0, xs0, Ph, H))
+                xr = G.topdown(p, s0, Ph, H)[0]
+                r1 = sum(float(jnp.sum(x ** 2)) for x in G.hid_residuals(p, s, xs, Ph, H))
+                fin = bool(jnp.all(jnp.isfinite(hist))) and bool(jnp.all(jnp.isfinite(s)))
+                check(f"d{depth} ALM rho={rho:g} c={c:g}: inference finite", fin, f"final residual^2 {r1:.2e}")
+        # batch independence and reordering invariance
+        a4 = G.alm_infer(p, s0[:4], Z[:4], Ph[:4], dataclasses.replace(cfg, T=50, hid_prec=4.0))[0]
+        a16 = G.alm_infer(p, s0, Z, Ph, dataclasses.replace(cfg, T=50, hid_prec=4.0))[0]
+        perm = jnp.arange(16)[::-1]; inv = jnp.argsort(perm)
+        ap_ = G.alm_infer(p, s0[perm], Z[perm], Ph[perm], dataclasses.replace(cfg, T=50, hid_prec=4.0))[0][inv]
+        bi = max(float(jnp.max(jnp.abs(a4 - a16[:4]))), float(jnp.max(jnp.abs(ap_ - a16))))
+        check(f"d{depth} ALM inference independent of the batch and its order", bi < 1e-5, f"{bi:.1e}")
+        # predictive training runs finite with the credit logger on
+        ct = dataclasses.replace(cfg, T=20, T2=10, steps=6, batch=16, hid_prec=4.0)
+        zt = np.asarray(jax.random.normal(jax.random.PRNGKey(1), (64, 4, 128)))
+        tt = np.asarray(0.5 * jax.random.normal(jax.random.PRNGKey(2), (64, 4, 9)))
+        _, _, log, div = G.train(ct, zt, tt, verbose=False, log_every=2)
+        okl = (not div) and len(log) > 0 and all(np.isfinite(r["cos_ad"]) and len(r["cos_ad_blocks"]) == H + 1 for r in log)
+        check(f"d{depth} ALM predictive training finite; credit logger runs (blocks = {H + 1})", okl,
+              f"cos_ad {[round(r['cos_ad'], 3) for r in log]}")
 
 
 def main():
@@ -135,6 +189,7 @@ def main():
                 _, _, log, div = G.train(ct, zt, tt, verbose=False, log_every=1)
                 ks = sorted({r["k"] for r in log if "k" in r})
                 check(f"d{depth} {rule}/{start}: predictive training runs finite (k seen {ks})", not div and len(log) > 0)
+    alm_gates()
     # divergence is detected and the last finite weights are kept
     cd = G.GCfg(depth=3, c=1e6, T=50, T2=5, steps=5, batch=16)
     zt = np.asarray(jax.random.normal(jax.random.PRNGKey(1), (64, 4, 128))); tt = np.asarray(0.5 * jax.random.normal(jax.random.PRNGKey(2), (64, 4, 9)))
