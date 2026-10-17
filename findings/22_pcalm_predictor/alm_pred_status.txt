@@ -1,0 +1,16 @@
+10-16_12:56 start at e0b5e7f backend gpu
+10-16_12:56 gates: 8 PASS
+10-16_13:11 selected T=100 alpha=1.0
+10-16_13:13 trained alm s0
+10-16_13:14 tested ffalm_bp_s0
+10-16_13:16 trained plain PC T=100 s0
+10-16_13:17 tested ffpcT100_bp_s0
+10-16_13:19 trained alm s1
+10-16_13:20 tested ffalm_bp_s1
+10-16_13:22 trained plain PC T=100 s1
+10-16_13:23 tested ffpcT100_bp_s1
+10-16_13:25 trained alm s2
+10-16_13:26 tested ffalm_bp_s2
+10-16_13:28 trained plain PC T=100 s2
+10-16_13:29 tested ffpcT100_bp_s2
+10-16_13:29 ALL DONE

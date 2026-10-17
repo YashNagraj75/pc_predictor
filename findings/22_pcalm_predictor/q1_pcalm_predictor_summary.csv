@@ -1,0 +1,21 @@
+method,test,condition,k,nmse_mean,nmse_sd,n
+PC-ALM T=100 alpha=1,k_seen,clean,1,0.3088,0.0008,3
+backprop,k_seen,clean,1,0.2992,0.0006,3
+plain PC T=100,k_seen,clean,1,0.3416,0.0008,3
+plain PC T=20,k_seen,clean,1,0.3321,0.0017,3
+PC-ALM T=100 alpha=1,pairs,clean,1,0.3074,0.0017,3
+backprop,pairs,clean,1,0.2981,0.0004,3
+plain PC T=100,pairs,clean,1,0.3423,0.0008,3
+plain PC T=20,pairs,clean,1,0.3321,0.0012,3
+PC-ALM T=100 alpha=1,robust,noise=0.1,1,0.6935,0.009,3
+backprop,robust,noise=0.1,1,0.6864,0.0015,3
+plain PC T=100,robust,noise=0.1,1,0.7403,0.0009,3
+plain PC T=20,robust,noise=0.1,1,0.7282,0.003,3
+PC-ALM T=100 alpha=1,robust,noise=0.2,1,1.4776,0.0519,3
+backprop,robust,noise=0.2,1,1.4694,0.0107,3
+plain PC T=100,robust,noise=0.2,1,1.6928,0.0009,3
+plain PC T=20,robust,noise=0.2,1,1.6494,0.011,3
+PC-ALM T=100 alpha=1,robust,occlude=0.25,1,1.8384,0.0461,3
+backprop,robust,occlude=0.25,1,1.8305,0.0263,3
+plain PC T=100,robust,occlude=0.25,1,1.8508,0.0297,3
+plain PC T=20,robust,occlude=0.25,1,1.8501,0.014,3
