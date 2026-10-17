@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--rho", type=float, default=None)   # alm only: force the penalty (ablation); default = selected
     ap.add_argument("--alpha", type=float, default=1.0)  # alm only: 0 = rho-matched plain-PC control (same energy, no duals)
     ap.add_argument("--ckpt", action="store_true")       # also save weights at steps 1000 and 2000
+    ap.add_argument("--T2", type=int, default=None)
     ap.add_argument("--steps", type=int, default=4000); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--outdir", default="pred_runs/tests")
     a = ap.parse_args()
@@ -64,7 +65,7 @@ def main():
         hp = sel[parent_key(a)]["rho"] if a.rho is None else a.rho
         c = sel[parent_key(a)]["c"] if a.rho is None else sel[parent_key(a)]["best_c_by_rho"][str(float(a.rho))]
     cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=hp,
-                 seed=a.seed, c=c, steps=a.steps, alpha=alpha)
+                 seed=a.seed, c=c, steps=a.steps, alpha=alpha, **({"T2": a.T2} if a.T2 else {}))
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{cfg.name}_{a.backbone}_s{a.seed}.json"
     if os.path.exists(out):
