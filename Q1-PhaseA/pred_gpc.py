@@ -298,26 +298,34 @@ def amort_grads(amort, Z, T9, s, cfg):
 
 
 # PC phase 2 / BP: gradients on all 4 views at the belief s inferred from the seen views.
-def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
-    if cfg.rule == "pc":
-        ii = jnp.arange(Zall.shape[0])[:, None]
-        xs0 = topdown(p, s, Pall, cfg.H)[0]
-        xs0 = [x.at[ii, seen].set(xv) for x, xv in zip(xs0, Zs_seen_xs)]       # warm start the seen views
-        _, xs, h2, _ = pc_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
-        return pc_wgrads(p, s, xs, Zall, Pall, cfg), h2
-    if cfg.rule == "alm":                               # Zs_seen_xs = (xs, lam) of the seen views from phase 1
-        ii = jnp.arange(Zall.shape[0])[:, None]
-        xs_s, lam_s = Zs_seen_xs
-        xs0 = topdown(p, s, Pall, cfg.H)[0]
-        xs0 = [x.at[ii, seen].set(xv) for x, xv in zip(xs0, xs_s)]
+# Phase 2: all views relaxed at fixed s, seen views warm-started from phase 1 (pc: xs; alm: (xs, lam)).
+# Returns the phase-2 state and its energy history.
+def phase2(p, s, carry, Zall, Pall, seen, cfg):
+    ii = jnp.arange(Zall.shape[0])[:, None]
+    xs_s, lam_s = carry if cfg.rule == "alm" else (carry, None)
+    xs0 = topdown(p, s, Pall, cfg.H)[0]
+    xs0 = [x.at[ii, seen].set(xv) for x, xv in zip(xs0, xs_s)]
+    if cfg.rule == "alm":
         lam0 = [jnp.zeros_like(x).at[ii, seen].set(lv) for x, lv in zip(xs0, lam_s)]
         _, xs, lam, h2, _ = alm_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0, lam0=lam0)
-        return alm_wgrads(p, s, xs, lam, Zall, Pall, cfg), h2
+        return xs, lam, h2
+    _, xs, h2, _ = pc_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
+    return xs, None, h2
+
+
+def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
+    if cfg.rule == "pc":
+        xs, _, h2 = phase2(p, s, Zs_seen_xs, Zall, Pall, seen, cfg)
+        return pc_wgrads(p, s, xs, Zall, Pall, cfg), h2
+    if cfg.rule == "alm":
+        xs, lam, _ = phase2(p, s, Zs_seen_xs, Zall, Pall, seen, cfg)
+        return alm_wgrads(p, s, xs, lam, Zall, Pall, cfg), _E(cfg)(p, s, xs, Zall, Pall)[None]   # plain energy
     return ad_wgrads(p, s, Zall, Pall, cfg), jnp.zeros(1)
 
 
 # ------------------------------------------------------------------ training
-def train(cfg, ztr, ttr, verbose=True, log_every=250):
+def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
+    assert cfg.rule != "alm" or cfg.out_w == 1.0, "alm saddle equals the BP auto-decoder only at out_w = 1"
     kp, ka = jax.random.split(jax.random.PRNGKey(cfg.seed))
     p = init(kp, cfg, ztr.shape[-1])
     amort = init_amort(ka, ztr.shape[-1]) if cfg.start == "amort" else None
@@ -357,21 +365,27 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
             amort2 = eqx.apply_updates(amort, upd_a)
             a_err = jnp.mean(jnp.sum((s0 - s) ** 2, -1)) / (jnp.mean(jnp.sum(s ** 2, -1)) + 1e-12)
         finite = jnp.isfinite(hist[-1]) & jnp.isfinite(gn) & jnp.isfinite(pred_err)
-        up = jnp.mean((jnp.diff(hist) > 1e-3 * jnp.abs(hist[0])).astype(jnp.float32))
+        up = jnp.mean((jnp.diff(hist) > 1e-3 * jnp.abs(hist[0])).astype(jnp.float32)) if cfg.rule != "alm" else jnp.nan
+        if cfg.rule == "alm":
+            nx = jnp.sqrt(sum(jnp.sum(x ** 2) for x in xs_seen[0])) + 1e-30
+            res_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in hid_residuals(p, s, xs_seen[0], Ps, cfg.H))) / nx
+            lam_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in xs_seen[1])) / nx
+        else:
+            res_rel = lam_rel = jnp.nan
         # alm: hist is the AUGMENTED energy (rises as the duals grow), so log the plain energy at the final state
         E_fin = _E(cfg)(p, s, xs_seen[0], Zs, Ps) if cfg.rule == "alm" else hist[-1]
         m = {"E_init": E_init / Zs.shape[0], "E": E_fin / Zs.shape[0], "pred_err": pred_err, "gnorm": gn,
              "rel_last_step_s": rel, "frac_up_steps": up, "s_norm": jnp.mean(jnp.linalg.norm(s, axis=-1)),
-             "amort_rel_err": a_err, "E2": h2[-1] / Zall.shape[0], "finite": finite}
+             "amort_rel_err": a_err, "E2": h2[-1] / Zall.shape[0], "res_rel": res_rel, "lam_rel": lam_rel, "finite": finite}
         return p2, amort2, st, st_a2, m
 
-    # Credit diagnostic at log steps (pc / alm only; never feeds training): cosine of this rule's weight gradient
-    # with the BP auto-decoder gradient at the SAME belief s (global and per block), how far s is from the
-    # auto-decoder's own inference, and the relative size of the hidden-level residuals after phase 1.
+    # Credit diagnostic (pc / alm only; never feeds training), on a FIXED probe batch with fixed seen views, k = 1 and 3:
+    # cosine of this rule's weight gradient with the BP auto-decoder gradient at the SAME s (all / seen / unseen views,
+    # per block), norm ratio, phase-2 residual size, and distance of s from a settled auto-decoder belief (c=1, T=2000).
     @eqx.filter_jit
     def align(p, amort, Zall, Tall, perm, k):
         ii = jnp.arange(Zall.shape[0])[:, None]
-        seen = perm[:, :k]
+        seen, uns = perm[:, :k], perm[:, k:]
         Zs, Ts = Zall[ii, seen], Tall[ii, seen]
         Ps, Pall = phi(Ts), phi(Tall)
         s0 = start_s(p, amort, Zs, Ts, cfg)
@@ -379,16 +393,29 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
             s, xs, lam, _, _ = alm_infer(p, s0, Zs, Ps, cfg); carry = (xs, lam)
         else:
             s, xs, _, _ = pc_infer(p, s0, Zs, Ps, cfg); carry = xs
-        g, _ = weight_grads(p, s, carry, Zall, Pall, seen, cfg)
-        gb = ad_wgrads(p, s, Zall, Pall, cfg)
+        xf, lf, _ = phase2(p, s, carry, Zall, Pall, seen, cfg)
+        def grads(ix):
+            sel = (lambda a: a) if ix is None else (lambda a: a[ii, ix])
+            X, Zv, Pv = [sel(x) for x in xf], sel(Zall), sel(Pall)
+            g = alm_wgrads(p, s, X, [sel(l) for l in lf], Zv, Pv, cfg) if cfg.rule == "alm" else pc_wgrads(p, s, X, Zv, Pv, cfg)
+            return g, ad_wgrads(p, s, Zv, Pv, cfg)
         f = lambda t: jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
         c = lambda a, b: jnp.dot(f(a), f(b)) / (jnp.linalg.norm(f(a)) * jnp.linalg.norm(f(b)) + 1e-30)
+        g, gb = grads(None)
         blocks = [c(g["top"], gb["top"])] + [c(a, b) for a, b in zip(g["mid"], gb["mid"])] + [c(g["bot"], gb["bot"])]
-        s_ad = ad_infer(p, s0, Zs, Ps, cfg)[0]
-        r = hid_residuals(p, s, xs, Ps, cfg.H)
-        res = jnp.sqrt(sum(jnp.sum(x ** 2) for x in r) / (sum(jnp.sum(x ** 2) for x in xs) + 1e-30))
-        return {"cos_ad": c(g, gb), "cos_ad_blocks": jnp.stack(blocks), "ratio_ad": jnp.linalg.norm(f(g)) / (jnp.linalg.norm(f(gb)) + 1e-30),
-                "s_dist_ad": jnp.mean(jnp.linalg.norm(s - s_ad, axis=-1) / (jnp.linalg.norm(s_ad, axis=-1) + 1e-8)), "hid_res_rel": res}
+        cs, cu = c(*grads(seen)), c(*grads(uns))
+        s_ad = ad_infer(p, s0, Zs, Ps, dataclasses.replace(cfg, c=1.0), T=2000)[0]
+        r = hid_residuals(p, s, xf, Pall, cfg.H)
+        res = jnp.sqrt(sum(jnp.sum(x ** 2) for x in r) / (sum(jnp.sum(x ** 2) for x in xf) + 1e-30))
+        return {"cos_ad": c(g, gb), "cos_ad_seen": cs, "cos_ad_unseen": cu, "cos_ad_blocks": jnp.stack(blocks),
+                "ratio_ad": jnp.linalg.norm(f(g)) / (jnp.linalg.norm(f(gb)) + 1e-30),
+                "s_dist_ad": jnp.mean(jnp.linalg.norm(s - s_ad, axis=-1) / (jnp.linalg.norm(s_ad, axis=-1) + 1e-8)),
+                "hid_res_rel_p2": res}
+
+    prng = np.random.default_rng(999)
+    pidx = prng.choice(len(ztr), min(256, len(ztr)), replace=False)
+    PZ, PT = jnp.asarray(ztr[pidx]), jnp.asarray(ttr[pidx])
+    PPERM = jnp.asarray(np.argsort(prng.random((len(pidx), ztr.shape[1])), 1))
 
     rng = np.random.default_rng(cfg.seed + 4000)
     log, t0, stop = [], time.time(), (cfg.stop_at or cfg.steps)
@@ -408,8 +435,11 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250):
         if (i + 1) % log_every == 0 or i == 0 or i == stop - 1:
             row = {"step": i + 1, "k": k, **{k_: (bool(v) if k_ == "finite" else float(v)) for k_, v in m.items()}}
             if cfg.rule in ("pc", "alm") and cfg.log_align:
-                a_ = align(p, amort, jnp.asarray(ztr[idx]), jnp.asarray(ttr[idx]), jnp.asarray(perm), k)
-                row.update({k_: (np.asarray(v).round(4).tolist() if np.ndim(v) else float(v)) for k_, v in a_.items()})
+                for kk in (1, 3):
+                    a_ = align(p, amort, PZ, PT, PPERM, kk)
+                    row.update({f"{k_}_k{kk}": (np.asarray(v).round(4).tolist() if np.ndim(v) else float(v)) for k_, v in a_.items()})
+            if ckpt and (i + 1) in ckpt[1]:
+                eqx.tree_serialise_leaves(f"{ckpt[0]}_step{i + 1}.eqx", p)
             log.append(row)
             if verbose:
                 print(f"[{cfg.name} c{cfg.c} s{cfg.seed}] " + json.dumps({k_: (round(v, 4) if isinstance(v, float) else v) for k_, v in row.items()})
@@ -431,13 +461,19 @@ def make_predict(p, amort, cfg, T=None):
 # Primary signal: held-out prediction error of batch; secondary: settled energy,
 #   with absolute floor since PC's seen-view energy can approach 0.
 def exploded(log, factor=5.0, warm=2):
-    P = [r["pred_err"] for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
-    E = [r["E"] for r in log if "E" in r and np.isfinite(r["E"])]
+    pv = lambda r: r["pred_err"] / (4 - r["k"]) if "k" in r else r["pred_err"]       # per held-out view
+    ev = lambda r: r["E"] / r["k"] if "k" in r else r["E"]                            # per seen view
+    P = [pv(r) for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
+    E = [ev(r) for r in log if "E" in r and np.isfinite(r["E"])]
+    Rr = [r["res_rel"] for r in log if np.isfinite(r.get("res_rel", np.nan))]
     for i in range(warm, len(P)):
         if P[i] > factor * min(P[:i]):
             return True
     for i in range(warm, len(E)):
         if E[i] > 10.0 * min(E[:i]) + 1.0:
+            return True
+    for i in range(warm, len(Rr)):          # alm: multiplier loop blowing up (absolute floor: a stalled loop is not a blow-up)
+        if Rr[i] > 0.5 and Rr[i] > factor * min(Rr[:i]):
             return True
     return False
 

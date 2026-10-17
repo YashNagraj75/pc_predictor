@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--width", type=int, default=0); ap.add_argument("--hid-prec", type=float, default=1.0)
     ap.add_argument("--rho", type=float, default=None)   # alm only: force the penalty (ablation); default = selected
+    ap.add_argument("--alpha", type=float, default=1.0)  # alm only: 0 = rho-matched plain-PC control (same energy, no duals)
+    ap.add_argument("--ckpt", action="store_true")       # also save weights at steps 1000 and 2000
     ap.add_argument("--steps", type=int, default=4000); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--outdir", default="pred_runs/tests")
     a = ap.parse_args()
@@ -58,25 +60,32 @@ def main():
     sel = json.load(open(a.gsel))
     c, hp, alpha = sel[parent_key(a)]["c"], a.hid_prec, 0.0
     if a.rule == "alm":
-        alpha = 1.0
+        alpha = a.alpha
         hp = sel[parent_key(a)]["rho"] if a.rho is None else a.rho
         c = sel[parent_key(a)]["c"] if a.rho is None else sel[parent_key(a)]["best_c_by_rho"][str(float(a.rho))]
     cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=hp,
                  seed=a.seed, c=c, steps=a.steps, alpha=alpha)
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{cfg.name}_{a.backbone}_s{a.seed}.json"
+    if os.path.exists(out):
+        print("EXISTS -- skipping", out, flush=True); sys.exit(0)
     t0 = time.time()
-    p, am, log, div = G.train(cfg, ztr, ttr, verbose=True)
-    c_used, attempts = c, [{"c": c, "diverged": div, "steps_done": log[-1]["step"] if log else 0}]
-    if div:
-        import dataclasses
-        cfg = dataclasses.replace(cfg, c=c / 2); c_used = c / 2
-        p, am, log, div = G.train(cfg, ztr, ttr, verbose=True)
-        attempts.append({"c": c / 2, "diverged": div, "steps_done": log[-1]["step"] if log else 0})
-    if div or G.exploded(log):
+    import dataclasses
+    ck = (out[:-5], {1000, 2000}) if a.ckpt else None
+    attempts = []
+    for c_try in (c, c / 2, c / 4):          # retry on divergence OR blow-up (review N6); c_used is recorded and flagged
+        cfg = dataclasses.replace(cfg, c=c_try)
+        p, am, log, div = G.train(cfg, ztr, ttr, verbose=True, ckpt=ck)
+        ex = (not div) and G.exploded(log)
+        attempts.append({"c": c_try, "diverged": div, "exploded": ex, "steps_done": log[-1]["step"] if log else 0})
+        if not (div or ex):
+            break
+    c_used = cfg.c
+    if div or ex:
         G.dump_json({"arm": cfg.name, "backbone": a.backbone, "seed": a.seed, "diverged": True, "attempts": attempts,
                      "exploded": G.exploded(log), "train_log": log}, out.replace(".json", ".diverged.json"))
         print("DIVERGED -- no result written", flush=True); sys.exit(3)
+    eqx.tree_serialise_leaves(out[:-5] + ".eqx", p)
     rows = []
     predict = G.make_predict(p, am, cfg)
     settled = G.make_predict(p, am, cfg, T=T_SETTLED)
@@ -98,8 +107,9 @@ def main():
                     rows.append({"test": "robust", "condition": f"{kind}={lvl}", "corr_seed": cs, "k": k, "T": cfg.T,
                                  **PE.run_cases(predict, zte, tte, seen, tgt, zseen=zs)})
     diag = diagnostics(p, am, cfg, zte, tte)
+    bad = [f"{r['test']}/{r['condition']}/k{r['k']}/T{r['T']}" for r in rows if not np.isfinite(r.get("nmse", np.nan))]
     n_gen = G.n_params(p); n_am = G.n_params(eqx.filter(am, eqx.is_inexact_array)) if am is not None else 0
-    G.dump_json({"method": cfg.name, "backbone": a.backbone, "seed": a.seed, "c_selected": c, "c_used": c_used, "attempts": attempts,
+    G.dump_json({"method": cfg.name, "backbone": a.backbone, "seed": a.seed, "c_selected": c, "c_used": c_used, "c_changed": c_used != c, "attempts": attempts, "nonfinite_rows": bad,
                  "rows": rows, "diagnostics": diag, "n_params_generator": n_gen, "n_params_amortiser": n_am,
                  "cfg": cfg.__dict__, "seconds": time.time() - t0, "train_log": log}, out)
     for r in rows:

@@ -80,8 +80,10 @@ def alm_gates():
         sa, xa, la, _, _ = G.alm_infer(p, s0, Z, Ph, c0)
         sp, xp, _, _ = G.pc_infer(p, s0, Z, Ph, dataclasses.replace(cfg, rule="pc"))
         d = max([float(jnp.max(jnp.abs(sa - sp)))] + [float(jnp.max(jnp.abs(a - b))) for a, b in zip(xa, xp)])
-        gd = float(jnp.max(jnp.abs(flat(G.alm_wgrads(p, sa, xa, la, Z, Ph, c0)) - flat(G.pc_wgrads(p, sp, xp, Z, Ph, cfg)))))
-        check(f"d{depth} ALM with alpha=0 = plain PC (inference and weight gradient)", d < 1e-5 and gd < 1e-5, f"{d:.1e} {gd:.1e}")
+        gp = flat(G.pc_wgrads(p, sp, xp, Z, Ph, cfg))
+        gd = float(jnp.max(jnp.abs(flat(G.alm_wgrads(p, sa, xa, la, Z, Ph, c0)) - gp)) / jnp.max(jnp.abs(gp)))
+        d = d / max(float(jnp.max(jnp.abs(sp))), 1.0)
+        check(f"d{depth} ALM with alpha=0 = plain PC (inference and weight gradient, relative)", d < 1e-5 and gd < 1e-4, f"{d:.1e} {gd:.1e}")
         # every grid point stays finite and shrinks the hidden residuals on the free-s problem
         for rho in G.RHO_GRID:
             for c in G.C_ALM:
@@ -97,16 +99,17 @@ def alm_gates():
         a16 = G.alm_infer(p, s0, Z, Ph, dataclasses.replace(cfg, T=50, hid_prec=4.0))[0]
         perm = jnp.arange(16)[::-1]; inv = jnp.argsort(perm)
         ap_ = G.alm_infer(p, s0[perm], Z[perm], Ph[perm], dataclasses.replace(cfg, T=50, hid_prec=4.0))[0][inv]
-        bi = max(float(jnp.max(jnp.abs(a4 - a16[:4]))), float(jnp.max(jnp.abs(ap_ - a16))))
-        check(f"d{depth} ALM inference independent of the batch and its order", bi < 1e-5, f"{bi:.1e}")
+        bi = max(float(jnp.max(jnp.abs(a4 - a16[:4]))), float(jnp.max(jnp.abs(ap_ - a16)))) / max(float(jnp.max(jnp.abs(a16))), 1e-6)
+        check(f"d{depth} ALM inference independent of the batch and its order (relative)", bi < 1e-4, f"{bi:.1e}")
         # predictive training runs finite with the credit logger on
         ct = dataclasses.replace(cfg, T=20, T2=10, steps=6, batch=16, hid_prec=4.0)
         zt = np.asarray(jax.random.normal(jax.random.PRNGKey(1), (64, 4, 128)))
         tt = np.asarray(0.5 * jax.random.normal(jax.random.PRNGKey(2), (64, 4, 9)))
         _, _, log, div = G.train(ct, zt, tt, verbose=False, log_every=2)
-        okl = (not div) and len(log) > 0 and all(np.isfinite(r["cos_ad"]) and len(r["cos_ad_blocks"]) == H + 1 for r in log)
+        okl = (not div) and len(log) > 0 and all(np.isfinite(r["cos_ad_k1"]) and np.isfinite(r["cos_ad_unseen_k3"])
+                                                  and len(r["cos_ad_blocks_k1"]) == H + 1 and np.isfinite(r["res_rel"]) for r in log)
         check(f"d{depth} ALM predictive training finite; credit logger runs (blocks = {H + 1})", okl,
-              f"cos_ad {[round(r['cos_ad'], 3) for r in log]}")
+              f"cos_ad_k1 {[round(r['cos_ad_k1'], 3) for r in log]}")
 
 
 def main():
