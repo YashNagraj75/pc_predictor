@@ -1,0 +1,5 @@
+{"what": "Post-hoc amendment to C2 (gpc_alm_prereg.json), approved by the user on 2026-10-17 after seeing the depth-10 seed-0 failure.",
+ "observation": "Depth-10 PC-ALM rho=4 at the selected c=1.0 (top of the grid): test k=1 nmse 0.987 at seed 0, with oscillating inference (training held-out error between 39 and 173, s distance to the settled AD belief 0.6 -> about 3, credit cos 0.97 -> 0.17, test nmse non-monotone in T). Not caught by exploded(), so not retried. Selection scored 800 of 4000 steps and could not see it.",
+ "amendment": "depth-10 PC-ALM rho=4 alpha=1 T2=100 at c=0.5 (the next grid value), seeds 0,1,2; outputs pred_runs/tests_amend_c05. Nothing else is changed.",
+ "reading": "Reported alongside, not in place of, the pre-registered c=1 arm. The depth-scaling comparison that uses it is labelled post hoc. c=0.5 was chosen before seeing any c=0.5 depth-10 result beyond the 800-step sweep score.",
+ "runs_after": "the main C2 job (c8634b25), not concurrently"}
