@@ -11,8 +11,11 @@ collect() { tar czf "$JOBDIR/q1_qi.tar.gz" $ST qi_gates_*.log qi_prereg.json qi_
 trap collect EXIT
 mkdir -p pred_runs/logs_qi
 note "start at $(git rev-parse --short HEAD)"
-JAX_PLATFORMS=cpu $PY -W ignore test_qi.py > qi_gates_cpu.log 2>&1 && $PY -W ignore test_qi.py > qi_gates_gpu.log 2>&1 \
-  || { note "GATES FAILED"; grep -h FAIL qi_gates_*.log | head; exit 4; }
+free -g | head -2 >> $ST
+for d in 3 10; do   # one depth per process: the CPU gate run hit an LLVM out-of-memory with both in one process
+  JAX_PLATFORMS=cpu $PY -W ignore test_qi.py $d > qi_gates_cpu_d$d.log 2>&1 && $PY -W ignore test_qi.py $d > qi_gates_gpu_d$d.log 2>&1 \
+    || { note "GATES FAILED d$d"; grep -h -E "FAIL|Cannot allocate|Error" qi_gates_*_d$d.log | head; exit 4; }
+done
 note "gates pass: $(cat qi_gates_*.log | grep -c PASS)"
 # smoke of the runner itself, one combined arm, 8 steps (review N3f)
 $PY -W ignore run_gpc_tests.py --rule pc --depth 3 --start zero --backbone bp --seed 0 --steps 8 --spike stable --c 0.1 --c-spike 2.0 \

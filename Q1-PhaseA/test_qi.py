@@ -41,7 +41,9 @@ kz, kt = jax.random.split(jax.random.PRNGKey(3))
 Z = jax.random.normal(kz, (16, 3, 128)); T9 = 0.5 * jax.random.normal(kt, (16, 3, 9)); Ph = G.phi(T9)
 mx_ = lambda a: float(jnp.max(jnp.abs(a)))
 names = set()
-for depth in (3, 10):
+DEPTHS = [int(a) for a in sys.argv[1:]] or [3, 10]   # one depth per process keeps compile memory bounded
+for depth in DEPTHS:
+    jax.clear_caches()
     cfg = G.GCfg(depth=depth, rule="pc", c=2.0); p = G.init(jax.random.PRNGKey(depth), cfg); H = cfg.H
     s0 = jnp.zeros((16, G.M))
     a = G.pc_infer(p, s0, Z, Ph, cfg, T=60); b = ref_infer(p, s0, Z, Ph, cfg, 60)
@@ -103,6 +105,7 @@ for depth in (3, 10):
         kw = {"T": 20, "T2": 10, "steps": 6, "batch": 16}; kw.update(arm)
         ca = dc.replace(cfg, **kw)
         _, _, log, div = G.train(ca, zt, tt, verbose=False, log_every=2)
+        jax.clear_caches()
         fin = (not div) and len(log) > 0 and bool(np.isfinite(log[-1]["pred_err"]))
         print(f"     d{depth} {ca.name}: diverged={div} pred_err={[round(r['pred_err'], 2) for r in log]}")
         names.add(ca.name)
@@ -111,6 +114,6 @@ for depth in (3, 10):
         else:
             check(f"d{depth} {ca.name}: finite after 6 training steps", fin)
     check(f"d{depth} new names differ from stage-1 '{cfg.name}'", cfg.name not in names)
-check("all 16 arm names distinct and carry the step scale", len(names) == 16 and all("_c" in n for n in names), str(sorted(names)))
+check(f"all {8 * len(DEPTHS)} arm names distinct and carry the step scale", len(names) == 8 * len(DEPTHS) and all("_c" in n for n in names), str(sorted(names)))
 print("ALL PASS" if OK[0] else "SOME FAIL")
 sys.exit(0 if OK[0] else 1)
