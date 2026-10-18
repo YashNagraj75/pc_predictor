@@ -1,0 +1,6 @@
+10-17_19:24 waiting for the main C2 job (ALL DONE in gpc_alm_status.txt)
+10-18_02:59 main job done; start at a8402d3
+10-18_07:22 rc=0 amend d10 rho4 c0.5 s0
+10-18_07:25 rc=0 amend d10 rho4 c0.5 s1
+10-18_07:31 rc=0 amend d10 rho4 c0.5 s2
+10-18_07:31 AMEND DONE: 3 results

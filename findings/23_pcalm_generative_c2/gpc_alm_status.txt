@@ -1,0 +1,35 @@
+10-17_12:31 start at a8402d3 backend gpu
+2966, 161 MiB, /usr/libexec/gnome-remote-desktop-daemon
+2897256, 476 MiB, ../.venv/bin/python
+10-17_12:57 gates pass: 141
+10-17_13:16 choice: {"3": {"rho_hi": 4.0, "T2": 100, "credit_bar_not_met": false, "median_cos": {"4.0": {"100": 0.9984331429004669, "400": 0.9988623857498169, "1600": 0.9988722801208496}, "16.0": {"100": 0.9992380440235138, "400": 0.9993173778057098, "1600": 0.999422550201416}, "64.0": {"100": 0.9991562366485596, "400": 0.9996546506881714, "1600": 0.999615341424942}}}, "10": {"rho_hi": 4.0, "T2": 100, "credit_bar_not_met": false, "median_cos": {"4.0": {"100": 0.96514892578125, "400": 0.9868106544017792, "1600": 0.9890724122524261}, "16.0": {"100": 0.9678589999675751, "400": 0.9789779186248779, "1600": 0.9925897717475891}, "64.0": {"100": 0.9724216163158417, "400": 0.9683384597301483, "1600": 0.9934433698654175}}}}
+10-17_14:18 selected c by rho: {'gpc_alm_d10_zero': {'1.0': 1.0, '4.0': 1.0}, 'gpc_alm_d3_zero': {'1.0': 0.25, '4.0': 0.5}}
+10-17_14:21 det check: {'gpc_bp_d3_zero': True, 'gpc_bp_d10_zero': True, 'gpc_pc_d3_zero': True, 'gpc_pc_d10_zero': True}
+10-17_14:22 arms: 26
+10-17_15:23 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 0 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json --ckpt
+10-17_15:23 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 0 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-17_15:23 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 0 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json --ckpt
+10-17_17:02 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 0 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json --ckpt
+10-17_17:02 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 0 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-17_18:03 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 1 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_19:02 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 1 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-17_19:40 rc=3 --rule alm --depth 10 --start zero --backbone bp --seed 0 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json --ckpt
+10-17_19:42 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 1 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_19:42 rc=0 --rule bp --depth 3 --start zero --backbone bp --seed 1
+10-17_20:35 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 1
+10-17_21:18 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 1 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_21:19 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 1 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_22:05 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 1 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-17_22:12 rc=0 --rule bp --depth 10 --start zero --backbone bp --seed 1
+10-17_22:43 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 1
+10-17_23:01 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 2 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_23:07 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 2 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-17_23:39 rc=0 --rule bp --depth 3 --start zero --backbone bp --seed 2
+10-17_23:39 rc=0 --rule alm --depth 3 --start zero --backbone bp --seed 2 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-17_23:55 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 2
+10-18_01:15 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 2 --rho 1.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-18_01:30 rc=0 --rule alm --depth 10 --start zero --backbone bp --seed 2 --rho 4.0 --alpha 0 --T2 100 --gsel pred_runs/gpc_alm_selected.json
+10-18_02:10 rc=0 --rule bp --depth 10 --start zero --backbone bp --seed 2
+10-18_02:42 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 2
+10-18_02:58 rc=3 --rule alm --depth 10 --start zero --backbone bp --seed 2 --rho 4.0 --alpha 1 --T2 100 --gsel pred_runs/gpc_alm_selected.json 
+10-18_02:58 ALL DONE: 16 alm results; nonzero-rc lines in status: 2
