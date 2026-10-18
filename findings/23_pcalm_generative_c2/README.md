@@ -39,3 +39,26 @@ on trained depth-10 decoders (PC-ALM s0 at steps 1000/2000/final, no-mult s0, BP
 - best credit cos on ANY depth-10 decoder, ANY schedule: 0.64 (vs 0.79 for the trained d3 decoder; 0.965 at init in diag_c2).
 - smaller dual rates / more inner steps reduce oscillation only by not converging within T=400 (held-out nmse 10-50).
 => No multiplier schedule in the grid fixes depth 10; the deep trained decoder's inference problem is the obstacle.
+
+## Qi et al. fixes, inference-only check (diag_c4, host job 93f1dca1, commit 7129350) — `diag_c4/`
+
+Trained decoders (d10: plain PC s1/s2, BP s1, no-mult s0, PC-ALM s0 step 1000; d3: PC s1, BP s1, PC-ALM s0), 512 test
+samples, k=1. Gates passed (schedule 'none' == pc_infer; rule 'pc' == pc_wgrads). d10 plain PC, mean of 2 seeds:
+
+| T | spike | held-out nmse | cos to BP-AD grad: standard / forward-update qi / fixed | energy imbalance log10(max/min) |
+|---|---|---|---|---|
+| 400 | none | 0.360 | 0.233 / 0.067 / 0.096 | 1.6 |
+| 400 | step 1 at wavefront | 719 | 0.643 / 0.273 / 0.298 | 2.4 |
+| 11 | none | 0.986 | 0.044 / 0.049 / 0.084 | 3.3 |
+| 11 | step 1 at wavefront | 3.7e6 | -0.153 / 0.175 / 0.964 | 4.6 |
+
+- Spiking precision destroys the belief (held-out nmse 10^2-10^13 at every budget). Our curvature-normalised activity
+  step (c=2: 1.8/(1+2L)) is already near the stability limit, so a spike has no headroom; Qi's spike compensates for
+  their small step (alpha ~ 0.05). The near-exact credit at T=H+1 (cos 0.96, the one-sweep backprop effect) is
+  measured at a garbage belief.
+- The forward-update rule gives LOWER agreement than the standard rule on PC-trained decoders (d10 0.10 vs 0.23;
+  d3 0.22 vs 0.67); it helps only on the ALM-trained d3 decoder (0.72 vs 0.26).
+- The energy imbalance is mild (about 1.6 orders of magnitude at d10, T=400), not the 10^18 Qi report for
+  discriminative VGG10, so their diagnosis does not describe our failure.
+=> Pre-registered decision rule (improve d10 agreement without worsening held-out error) is met by neither fix: no
+   training run. Caveat: inference on decoders not trained with the fixes; weights co-adapting with spikes is untested.
