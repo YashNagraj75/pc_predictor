@@ -24,3 +24,18 @@ Depth 10 amendment, c = 0.5: seeds 0 and 1 failed at c = 0.5, 0.25 and 0.125; se
 - No robustness advantage: noise 0.2 2.21 vs BP 2.01; occlusion 2.26 vs 2.20 (d3).
 - Depth 10: the multiplier loop is unstable at every step size tried (c = 1 down to 0.125); without multipliers the same
   network is stable at c = 1 (0.383). BP improves with depth (0.305 -> 0.278); no PC variant does.
+
+## Follow-up diagnostic (diag_c3, host job 7028d816, commit 9e20e0e; inference only) — `diag_c3/`
+
+Belief decomposition, test k=1 nmse on each trained decoder (mean over seeds): own rule T=400 / own rule T=2000 / exact
+auto-decoder belief T=2000:
+- d3 BP 0.305 / 0.308 / 0.308; PC-ALM rho4 0.352 / 0.401 / 0.373; no-mult 0.382 / 0.389 / 0.479; plain PC 0.381 / 0.387 / 0.482.
+- d10 BP 0.279 / 0.303 / 0.357; plain PC 0.377 / 0.377 / 0.478.
+=> A more converged belief is WORSE for every decoder: each decoder is tuned to its own truncated (T=400) inference.
+   The "belief is the bottleneck" hypothesis is not supported; s_dist to a settled AD belief was a misleading yardstick.
+
+Depth-10 loop grid (alpha {1,.5,.25,.1} x k_inner {1,4,16} x c {1,.5,.25}, PC-ALM rho=4, T=400, 512 test samples, k=1)
+on trained depth-10 decoders (PC-ALM s0 at steps 1000/2000/final, no-mult s0, BP s1) and a d3 reference:
+- best credit cos on ANY depth-10 decoder, ANY schedule: 0.64 (vs 0.79 for the trained d3 decoder; 0.965 at init in diag_c2).
+- smaller dual rates / more inner steps reduce oscillation only by not converging within T=400 (held-out nmse 10-50).
+=> No multiplier schedule in the grid fixes depth 10; the deep trained decoder's inference problem is the obstacle.
