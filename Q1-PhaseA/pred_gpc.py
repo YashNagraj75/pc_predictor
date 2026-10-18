@@ -36,6 +36,10 @@ class GCfg:
     alpha: float = 0.0          # alm: dual rate, lam_l += alpha * r_l
     k_inner: int = 1            # alm: primal steps per dual step (total primal steps stays T)
     log_align: bool = True      # credit diagnostic at log steps (pc / alm)
+    spike: str = "none"         # pc: none | lit1 | stable  (Qi et al. 2025 spiking precision, generative direction)
+    c_spike: float = 2.0        # stable: step scale used at the wavefront (normal steps use c)
+    wrule: str = "pc"           # pc weight rule: pc | qi | fixed  (forward-update variants)
+    tag: str = ""               # extra name suffix
 
     @property
     def H(self):
@@ -49,6 +53,7 @@ class GCfg:
     def name(self):
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
         tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule == "alm" else ""
+        tag += (f"_spk{self.spike}" if self.spike != "none" else "") + (f"_fu{self.wrule}" if self.wrule != "pc" else "") + self.tag
         return f"gpc_{self.rule}_d{self.depth}_{self.start}{tag}"
 
 
@@ -197,14 +202,27 @@ def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None):
     etas = pc_etas(p, Z.shape[1], cfg)
     Ef = _E(cfg)
     gfn = jax.grad(lambda v: Ef(p, v[0], v[1], Z, Ph))
+    H = cfg.H
+    # Spiking precision (Qi et al. 2025), generative direction: the error wave starts at the observation, so hidden
+    # level j takes one large step at t = j and s at t = H.  lit1: step 1 on hidden levels; stable: step scale c_spike.
+    if cfg.spike == "lit1":
+        mx, ms = [1.0 / e for e in etas[1:]], 1.0
+    elif cfg.spike == "stable":
+        mx, ms = [cfg.c_spike / cfg.c] * H, cfg.c_spike / cfg.c
+    else:
+        mx, ms = None, None
 
-    def step(v, _):
+    def step(v, t):
         gs, gx = gfn(v)
-        s = v[0] if freeze_s else v[0] - etas[0] * gs
-        xs = [x - e * g for x, g, e in zip(v[1], gx, etas[1:])]
+        if mx is None:
+            s = v[0] if freeze_s else v[0] - etas[0] * gs
+            xs = [x - e * g for x, g, e in zip(v[1], gx, etas[1:])]
+        else:
+            s = v[0] if freeze_s else v[0] - etas[0] * jnp.where(t == H, ms, 1.0) * gs
+            xs = [x - etas[j + 1] * jnp.where(t == j, mx[j], 1.0) * g for j, (x, g) in enumerate(zip(v[1], gx))]
         return (s, xs), Ef(p, s, xs, Z, Ph)
 
-    (s, xs), hist = jax.lax.scan(step, (s0, xs0), None, length=T)
+    (s, xs), hist = jax.lax.scan(step, (s0, xs0), jnp.arange(T))
     gs = gfn((s, xs))[0]
     rel = jnp.mean(jnp.linalg.norm(etas[0] * gs, axis=-1) / (jnp.linalg.norm(s, axis=-1) + 1e-8))
     return s, xs, hist, rel
@@ -275,8 +293,36 @@ def infer_s(p, amort, Z, T9, cfg, T=None):
 
 # ------------------------------------------------------------------ weight gradients
 def pc_wgrads(p, s, xs, Z, Ph, cfg):
+    if cfg.wrule != "pc":
+        return fu_grads(p, s, xs, Z, Ph, cfg.H, cfg.wrule)
     s, xs = jax.lax.stop_gradient(s), jax.lax.stop_gradient(xs)
     g = jax.grad(lambda q: _E(cfg)(q, s, xs, Z, Ph))(p)
+    return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
+
+
+# Forward-update weight rule (Qi et al. 2025), adapted: errors relative to the clean top-down pass from the final
+# belief (the computation used at prediction).  qi: relaxed presynaptic activity; fixed: top-down presynaptic
+# (Millidge's fixed-prediction form).  mode pc reproduces pc_wgrads at unit precision (gated).
+def fu_grads(p, s, xs, Z, Ph, H, mode):
+    sg = jax.lax.stop_gradient
+    s, xs = sg(s), [sg(x) for x in xs]
+    xtd = [sg(x) for x in topdown(p, s, Ph, H)[0]]
+    if mode == "pc":
+        pre = xs
+        e0 = Z - mu_bot(p, xs[0])
+        em = [xs[l - 1] - mu_mid(p["mid"][l - 1], xs[l], H) for l in range(1, H)]
+    else:
+        pre = xs if mode == "qi" else xtd
+        e0 = Z - mu_bot(p, xtd[0])
+        em = [xs[l - 1] - xtd[l - 1] for l in range(1, H)]
+    eH = xs[H - 1] - mu_top(p, s, Ph)
+    e0, em, eH = sg(e0), [sg(e) for e in em], sg(eH)
+
+    def sur(q):
+        v = jnp.sum(e0 * mu_bot(q, pre[0])) + jnp.sum(eH * mu_top(q, s, Ph))
+        v += sum(jnp.sum(e * mu_mid(q["mid"][l - 1], pre[l], H)) for l, e in zip(range(1, H), em))
+        return -v
+    g = jax.grad(sur)(p)
     return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
 
 

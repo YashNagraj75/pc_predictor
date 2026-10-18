@@ -1,0 +1,12 @@
+{"spec": "wiki Methods/'Method - Qi fixes training screen' (2026-10-18). User: 'Try training the model with these modifications'.",
+ "model": "generative predictor of pred_gpc.py (stage 1): residual top-down maps, zero start, T=400, T2=100, 4000 steps, batch 256, unit precision, rule pc, seed 0",
+ "arms_per_depth": {"spklit1": "spike=lit1 (step 1 on hidden level j at t=j), base c=2 (stage-1 selection)",
+                    "spkstable": "spike=stable: base c=0.1, wavefront step scale c_spike=2.0 (hidden j at t=j, s at t=H); Qi's small-step + spike regime in curvature-normalised units",
+                    "c01": "control for spkstable: c=0.1, no spike",
+                    "fuqi": "forward update, relaxed presynaptic, c=2", "fufixed": "forward update, top-down presynaptic, c=2",
+                    "spkstable_fufixed": "both"},
+ "controls_reused": "stage-1 seed 0 (findings/21): plain PC d3 0.381 / d10 0.375; BP auto-decoder d3 0.306 / d10 0.278. Default code path is gated equal to the pre-change code.",
+ "no_selection": "no step-scale sweep for the new arms (fixed by design); divergence retries at c/2, c/4 as before; flagged",
+ "readings": {"primary": "test k_seen k=1 nmse at T=400 vs plain PC on the same depth (seed 0; one seed: differences under ~0.005 are not interpretable)",
+              "depth": "d10 vs d3 within each arm", "spike": "spkstable vs c01 isolates the spike", "credit": "logged cos_ad (fixed probe) through training"},
+ "prior_evidence": "diag_c4 (inference-only on trained decoders) predicted both fixes fail; this tests whether training with them changes that"}
