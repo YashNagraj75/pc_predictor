@@ -37,11 +37,11 @@ note "runner smoke ok"
     echo "$B --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T $Q --T2 $Q --tag _qireg"
   done; } > qi_arms.txt
 note "arms: $(wc -l < qi_arms.txt)"
-run_one() { a="$1"; tag=$(echo "$a" | tr -d '-' | tr ' ' '_' | cut -c1-120)
+run_one() { a="$1"; tag=$(echo "$a" | sed 's/--outdir [^ ]*//' | tr -d '-' | tr ' /' '__' | cut -c1-120)
   $PY -W ignore run_gpc_tests.py $a >> "pred_runs/logs_qi/$tag.log" 2>&1; rc=$?
   echo "$(date +%m-%d_%H:%M) rc=$rc $a" >> qi_status.txt; }
 export -f run_one; export PY OUT
 ( while sleep 1200; do collect; done ) & CPID=$!
 cat qi_arms.txt | xargs -P $PAR -I{} bash -c 'run_one "{}"'
 kill $CPID 2>/dev/null || true
-note "ALL DONE: $(grep -c 'rc=0' $ST) ok, $(grep -c 'rc=3' $ST) diverged, $(grep -cE 'rc=[^03]' $ST) other"
+note "ALL DONE: $(sed -n "/start at $(git rev-parse --short HEAD)/,\$p" $ST | grep -c 'rc=0') ok, $(sed -n "/start at $(git rev-parse --short HEAD)/,\$p" $ST | grep -c 'rc=3') diverged, $(sed -n "/start at $(git rev-parse --short HEAD)/,\$p" $ST | grep -cE 'rc=[^03]') other (this launch)"
