@@ -85,11 +85,17 @@ for depth in DEPTHS:
         ok_ &= mx_(xj1[j] - (xj[j] - gx[j])) <= 1e-4 * max(mx_(gx[j]), 1e-12)
     check(f"d{depth} lit1: wavefront step on level j is exactly -grad", ok_)
     cs = dc.replace(cfg, spike="stable", c=0.1, c_spike=2.0); cn = dc.replace(cfg, c=0.1)
-    sH, xH, _, _ = G.pc_infer(p, s0, Z, Ph, cs, T=H)
+    # multiplier check from a perturbed state: on the cold start the s gradient at t=H is a near-cancelling residual
+    # (float32 round-off differs on GPU); timing itself is covered by the wavefront gate above
+    sr = 0.5 * jax.random.normal(jax.random.PRNGKey(11), (16, G.M))
+    xr = [x + 0.3 * jax.random.normal(jax.random.PRNGKey(12 + i), x.shape) for i, x in enumerate(G.topdown(p, sr, Ph, H)[0])]
+    sH, xH, _, _ = G.pc_infer(p, sr, Z, Ph, cs, T=H, xs0=xr)
     gs = jax.grad(lambda v: G._E(cs)(p, v[0], v[1], Z, Ph))((sH, xH))[0]
     eta_s = G.pc_etas(p, Z.shape[1], cs)[0]
-    sH1 = G.pc_infer(p, s0, Z, Ph, cs, T=H + 1)[0]
-    check(f"d{depth} stable: s step at t=H uses c_spike/c x base step", mx_(sH1 - (sH - eta_s * 20.0 * gs)) <= 1e-4 * max(mx_(eta_s * 20.0 * gs), 1e-12))
+    sH1 = G.pc_infer(p, sr, Z, Ph, cs, T=H + 1, xs0=xr)[0]
+    err = mx_(sH1 - (sH - eta_s * 20.0 * gs)) / max(mx_(eta_s * 20.0 * gs), 1e-12)
+    errn = mx_(sH1 - (sH - eta_s * gs)) / max(mx_(eta_s * 20.0 * gs), 1e-12)
+    check(f"d{depth} stable: s step at t=H uses c_spike/c x base step", err <= 1e-3 and errn > 0.5, f"rel err {err:.1e} (vs no-spike {errn:.2f})")
     # phase 2 never spikes: phase2() of a spike arm == phase2() of the matched no-spike arm on the same inputs
     Pa = Ph; seen = jnp.tile(jnp.arange(1)[None], (16, 1)); xseen = [x[:, :1] for x in a[1]]
     x2a = G.phase2(p, a[0], xseen, Z, Pa, seen, dc.replace(cs, T2=20))[0]
