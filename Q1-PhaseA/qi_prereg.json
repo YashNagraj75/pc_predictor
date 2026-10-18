@@ -1,12 +1,35 @@
-{"spec": "wiki Methods/'Method - Qi fixes training screen' (2026-10-18). User: 'Try training the model with these modifications'.",
+{
+ "spec": "wiki Methods/'Method - Qi fixes training screen' (2026-10-18). User: 'Try training the model with these modifications'.",
  "model": "generative predictor of pred_gpc.py (stage 1): residual top-down maps, zero start, T=400, T2=100, 4000 steps, batch 256, unit precision, rule pc, seed 0",
- "arms_per_depth": {"spklit1": "spike=lit1 (step 1 on hidden level j at t=j), base c=2 (stage-1 selection)",
-                    "spkstable": "spike=stable: base c=0.1, wavefront step scale c_spike=2.0 (hidden j at t=j, s at t=H); Qi's small-step + spike regime in curvature-normalised units",
-                    "c01": "control for spkstable: c=0.1, no spike",
-                    "fuqi": "forward update, relaxed presynaptic, c=2", "fufixed": "forward update, top-down presynaptic, c=2",
-                    "spkstable_fufixed": "both"},
+ "arms_per_depth": {
+  "spklit1": "spike=lit1 (step 1 on hidden level j at t=j), base c=2 (stage-1 selection)",
+  "spkstable": "spike=stable: base c=0.1, wavefront step scale c_spike=2.0 (hidden j at t=j, s at t=H); Qi's small-step + spike regime in curvature-normalised units",
+  "c01": "control for spkstable: c=0.1, no spike",
+  "fuqi": "forward update, relaxed presynaptic, c=2",
+  "fufixed": "forward update, top-down presynaptic, c=2",
+  "spkstable_fufixed": "both",
+  "plain": "plain PC rerun in this job (primary comparator; stage-1 seed 0 is a consistency check)",
+  "c01_fufixed": "c=0.1, fixed forward update, no spike (control for the combined arm)",
+  "qireg": "Qi regime: T = T2 = H+1, stable spike (c=0.1, c_spike=2), fixed forward update; prediction also at T=H+1"
+ },
  "controls_reused": "stage-1 seed 0 (findings/21): plain PC d3 0.381 / d10 0.375; BP auto-decoder d3 0.306 / d10 0.278. Default code path is gated equal to the pre-change code.",
  "no_selection": "no step-scale sweep for the new arms (fixed by design); divergence retries at c/2, c/4 as before; flagged",
- "readings": {"primary": "test k_seen k=1 nmse at T=400 vs plain PC on the same depth (seed 0; one seed: differences under ~0.005 are not interpretable)",
-              "depth": "d10 vs d3 within each arm", "spike": "spkstable vs c01 isolates the spike", "credit": "logged cos_ad (fixed probe) through training"},
- "prior_evidence": "diag_c4 (inference-only on trained decoders) predicted both fixes fail; this tests whether training with them changes that"}
+ "readings": {
+  "primary": "test k_seen k=1 nmse vs the MATCHED control in this job (same depth, same c, seed 0)",
+  "contrasts": {
+   "spike|no FU": "spkstable - c01",
+   "spike|FU": "both - c01_fufixed",
+   "FU|c=0.1": "c01_fufixed - c01",
+   "FU|c=2": "fufixed/fuqi - plain",
+   "Qi regime": "qireg vs plain and BP"
+  },
+  "classes": "|delta| < 0.01: no detectable effect (not 'no effect'); 0.01-0.03: candidate, run seeds 1,2 before any claim; > 0.03 or failure: reportable at screen level",
+  "gap_closure": "(nmse_plain - nmse_arm) / (nmse_plain - nmse_BP) per depth, BP from stage 1",
+  "manipulation": "spike arms report spike_s_rel_change; a spike contrast is interpreted only if it is clearly non-zero",
+  "credit": "cos_ad (fixed probe) at steps 250/1000/4000 is a co-primary mechanism readout",
+  "failures": "spike arms are not retried; c-changed non-spike arms are reported but excluded from the classes"
+ },
+ "prior_evidence": "diag_c4 (inference-only on trained decoders) predicted both fixes fail; this tests whether training with them changes that",
+ "revision": "rev 2 after 3 reviewers (31 findings): phase 2 never spikes; no retry ladder for spike arms; failed arms evaluated at last finite weights; names carry c/c_spike/T; per-launch outdir pred_runs/tests_qi; gates test wavefront timing, lit1 exactness, s spike, phase-2 no-spike and an independent fu_grads reference",
+ "scope": "Screen at one configuration per fix, seed 0. Qi et al. tuned 200 trials per setting; a null here does not refute the fix in general."
+}

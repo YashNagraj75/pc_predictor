@@ -5,29 +5,39 @@
 set -uo pipefail
 P="$1"; JOBDIR="$2"; cd "$P/Q1-PhaseA" || exit 2
 PY=../.venv/bin/python; export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.3
-PAR=${PAR:-3}; ST=qi_status.txt; note() { echo "$(date +%m-%d_%H:%M) $*" | tee -a $ST; }
+PAR=${PAR:-3}; ST=qi_status.txt; OUT=pred_runs/tests_qi; note() { echo "$(date +%m-%d_%H:%M) $*" | tee -a $ST; }
 collect() { tar czf "$JOBDIR/q1_qi.tar.gz" $ST qi_gates_*.log qi_prereg.json qi_arms.txt pred_runs/logs_qi \
-            pred_runs/tests/gpc_pc_d*_zero*_spk*.json pred_runs/tests/gpc_pc_d*_zero*_fu*.json \
-            pred_runs/tests/gpc_pc_d*_zero_c01*.json 2>/dev/null || true; }
+            $OUT/*.json 2>/dev/null || true; }
 trap collect EXIT
 mkdir -p pred_runs/logs_qi
 note "start at $(git rev-parse --short HEAD)"
 JAX_PLATFORMS=cpu $PY -W ignore test_qi.py > qi_gates_cpu.log 2>&1 && $PY -W ignore test_qi.py > qi_gates_gpu.log 2>&1 \
   || { note "GATES FAILED"; grep -h FAIL qi_gates_*.log | head; exit 4; }
 note "gates pass: $(cat qi_gates_*.log | grep -c PASS)"
+# smoke of the runner itself, one combined arm, 8 steps (review N3f)
+$PY -W ignore run_gpc_tests.py --rule pc --depth 3 --start zero --backbone bp --seed 0 --steps 8 --spike stable --c 0.1 --c-spike 2.0 \
+    --wrule fixed --T 3 --T2 3 --tag _smoke --outdir pred_runs/tests_qi_smoke > pred_runs/logs_qi/smoke.log 2>&1 \
+  || { note "RUNNER SMOKE FAILED"; tail -5 pred_runs/logs_qi/smoke.log; exit 5; }
+note "runner smoke ok"
+# arms (review fixes): same-job plain-PC rerun as the primary comparator (D6); c01_fufixed control (D1); Qi-regime arm
+# T = T2 = H+1 with stable spike + fixed forward update (D4).  Results go to a per-launch outdir (N4).
 { for d in 10 3; do
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --spike lit1"
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --spike stable --c 0.1 --c-spike 2.0"
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --c 0.1 --tag _c01"
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --wrule qi"
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --wrule fixed"
-    echo "--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --spike stable --c 0.1 --c-spike 2.0 --wrule fixed"
+    H=$((d - 1)); Q=$((H + 1)); B="--rule pc --depth $d --start zero --backbone bp --seed 0 --ckpt --outdir $OUT"
+    echo "$B"
+    echo "$B --spike lit1"
+    echo "$B --spike stable --c 0.1 --c-spike 2.0"
+    echo "$B --c 0.1 --tag _c01"
+    echo "$B --wrule qi"
+    echo "$B --wrule fixed"
+    echo "$B --c 0.1 --wrule fixed --tag _c01"
+    echo "$B --spike stable --c 0.1 --c-spike 2.0 --wrule fixed"
+    echo "$B --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T $Q --T2 $Q --tag _qireg"
   done; } > qi_arms.txt
 note "arms: $(wc -l < qi_arms.txt)"
 run_one() { a="$1"; tag=$(echo "$a" | tr -d '-' | tr ' ' '_' | cut -c1-120)
-  $PY -W ignore run_gpc_tests.py $a > "pred_runs/logs_qi/$tag.log" 2>&1; rc=$?
+  $PY -W ignore run_gpc_tests.py $a >> "pred_runs/logs_qi/$tag.log" 2>&1; rc=$?
   echo "$(date +%m-%d_%H:%M) rc=$rc $a" >> qi_status.txt; }
-export -f run_one; export PY
+export -f run_one; export PY OUT
 ( while sleep 1200; do collect; done ) & CPID=$!
 cat qi_arms.txt | xargs -P $PAR -I{} bash -c 'run_one "{}"'
 kill $CPID 2>/dev/null || true

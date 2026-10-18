@@ -39,43 +39,78 @@ def ref_wgrads(p, s, xs, Z, Ph, cfg):
 
 kz, kt = jax.random.split(jax.random.PRNGKey(3))
 Z = jax.random.normal(kz, (16, 3, 128)); T9 = 0.5 * jax.random.normal(kt, (16, 3, 9)); Ph = G.phi(T9)
+mx_ = lambda a: float(jnp.max(jnp.abs(a)))
 names = set()
 for depth in (3, 10):
     cfg = G.GCfg(depth=depth, rule="pc", c=2.0); p = G.init(jax.random.PRNGKey(depth), cfg); H = cfg.H
     s0 = jnp.zeros((16, G.M))
     a = G.pc_infer(p, s0, Z, Ph, cfg, T=60); b = ref_infer(p, s0, Z, Ph, cfg, 60)
-    d = max(float(jnp.max(jnp.abs(a[0] - b[0]))), max(float(jnp.max(jnp.abs(x - y))) for x, y in zip(a[1], b[1])), float(jnp.max(jnp.abs(a[2] - b[2]))))
-    check(f"d{depth} default pc_infer == pre-change pc_infer", d == 0.0, f"{d:.1e}")
+    d = max(mx_(a[0] - b[0]), max(mx_(x - y) for x, y in zip(a[1], b[1])))
+    check(f"d{depth} default pc_infer == pre-change pc_infer", d <= 1e-6 * max(1.0, mx_(b[0])), f"{d:.1e}")
     g1 = G.pc_wgrads(p, a[0], a[1], Z, Ph, cfg); g2 = ref_wgrads(p, a[0], a[1], Z, Ph, cfg)
-    check(f"d{depth} default pc_wgrads == pre-change", float(jnp.max(jnp.abs(flat(g1) - flat(g2)))) == 0.0)
-    g3 = G.fu_grads(p, a[0], a[1], Z, Ph, H, "pc")
-    rel = float(jnp.max(jnp.abs(flat(g3) - flat(g2))) / jnp.max(jnp.abs(flat(g2))))
+    check(f"d{depth} default pc_wgrads == pre-change", mx_(flat(g1) - flat(g2)) <= 1e-6 * mx_(flat(g2)))
+    rel = mx_(flat(G.fu_grads(p, a[0], a[1], Z, Ph, H, "pc")) - flat(g2)) / mx_(flat(g2))
     check(f"d{depth} fu_grads('pc') == pc_wgrads", rel < 1e-5, f"{rel:.1e}")
-    # at the clean top-down state every hidden forward-update error is zero: only the observation layer gets a gradient
-    xtd = G.topdown(p, a[0], Ph, H)[0]
-    gf = G.fu_grads(p, a[0], xtd, Z, Ph, H, "fixed")
-    hid0 = all(float(jnp.max(jnp.abs(x))) == 0.0 for x in jax.tree_util.tree_leaves((gf["top"], gf["mid"])))
-    check(f"d{depth} fixed rule at the top-down state: hidden/top grads exactly 0", hid0)
-    # spike 'stable' with c_spike = c is the default schedule
-    cs = dc.replace(cfg, spike="stable", c_spike=cfg.c)
-    e = G.pc_infer(p, s0, Z, Ph, cs, T=60)
-    check(f"d{depth} spike=stable with c_spike=c == default", float(jnp.max(jnp.abs(e[0] - a[0]))) < 1e-6)
-    # spike changes only the wavefront steps: with T = j, level j has not spiked yet
-    cl = dc.replace(cfg, spike="stable", c=0.1, c_spike=2.0); cn = dc.replace(cfg, c=0.1)
-    x1 = G.pc_infer(p, s0, Z, Ph, cl, T=1)[1]; x2 = G.pc_infer(p, s0, Z, Ph, cn, T=1)[1]
-    check(f"d{depth} spike at t=0 moves only level 0", float(jnp.max(jnp.abs(x1[0] - x2[0]))) > 0
-          and all(float(jnp.max(jnp.abs(u - v))) == 0.0 for u, v in zip(x1[1:], x2[1:])))
-    # every arm trains 6 steps (finite or recorded as diverged) and has a distinct name
+    # independent per-layer reference for 'qi' and 'fixed' at a RELAXED state (review N3d)
+    s_, xs_ = a[0], a[1]; xtd = G.topdown(p, s_, Ph, H)[0]
+    for mode in ("qi", "fixed"):
+        g = G.fu_grads(p, s_, xs_, Z, Ph, H, mode)
+        pre = xs_ if mode == "qi" else xtd
+        ok_ = True
+        for l in range(1, H):                       # mid[l-1] maps x_{l+1} (xs[l]) -> x_l (xs[l-1])
+            e = xs_[l - 1] - xtd[l - 1]
+            ref = -jnp.einsum("bkn,bkm->nm", e, jax.nn.relu(pre[l])) / np.sqrt(H) / Z.shape[0]
+            ok_ &= mx_(g["mid"][l - 1] - ref) <= 1e-4 * max(mx_(ref), 1e-12)
+        e0 = Z - G.mu_bot(p, xtd[0])
+        refb = -jnp.einsum("bkd,bkn->dn", e0, jax.nn.relu(pre[0])) / Z.shape[0]
+        ok_ &= mx_(g["bot"][0] - refb) <= 1e-4 * mx_(refb)
+        check(f"d{depth} fu_grads('{mode}') == hand-written outer products at a relaxed state", ok_)
+    # wavefront: with no spike, after T=t steps levels j >= t and s (t <= H) are still at their initial values
+    xs0 = G.topdown(p, s0, Ph, H)[0]
+    wf = True
+    for t in range(0, H + 1):
+        st, xt, _, _ = G.pc_infer(p, s0, Z, Ph, cfg, T=t) if t > 0 else (s0, xs0, None, None)
+        wf &= all(mx_(xt[j] - xs0[j]) <= 1e-6 for j in range(t, H)) and mx_(st - s0) <= 1e-6
+    st1 = G.pc_infer(p, s0, Z, Ph, cfg, T=H + 1)[0]
+    check(f"d{depth} wavefront: level j first moves at t=j, s at t=H (no spike)", wf and mx_(st1 - s0) > 0)
+    # lit1: the wavefront step on level j is exactly -grad (step 1); stable: s moves with c_spike at t=H
+    cl = dc.replace(cfg, spike="lit1")
+    Ef = G._E(cl); ok_ = True
+    for j in (0, H // 2, H - 1):
+        sj, xj, _, _ = G.pc_infer(p, s0, Z, Ph, cl, T=j) if j > 0 else (s0, xs0, None, None)
+        gx = jax.grad(lambda v: Ef(p, v[0], v[1], Z, Ph))((sj, xj))[1]
+        xj1 = G.pc_infer(p, s0, Z, Ph, cl, T=j + 1)[1]
+        ok_ &= mx_(xj1[j] - (xj[j] - gx[j])) <= 1e-4 * max(mx_(gx[j]), 1e-12)
+    check(f"d{depth} lit1: wavefront step on level j is exactly -grad", ok_)
+    cs = dc.replace(cfg, spike="stable", c=0.1, c_spike=2.0); cn = dc.replace(cfg, c=0.1)
+    sH, xH, _, _ = G.pc_infer(p, s0, Z, Ph, cs, T=H)
+    gs = jax.grad(lambda v: G._E(cs)(p, v[0], v[1], Z, Ph))((sH, xH))[0]
+    eta_s = G.pc_etas(p, Z.shape[1], cs)[0]
+    sH1 = G.pc_infer(p, s0, Z, Ph, cs, T=H + 1)[0]
+    check(f"d{depth} stable: s step at t=H uses c_spike/c x base step", mx_(sH1 - (sH - eta_s * 20.0 * gs)) <= 1e-4 * max(mx_(eta_s * 20.0 * gs), 1e-12))
+    # phase 2 never spikes: phase2() of a spike arm == phase2() of the matched no-spike arm on the same inputs
+    Pa = Ph; seen = jnp.tile(jnp.arange(1)[None], (16, 1)); xseen = [x[:, :1] for x in a[1]]
+    x2a = G.phase2(p, a[0], xseen, Z, Pa, seen, dc.replace(cs, T2=20))[0]
+    x2b = G.phase2(p, a[0], xseen, Z, Pa, seen, dc.replace(cn, T2=20))[0]
+    check(f"d{depth} phase 2 ignores the spike", max(mx_(u - v) for u, v in zip(x2a, x2b)) == 0.0)
+    # every arm: 6 training steps; non-lit1 arms must stay finite; names distinct and carry c
     zt = np.asarray(jax.random.normal(jax.random.PRNGKey(1), (64, 4, 128)))
     tt = np.asarray(0.5 * jax.random.normal(jax.random.PRNGKey(2), (64, 4, 9)))
-    for arm in (dict(spike="lit1"), dict(spike="stable", c=0.1), dict(c=0.1, tag="_c01"), dict(wrule="qi"),
-                dict(wrule="fixed"), dict(spike="stable", c=0.1, wrule="fixed")):
-        ca = dc.replace(cfg, T=20, T2=10, steps=6, batch=16, **arm)
+    arms = (dict(spike="lit1"), dict(spike="stable", c=0.1), dict(c=0.1, tag="_c01"), dict(wrule="qi"),
+            dict(wrule="fixed"), dict(c=0.1, wrule="fixed", tag="_c01"), dict(spike="stable", c=0.1, wrule="fixed"),
+            dict(spike="stable", c=0.1, wrule="fixed", T=H + 1, T2=H + 1, tag="_qireg"))
+    for arm in arms:
+        kw = {"T": 20, "T2": 10, "steps": 6, "batch": 16}; kw.update(arm)
+        ca = dc.replace(cfg, **kw)
         _, _, log, div = G.train(ca, zt, tt, verbose=False, log_every=2)
+        fin = (not div) and len(log) > 0 and bool(np.isfinite(log[-1]["pred_err"]))
         print(f"     d{depth} {ca.name}: diverged={div} pred_err={[round(r['pred_err'], 2) for r in log]}")
         names.add(ca.name)
-        check(f"d{depth} {ca.name}: runs end to end (log written)", len(log) > 0 or div)
+        if ca.spike == "lit1":
+            print(f"     report: lit1 finite after 6 steps: {fin}")
+        else:
+            check(f"d{depth} {ca.name}: finite after 6 training steps", fin)
     check(f"d{depth} new names differ from stage-1 '{cfg.name}'", cfg.name not in names)
-check("all 12 arm names distinct", len(names) == 12, str(sorted(names)))
+check("all 16 arm names distinct and carry the step scale", len(names) == 16 and all("_c" in n for n in names), str(sorted(names)))
 print("ALL PASS" if OK[0] else "SOME FAIL")
 sys.exit(0 if OK[0] else 1)

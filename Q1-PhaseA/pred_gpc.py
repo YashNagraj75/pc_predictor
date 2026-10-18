@@ -54,6 +54,8 @@ class GCfg:
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
         tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule == "alm" else ""
         tag += (f"_spk{self.spike}" if self.spike != "none" else "") + (f"_fu{self.wrule}" if self.wrule != "pc" else "") + self.tag
+        if self.spike != "none" or self.wrule != "pc" or self.tag:      # name carries the step scales (review N4)
+            tag += f"_c{self.c:g}" + (f"_cs{self.c_spike:g}" if self.spike == "stable" else "") + (f"_T{self.T}" if self.T != 400 else "")
         return f"gpc_{self.rule}_d{self.depth}_{self.start}{tag}"
 
 
@@ -196,7 +198,7 @@ def start_s(p, amort, Z, T9, cfg):
 
 
 # Returns: s, xs, energy history (T,), size of next s step relative to |s| (convergence diagnostic).
-def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None):
+def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, spike_on=True):
     T = cfg.T if T is None else T
     xs0 = topdown(p, s0, Ph, cfg.H)[0] if xs0 is None else xs0
     etas = pc_etas(p, Z.shape[1], cfg)
@@ -205,9 +207,10 @@ def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None):
     H = cfg.H
     # Spiking precision (Qi et al. 2025), generative direction: the error wave starts at the observation, so hidden
     # level j takes one large step at t = j and s at t = H.  lit1: step 1 on hidden levels; stable: step scale c_spike.
-    if cfg.spike == "lit1":
+    # Applied only to cold-started relaxations (phase 1, prediction); phase 2 passes spike_on=False (review D3/N2).
+    if cfg.spike == "lit1" and spike_on:
         mx, ms = [1.0 / e for e in etas[1:]], 1.0
-    elif cfg.spike == "stable":
+    elif cfg.spike == "stable" and spike_on:
         mx, ms = [cfg.c_spike / cfg.c] * H, cfg.c_spike / cfg.c
     else:
         mx, ms = None, None
@@ -294,6 +297,7 @@ def infer_s(p, amort, Z, T9, cfg, T=None):
 # ------------------------------------------------------------------ weight gradients
 def pc_wgrads(p, s, xs, Z, Ph, cfg):
     if cfg.wrule != "pc":
+        assert cfg.hid_prec == 1.0 and cfg.out_w == 1.0, "fu_grads assumes unit precisions"
         return fu_grads(p, s, xs, Z, Ph, cfg.H, cfg.wrule)
     s, xs = jax.lax.stop_gradient(s), jax.lax.stop_gradient(xs)
     g = jax.grad(lambda q: _E(cfg)(q, s, xs, Z, Ph))(p)
@@ -355,7 +359,7 @@ def phase2(p, s, carry, Zall, Pall, seen, cfg):
         lam0 = [jnp.zeros_like(x).at[ii, seen].set(lv) for x, lv in zip(xs0, lam_s)]
         _, xs, lam, h2, _ = alm_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0, lam0=lam0)
         return xs, lam, h2
-    _, xs, h2, _ = pc_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
+    _, xs, h2, _ = pc_infer(p, s, Zall, Pall, cfg, T=cfg.T2, freeze_s=True, xs0=xs0, spike_on=False)
     return xs, None, h2
 
 

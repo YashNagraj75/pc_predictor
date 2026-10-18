@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--spike", default="none"); ap.add_argument("--c-spike", type=float, default=2.0)
     ap.add_argument("--wrule", default="pc"); ap.add_argument("--tag", default="")
     ap.add_argument("--c", type=float, default=None)    # override the selected step scale (spike arms use a small base c)
+    ap.add_argument("--T", type=int, default=None)       # training/prediction inference steps (Qi regime: H+1)
     ap.add_argument("--steps", type=int, default=4000); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--outdir", default="pred_runs/tests")
     a = ap.parse_args()
@@ -70,7 +71,7 @@ def main():
     c = c if a.c is None else a.c
     cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=hp,
                  seed=a.seed, c=c, steps=a.steps, alpha=alpha, spike=a.spike, c_spike=a.c_spike, wrule=a.wrule,
-                 tag=a.tag, **({"T2": a.T2} if a.T2 else {}))
+                 tag=a.tag, **({"T2": a.T2} if a.T2 else {}), **({"T": a.T} if a.T else {}))
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{cfg.name}_{a.backbone}_s{a.seed}.json"
     if os.path.exists(out):
@@ -79,7 +80,8 @@ def main():
     import dataclasses
     ck = (out[:-5], {1000, 2000}) if a.ckpt else None
     attempts = []
-    for c_try in (c, c / 2, c / 4):          # retry on divergence OR blow-up (review N6); c_used is recorded and flagged
+    ladder = (c,) if cfg.spike != "none" else (c, c / 2, c / 4)   # a spike failure is the result (review N1/D7)
+    for c_try in ladder:                     # retry on divergence OR blow-up (review N6); c_used is recorded and flagged
         cfg = dataclasses.replace(cfg, c=c_try)
         p, am, log, div = G.train(cfg, ztr, ttr, verbose=True, ckpt=ck)
         ex = (not div) and G.exploded(log)
@@ -88,8 +90,15 @@ def main():
             break
     c_used = cfg.c
     if div or ex:
+        failed_rows = []
+        try:                                  # evaluate the last finite weights so a failure is characterised (review D7)
+            pf = G.make_predict(p, am, cfg)
+            failed_rows = [{"test": "k_seen", "condition": "clean", "k": 1, "T": cfg.T, **PE.run_cases(pf, zte, tte, *PE.k_cases(len(zte), 1))}]
+        except Exception as e:
+            failed_rows = [{"error": str(e)[:200]}]
         G.dump_json({"arm": cfg.name, "backbone": a.backbone, "seed": a.seed, "diverged": True, "attempts": attempts,
-                     "exploded": G.exploded(log), "train_log": log}, out.replace(".json", ".diverged.json"))
+                     "exploded": G.exploded(log), "cfg": cfg.__dict__, "rows_last_finite": failed_rows, "train_log": log},
+                    out.replace(".json", ".diverged.json"))
         print("DIVERGED -- no result written", flush=True); sys.exit(3)
     eqx.tree_serialise_leaves(out[:-5] + ".eqx", p)
     rows = []
@@ -113,6 +122,15 @@ def main():
                     rows.append({"test": "robust", "condition": f"{kind}={lvl}", "corr_seed": cs, "k": k, "T": cfg.T,
                                  **PE.run_cases(predict, zte, tte, seen, tgt, zseen=zs)})
     diag = diagnostics(p, am, cfg, zte, tte)
+    if cfg.spike != "none":                   # manipulation check (review D2): same weights, spike off vs on
+        import dataclasses as _dc
+        n0 = 1000; seen1, _t = PE.k_cases(len(zte), 1); ii = np.arange(n0)[:, None]
+        Zs1, Ts1 = jnp.asarray(zte[:n0][ii, seen1[:n0]]), jnp.asarray(tte[:n0][ii, seen1[:n0]])
+        s_on = G.infer_s(p, am, Zs1, Ts1, cfg)[0]; s_off = G.infer_s(p, am, Zs1, Ts1, _dc.replace(cfg, spike="none"))[0]
+        diag["spike_s_rel_change"] = float(jnp.mean(jnp.linalg.norm(s_on - s_off, axis=-1) / (jnp.linalg.norm(s_off, axis=-1) + 1e-8)))
+    k1 = [r["nmse"] for r in rows if r["test"] == "k_seen" and r["k"] == 1][0]
+    diag["worse_than_tau_only"] = bool(k1 > diag.get("nmse_tau_only", np.inf))   # finite-but-garbage flag (review N5)
+    diag["versions"] = {"jax": jax.__version__, "device": str(jax.devices()[0])}
     bad = [f"{r['test']}/{r['condition']}/k{r['k']}/T{r['T']}" for r in rows if not np.isfinite(r.get("nmse", np.nan))]
     n_gen = G.n_params(p); n_am = G.n_params(eqx.filter(am, eqx.is_inexact_array)) if am is not None else 0
     G.dump_json({"method": cfg.name, "backbone": a.backbone, "seed": a.seed, "c_selected": c, "c_used": c_used, "c_changed": c_used != c, "attempts": attempts, "nonfinite_rows": bad,
