@@ -58,12 +58,22 @@ def main():
     ap.add_argument("--T", type=int, default=None)       # training/prediction inference steps (Qi regime: H+1)
     ap.add_argument("--steps", type=int, default=4000); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--outdir", default="pred_runs/tests")
+    ap.add_argument("--belief", default="pc"); ap.add_argument("--k-in", type=int, default=1)   # sep only
+    ap.add_argument("--holdout", action="store_true")   # selection: train on 90% of train images, score k=1 on the rest
     a = ap.parse_args()
     ztr, ttr, zte, tte, *_ = PF.load("pred_latents.npz", a.backbone, "emb")
+    if a.holdout:
+        nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
     raw = np.load("pred_latents.npz")[f"{a.backbone}_emb_tr"].reshape(-1, 128)
     zstats = (raw.mean(0), raw.std(0) + 1e-6)
     sel = json.load(open(a.gsel))
-    c, hp, alpha = sel[parent_key(a)]["c"], a.hid_prec, 0.0
+    c_belief, k_in = 1.0, 1
+    if a.rule == "sep":     # rho, k_in and the credit step scale are given; the belief stage reuses stage 1's choice
+        assert a.rho is not None, "sep needs --rho"
+        c, hp, alpha, k_in = (a.c if a.c is not None else 1.0), a.rho, a.alpha, a.k_in
+        c_belief = {"pc": sel[f"gpc_pc_d{a.depth}_zero"]["c"], "oracle": sel[f"gpc_bp_d{a.depth}_zero"]["c"]}.get(a.belief, 1.0)
+    else:
+        c, hp, alpha = sel[parent_key(a)]["c"], a.hid_prec, 0.0
     if a.rule == "alm":
         alpha = a.alpha
         hp = sel[parent_key(a)]["rho"] if a.rho is None else a.rho
@@ -71,7 +81,8 @@ def main():
     c = c if a.c is None else a.c
     cfg = G.GCfg(backbone=a.backbone, rule=a.rule, depth=a.depth, start=a.start, width=a.width, hid_prec=hp,
                  seed=a.seed, c=c, steps=a.steps, alpha=alpha, spike=a.spike, c_spike=a.c_spike, wrule=a.wrule,
-                 tag=a.tag, **({"T2": a.T2} if a.T2 else {}), **({"T": a.T} if a.T else {}))
+                 tag=a.tag, belief=a.belief, c_belief=c_belief, k_inner=k_in,
+                 **({"T2": a.T2} if a.T2 else {}), **({"T": a.T} if a.T else {}))
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{cfg.name}_{a.backbone}_s{a.seed}.json"
     if os.path.exists(out):
@@ -101,6 +112,11 @@ def main():
                     out.replace(".json", ".diverged.json"))
         print("DIVERGED -- no result written", flush=True); sys.exit(3)
     eqx.tree_serialise_leaves(out[:-5] + ".eqx", p)
+    if a.holdout:                             # selection runs: one held-out score, nothing else
+        k1 = PE.run_cases(G.make_predict(p, am, cfg), zte, tte, *PE.k_cases(len(zte), 1))
+        G.dump_json({"method": cfg.name, "seed": a.seed, "holdout": True, "val_k1": k1, "attempts": attempts,
+                     "c_used": c_used, "cfg": cfg.__dict__, "train_log": log}, out)
+        print("VAL", cfg.name, k1, flush=True); sys.exit(0)
     rows = []
     predict = G.make_predict(p, am, cfg)
     settled = G.make_predict(p, am, cfg, T=T_SETTLED)

@@ -16,7 +16,7 @@ C_ALM = (0.25, 0.5, 1.0)       # c = 2 diverges for rho >= 4 (gate, 2026-10-17)
 @dataclasses.dataclass
 class GCfg:
     backbone: str = "bp"
-    rule: str = "pc"            # pc | bp | alm (PC-ALM: multipliers on the hidden levels)
+    rule: str = "pc"            # pc | bp | alm (PC-ALM: multipliers on the hidden levels) | sep (belief, then credit)
     start: str = "zero"         # zero | amort
     depth: int = 3
     width: int = 0              # 0 -> WIDTH[depth]
@@ -40,6 +40,8 @@ class GCfg:
     c_spike: float = 2.0        # stable: step scale used at the wavefront (normal steps use c)
     wrule: str = "pc"           # pc weight rule: pc | qi | fixed  (forward-update variants)
     tag: str = ""               # extra name suffix
+    belief: str = "pc"          # sep: where s comes from -- pc (plain-PC relaxation) | oracle (BP auto-decoder inference) | amort
+    c_belief: float = 1.0       # sep: step scale of the belief stage (the selected c of that rule in stage 1)
 
     @property
     def H(self):
@@ -52,7 +54,8 @@ class GCfg:
     @property
     def name(self):
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
-        tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule == "alm" else ""
+        tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule in ("alm", "sep") else ""
+        tag += f"_{self.belief}_c{self.c:g}" if self.rule == "sep" else ""
         tag += (f"_spk{self.spike}" if self.spike != "none" else "") + (f"_fu{self.wrule}" if self.wrule != "pc" else "") + self.tag
         if self.spike != "none" or self.wrule != "pc" or self.tag:      # name carries the step scales (review N4)
             tag += f"_c{self.c:g}" + (f"_cs{self.c_spike:g}" if self.spike == "stable" else "") + (f"_T{self.T}" if self.T != 400 else "")
@@ -280,12 +283,46 @@ def ad_infer(p, s0, Z, Ph, cfg, T=None):
 
 
 # Belief from the given (seen) views: returns (s*, s0, energy history, relative last step).
+# sep stage 1: the belief from the seen views, with no multipliers.  pc: plain-PC relaxation of the joint energy
+# (unit hidden precision); oracle: the BP auto-decoder's own inference (backprop used for inference only);
+# amort: one pass of the amortiser.  Returns (s, history, relative last step); s carries no gradient.
+def sep_belief(p, amort, Z, T9, cfg, T=None):
+    Ph, b = phi(T9), Z.shape[0]
+    if cfg.belief == "amort":
+        return jax.lax.stop_gradient(start_s(p, amort, Z, T9, cfg)), jnp.zeros(1), jnp.zeros(())
+    s0 = jnp.zeros((b, M))
+    if cfg.belief == "pc":
+        cb = dataclasses.replace(cfg, rule="pc", hid_prec=1.0, c=cfg.c_belief, spike="none", wrule="pc")
+        s, _, hist, rel = pc_infer(p, s0, Z, Ph, cb, T)
+    else:
+        s, hist, rel = ad_infer(p, s0, Z, Ph, dataclasses.replace(cfg, rule="bp", c=cfg.c_belief), T)
+    return jax.lax.stop_gradient(s), hist, rel
+
+
+# sep stage 2: credit at fixed s.  Hidden levels start at the clean top-down pass (every hidden residual is zero) and
+# lam = 0; then T2 primal steps with a dual step after every k_inner (alm_infer, freeze_s).  alpha = 0: plain PC at
+# fixed s with hidden precision rho.  Returns (xs, lam, energy history).
+def credit_fixed_s(p, s, Z, Ph, cfg):
+    xs0 = topdown(p, s, Ph, cfg.H)[0]
+    _, xs, lam, hist, _ = alm_infer(p, s, Z, Ph, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
+    return xs, lam, hist
+
+
+# Local error at s after stage 2 (only the top link and the prior depend on s); with exact credit it equals the
+# BP auto-decoder's gradient at s.  The amortiser is trained toward s - eta_s * g_s.
+def sep_s_target(p, s, xs, lam, Z, Ph, cfg):
+    gs = jax.grad(lambda v: alm_energy(p, v, xs, Z, Ph, cfg.H, cfg.prior, cfg.out_w, cfg.hid_prec, lam))(s)
+    return jax.lax.stop_gradient(s - pc_etas(p, Z.shape[1], cfg)[0] * gs)
+
+
 def infer_s(p, amort, Z, T9, cfg, T=None):
     Ph = phi(T9)
     s0 = start_s(p, amort, Z, T9, cfg)
     if T == 0:
         return s0, s0, jnp.zeros(1), jnp.zeros(())
-    if cfg.rule == "pc":
+    if cfg.rule == "sep":
+        s, hist, rel = sep_belief(p, amort, Z, T9, cfg, T)
+    elif cfg.rule == "pc":
         s, _, hist, rel = pc_infer(p, s0, Z, Ph, cfg, T)
     elif cfg.rule == "alm":
         s, _, _, hist, rel = alm_infer(p, s0, Z, Ph, cfg, T)
@@ -342,7 +379,7 @@ def amort_grads(amort, Z, T9, s, cfg):
     y = jnp.repeat(jax.lax.stop_gradient(s)[:, None], k, 1).reshape(b * k, M)
     if cfg.rule == "pc":
         return PF.pc_grads(amort, x, y, PF.Cfg(T=cfg.T_amort, adaptive_eta=True))
-    if cfg.rule == "alm":
+    if cfg.rule in ("alm", "sep"):          # sep with alpha = 0 is plain PC (pred_ff gate: alpha = 0 == pc_grads)
         return PF.alm_grads(amort, x, y, PF.Cfg(T=cfg.T_amort, adaptive_eta=True, alpha=cfg.alpha))
     return PF.bp_grads(amort, x, y, None)
 
@@ -376,6 +413,7 @@ def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
 # ------------------------------------------------------------------ training
 def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
     assert cfg.rule != "alm" or cfg.out_w == 1.0, "alm saddle equals the BP auto-decoder only at out_w = 1"
+    assert cfg.rule != "sep" or (cfg.belief == "amort") == (cfg.start == "amort"), "sep: belief amort <=> start amort"
     kp, ka = jax.random.split(jax.random.PRNGKey(cfg.seed))
     p = init(kp, cfg, ztr.shape[-1])
     amort = init_amort(ka, ztr.shape[-1]) if cfg.start == "amort" else None
@@ -394,7 +432,11 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         Ps, Pall = phi(Ts), phi(Tall)
         s0 = start_s(p, amort, Zs, Ts, cfg)
         E_init = _E(cfg)(p, s0, topdown(p, s0, Ps, cfg.H)[0], Zs, Ps) if cfg.rule in ("pc", "alm") else ad_loss(p, s0, Zs, Ps, cfg.H, cfg.prior)
-        if cfg.rule == "pc":
+        if cfg.rule == "sep":
+            s, hist, rel = sep_belief(p, amort, Zs, Ts, cfg)
+            xs2, lam2, h2 = credit_fixed_s(p, s, Zall, Pall, cfg)
+            g = alm_wgrads(p, s, xs2, lam2, Zall, Pall, cfg)
+        elif cfg.rule == "pc":
             s, xs_seen, hist, rel = pc_infer(p, s0, Zs, Ps, cfg)
         elif cfg.rule == "alm":
             s, xs_a, lam_a, hist, rel = alm_infer(p, s0, Zs, Ps, cfg)
@@ -402,7 +444,8 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         else:
             s, hist, rel = ad_infer(p, s0, Zs, Ps, cfg)
             xs_seen = None
-        g, h2 = weight_grads(p, s, xs_seen, Zall, Pall, seen, cfg)
+        if cfg.rule != "sep":
+            g, h2 = weight_grads(p, s, xs_seen, Zall, Pall, seen, cfg)
         gn = optax.global_norm(g)
         Zhat = topdown(p, jax.lax.stop_gradient(s), phi(Tall[ii, tgt]), cfg.H)[1]
         pred_err = 0.5 * jnp.sum((Zall[ii, tgt] - Zhat) ** 2) / Zall.shape[0]   # held-out views of this batch
@@ -410,20 +453,26 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         p2 = optax.apply_updates(p, upd)
         a_err, amort2, st_a2 = jnp.nan, amort, st_a
         if amort is not None:
-            ga = amort_grads(amort, Zs, Ts, s, cfg)
+            s_tgt = sep_s_target(p, s, xs2, lam2, Zall, Pall, cfg) if cfg.rule == "sep" else s
+            ga = amort_grads(amort, Zs, Ts, s_tgt, cfg)
             upd_a, st_a2 = opt_a.update(ga, st_a, eqx.filter(amort, eqx.is_inexact_array))
             amort2 = eqx.apply_updates(amort, upd_a)
-            a_err = jnp.mean(jnp.sum((s0 - s) ** 2, -1)) / (jnp.mean(jnp.sum(s ** 2, -1)) + 1e-12)
+            a_err = jnp.mean(jnp.sum((s0 - s_tgt) ** 2, -1)) / (jnp.mean(jnp.sum(s_tgt ** 2, -1)) + 1e-12)
         finite = jnp.isfinite(hist[-1]) & jnp.isfinite(gn) & jnp.isfinite(pred_err)
-        up = jnp.mean((jnp.diff(hist) > 1e-3 * jnp.abs(hist[0])).astype(jnp.float32)) if cfg.rule != "alm" else jnp.nan
-        if cfg.rule == "alm":
+        up = jnp.mean((jnp.diff(hist) > 1e-3 * jnp.abs(hist[0])).astype(jnp.float32)) if cfg.rule not in ("alm", "sep") else jnp.nan
+        if cfg.rule == "sep":         # stage-2 state on all views
+            nx = jnp.sqrt(sum(jnp.sum(x ** 2) for x in xs2)) + 1e-30
+            res_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in hid_residuals(p, s, xs2, Pall, cfg.H))) / nx
+            lam_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in lam2)) / nx
+        elif cfg.rule == "alm":
             nx = jnp.sqrt(sum(jnp.sum(x ** 2) for x in xs_seen[0])) + 1e-30
             res_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in hid_residuals(p, s, xs_seen[0], Ps, cfg.H))) / nx
             lam_rel = jnp.sqrt(sum(jnp.sum(x ** 2) for x in xs_seen[1])) / nx
         else:
             res_rel = lam_rel = jnp.nan
         # alm: hist is the AUGMENTED energy (rises as the duals grow), so log the plain energy at the final state
-        E_fin = _E(cfg)(p, s, xs_seen[0], Zs, Ps) if cfg.rule == "alm" else hist[-1]
+        E_fin = (_E(cfg)(p, s, xs_seen[0], Zs, Ps) if cfg.rule == "alm" else
+                 _E(cfg)(p, s, xs2, Zall, Pall) if cfg.rule == "sep" else hist[-1])
         m = {"E_init": E_init / Zs.shape[0], "E": E_fin / Zs.shape[0], "pred_err": pred_err, "gnorm": gn,
              "rel_last_step_s": rel, "frac_up_steps": up, "s_norm": jnp.mean(jnp.linalg.norm(s, axis=-1)),
              "amort_rel_err": a_err, "E2": h2[-1] / Zall.shape[0], "res_rel": res_rel, "lam_rel": lam_rel, "finite": finite}
@@ -439,15 +488,19 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         Zs, Ts = Zall[ii, seen], Tall[ii, seen]
         Ps, Pall = phi(Ts), phi(Tall)
         s0 = start_s(p, amort, Zs, Ts, cfg)
-        if cfg.rule == "alm":
-            s, xs, lam, _, _ = alm_infer(p, s0, Zs, Ps, cfg); carry = (xs, lam)
+        if cfg.rule == "sep":
+            s = sep_belief(p, amort, Zs, Ts, cfg)[0]
+            xf, lf, _ = credit_fixed_s(p, s, Zall, Pall, cfg)
         else:
-            s, xs, _, _ = pc_infer(p, s0, Zs, Ps, cfg); carry = xs
-        xf, lf, _ = phase2(p, s, carry, Zall, Pall, seen, cfg)
+            if cfg.rule == "alm":
+                s, xs, lam, _, _ = alm_infer(p, s0, Zs, Ps, cfg); carry = (xs, lam)
+            else:
+                s, xs, _, _ = pc_infer(p, s0, Zs, Ps, cfg); carry = xs
+            xf, lf, _ = phase2(p, s, carry, Zall, Pall, seen, cfg)
         def grads(ix):
             sel = (lambda a: a) if ix is None else (lambda a: a[ii, ix])
             X, Zv, Pv = [sel(x) for x in xf], sel(Zall), sel(Pall)
-            g = alm_wgrads(p, s, X, [sel(l) for l in lf], Zv, Pv, cfg) if cfg.rule == "alm" else pc_wgrads(p, s, X, Zv, Pv, cfg)
+            g = alm_wgrads(p, s, X, [sel(l) for l in lf], Zv, Pv, cfg) if cfg.rule in ("alm", "sep") else pc_wgrads(p, s, X, Zv, Pv, cfg)
             return g, ad_wgrads(p, s, Zv, Pv, cfg)
         f = lambda t: jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
         c = lambda a, b: jnp.dot(f(a), f(b)) / (jnp.linalg.norm(f(a)) * jnp.linalg.norm(f(b)) + 1e-30)
@@ -484,7 +537,7 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         p, amort = p_new, am_new
         if (i + 1) % log_every == 0 or i == 0 or i == stop - 1:
             row = {"step": i + 1, "k": k, **{k_: (bool(v) if k_ == "finite" else float(v)) for k_, v in m.items()}}
-            if cfg.rule in ("pc", "alm") and cfg.log_align:
+            if cfg.rule in ("pc", "alm", "sep") and cfg.log_align:
                 for kk in (1, 3):
                     a_ = align(p, amort, PZ, PT, PPERM, kk)
                     row.update({f"{k_}_k{kk}": (np.asarray(v).round(4).tolist() if np.ndim(v) else float(v)) for k_, v in a_.items()})
