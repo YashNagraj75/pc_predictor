@@ -1,0 +1,56 @@
+10-18_19:19 start at 8331010
+10-18_19:37 GATES FAILED
+10-18_19:51 start at c7e64e8
+               total        used        free      shared  buff/cache   available
+Mem:             503          28          47           0         427         475
+10-18_20:19 GATES FAILED d10
+10-18_20:27 start at 16fcc80
+               total        used        free      shared  buff/cache   available
+Mem:             503          31          36           0         435         472
+10-18_20:56 gates pass: 108
+10-18_21:02 runner smoke ok
+10-18_21:02 arms: 18
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike lit1
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --tag _c01
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule qi
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule fixed
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --wrule fixed --tag _c01
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed
+10-18_21:02 rc=1 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T 10 --T2 10 --tag _qireg
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike lit1
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --tag _c01
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule qi
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule fixed
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --wrule fixed --tag _c01
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed
+10-18_21:02 rc=1 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T 3 --T2 3 --tag _qireg
+10-18_21:02 ALL DONE: 0 ok, 0 diverged, 18 other
+10-18_21:32 start at e308f7a
+               total        used        free      shared  buff/cache   available
+Mem:             503          27          48           0         427         477
+10-18_22:00 gates pass: 108
+10-18_22:00 runner smoke ok
+10-18_22:00 arms: 18
+10-18_23:26 rc=3 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike lit1
+10-18_23:30 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi
+10-18_23:32 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0
+10-19_00:49 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --tag _c01
+10-19_00:56 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule qi
+10-19_00:57 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule fixed
+10-19_01:14 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T 10 --T2 10 --tag _qireg
+10-19_02:06 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --wrule fixed --tag _c01
+10-19_02:09 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi
+10-19_02:18 rc=0 --rule pc --depth 10 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed
+10-19_02:53 rc=3 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike lit1
+10-19_03:05 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0
+10-19_03:13 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --tag _c01
+10-19_03:46 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule qi
+10-19_03:58 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --wrule fixed
+10-19_04:06 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --c 0.1 --wrule fixed --tag _c01
+10-19_04:07 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed --T 3 --T2 3 --tag _qireg
+10-19_04:17 rc=0 --rule pc --depth 3 --start zero --backbone bp --seed 0 --ckpt --outdir pred_runs/tests_qi --spike stable --c 0.1 --c-spike 2.0 --wrule fixed
+10-19_04:17 ALL DONE: 16 ok, 2 diverged, 0 other (this launch)
