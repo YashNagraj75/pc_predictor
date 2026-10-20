@@ -4,8 +4,9 @@ import numpy as np, jax, jax.numpy as jnp, equinox as eqx, optax, jpc
 import pred_ff as PF
 
 # Residual feedforward predictor (E1).  Same data, optimiser, steps and evaluation as pred_ff; the network is
-# pred_ff's MLP with jpc's identity skips on every interior layer.  BP uses the standard parameterisation (no muPC
-# scaling: user decision 2026-10-19, it is a PC modification); PC and PC-ALM use jpc's muPC scaling as the encoder.
+# pred_ff's MLP with jpc's identity skips on every interior layer and jpc's muPC scaling, for every rule (user
+# decision 2026-10-20: BP on the muPC network is the frozen reference).  The forward pass is built from layer_pred,
+# not jpc.init_activities_with_ffwd: that jitted function was ~2% off in layer 1 on the host GPU at batch 64.
 WIDTH, ACT = 256, "relu"
 
 
@@ -16,7 +17,7 @@ class RCfg:
     seed: int = 0
     steps: int = 6000
     batch: int = 512
-    lr: float = 1e-3
+    lr: float = 1e-3            # selected per depth for pc / alm; bp see job_e123.sh
     wd: float = 1e-4
     T: int = 20                 # pc / alm inference steps
     alpha: float = 1.0          # alm dual rate (pc arm forces 0)
@@ -27,7 +28,7 @@ class RCfg:
 
     @property
     def ptype(self):
-        return "sp" if self.arm == "bp" else "mupc"
+        return "mupc"
 
     @property
     def gamma(self):
@@ -35,7 +36,7 @@ class RCfg:
 
     @property
     def name(self):
-        return f"ffres_{self.arm}_d{self.depth}"
+        return f"ffres_{self.arm}_d{self.depth}_lr{self.lr:g}"
 
 
 def make(key, din, dout, cfg):
@@ -47,8 +48,17 @@ def scalings(params, x, cfg):
     return jpc._get_param_scalings(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)
 
 
+# All activities of the forward pass [h_0 .. h_{L-2}, yhat], term for term as jpc (gated against a float64 reference).
+def activities(params, x, cfg):
+    a = scalings(params, x, cfg)
+    acts, prev = [], x
+    for l in range(len(params[0])):
+        prev = layer_pred(params, l, prev, a); acts.append(prev)
+    return acts
+
+
 def forward(params, x, cfg):
-    return jpc.init_activities_with_ffwd(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)[-1]
+    return activities(params, x, cfg)[-1]
 
 
 def bp_loss(params, x, y, cfg):
@@ -106,7 +116,7 @@ def step_size(params, a):
 def pc_alm_grads(params, x, y, cfg, return_state=False):
     a = scalings(params, x, cfg)
     alpha = cfg.alpha if cfg.arm == "alm" else 0.0
-    h0 = list(jpc.init_activities_with_ffwd(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)[:-1])
+    h0 = activities(params, x, cfg)[:-1]
     lam0 = [jnp.zeros_like(v) for v in h0]
     eta, B = step_size(params, a), x.shape[0]
     gfn = jax.grad(lambda h, lam: energy(params, h, x, y, lam, a))
@@ -232,9 +242,10 @@ if __name__ == "__main__":
     ap.add_argument("--depth", type=int, default=10); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=6000); ap.add_argument("--T", type=int, default=20)
     ap.add_argument("--alpha", type=float, default=1.0); ap.add_argument("--holdout", action="store_true")
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--out", required=True); ap.add_argument("--save", action="store_true")
     a = ap.parse_args()
-    c = RCfg(arm=a.arm, depth=a.depth, seed=a.seed, steps=a.steps, T=a.T, alpha=a.alpha, holdout=a.holdout)
+    c = RCfg(arm=a.arm, depth=a.depth, seed=a.seed, steps=a.steps, T=a.T, alpha=a.alpha, holdout=a.holdout, lr=a.lr)
     if os.path.exists(a.out):
         print("EXISTS -- skipping", a.out); sys.exit(0)
     params, log, res, ok = train(c, a.data)

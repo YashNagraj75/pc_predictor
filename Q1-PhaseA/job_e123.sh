@@ -66,35 +66,45 @@ else:
 PYEOF
 note "generative BP references verified: $(grep -c '.eqx' pred_runs/frozen_bp/MANIFEST_generative.json) files"
 
-# ---------------------------------------------------------------- 4. E1 residual feedforward
+# ---------------------------------------------------------------- 4. E1 residual feedforward (muPC network for every rule)
+# BP_LR=select lets the frozen BP reference choose its learning rate once from the same grid (user decision pending);
+# otherwise BP trains at lr 1e-3, as every earlier feedforward predictor.
 if [ "$WHAT" = all ] || [ "$WHAT" = e1 ]; then
-{ for d in 3 10; do for s in 0 1 2; do o=$FZ/ffres_bp_d${d}_s$s.json; [ -f $o ] || ff "--arm bp --depth $d --seed $s --save --out $o" $o; done; done
-  for d in 3 10; do for T in 20 100; do
-    for A in 0.25 1.0; do o=$FS/alm_d${d}_T${T}_a${A}.json; [ -f $o ] || ff "--arm alm --depth $d --T $T --alpha $A --holdout --out $o" $o; done
-    o=$FS/pc_d${d}_T${T}.json; [ -f $o ] || ff "--arm pc --depth $d --T $T --holdout --out $o" $o
+LRS="0.001 0.003 0.01"; BP_LR=${BP_LR:-0.001}
+{ for d in 3 10; do for lr in $LRS; do
+    for T in 20 100; do
+      for A in 0.25 1.0; do o=$FS/alm_d${d}_T${T}_a${A}_lr$lr.json; [ -f $o ] || ff "--arm alm --depth $d --T $T --alpha $A --lr $lr --holdout --out $o" $o; done
+      o=$FS/pc_d${d}_T${T}_lr$lr.json; [ -f $o ] || ff "--arm pc --depth $d --T $T --lr $lr --holdout --out $o" $o
+    done
+    if [ "$BP_LR" = select ]; then o=$FS/bp_d${d}_lr$lr.json; [ -f $o ] || ff "--arm bp --depth $d --lr $lr --holdout --out $o" $o; fi
   done; done
-} > $LG/e1_wave1.txt
-pool $LG/e1_wave1.txt
+} > $LG/e1_sel.txt
+pool $LG/e1_sel.txt
 $PY - <<'PYEOF'
 import json, glob, math
-out = {"rule": "per depth and arm: lowest held-out k=1 nmse, seed 0; PC-ALM over alpha {0.25,1} x T {20,100}, plain PC over T {20,100}"}
+out = {"rule": "per depth and arm: lowest held-out k=1 nmse, seed 0, 90/10 train split; PC-ALM alpha {0.25,1} x T {20,100} x lr {1e-3,3e-3,1e-2}; plain PC T {20,100} x lr; BP lr only if BP_LR=select"}
 for d in (3, 10):
-    for arm, pat in (("alm", f"alm_d{d}_*"), ("pc", f"pc_d{d}_*")):
-        rows = [json.load(open(f)) for f in glob.glob(f"pred_runs/ffres_sel/{pat}.json")]
-        tab = [{"T": r["cfg"]["T"], "alpha": r["cfg"]["alpha"], "val_nmse": r["test"]["nmse"], "finite": r["finite"]} for r in rows]
+    for arm in ("alm", "pc", "bp"):
+        rows = [json.load(open(f)) for f in glob.glob(f"pred_runs/ffres_sel/{arm}_d{d}_*.json")]
+        if not rows:
+            continue
+        tab = [{"T": r["cfg"]["T"], "alpha": r["cfg"]["alpha"], "lr": r["cfg"]["lr"], "val_nmse": r["test"]["nmse"], "finite": r["finite"]} for r in rows]
         ok = [t for t in tab if t["finite"] and t["val_nmse"] is not None and math.isfinite(t["val_nmse"])]
-        b = min(ok, key=lambda t: t["val_nmse"]) if ok else {"T": 20, "alpha": 1.0, "val_nmse": None}
-        out[f"{arm}_d{d}"] = {"T": b["T"], "alpha": b["alpha"], "val_nmse": b["val_nmse"], "selection_failed": not ok, "all": tab}
+        b = min(ok, key=lambda t: t["val_nmse"]) if ok else {"T": 20, "alpha": 1.0, "lr": 1e-3, "val_nmse": None}
+        out[f"{arm}_d{d}"] = {"T": b["T"], "alpha": b["alpha"], "lr": b["lr"], "val_nmse": b["val_nmse"], "selection_failed": not ok, "all": tab}
 json.dump(out, open("pred_runs/ffres_sel/selected.json", "w"), indent=1)
 PYEOF
-note "E1 selected: $(python3 -c "import json;d=json.load(open('$FS/selected.json'));print({k:(v['T'],v['alpha'],v['selection_failed']) for k,v in d.items() if k!='rule'})")"
+note "E1 selected: $(python3 -c "import json;d=json.load(open('$FS/selected.json'));print({k:(v['T'],v['alpha'],v['lr'],v['selection_failed']) for k,v in d.items() if k!='rule'})")"
 { for d in 3 10; do
-    TA=$(jget $FS/selected.json "['alm_d$d']['T']"); AA=$(jget $FS/selected.json "['alm_d$d']['alpha']"); TP=$(jget $FS/selected.json "['pc_d$d']['T']")
+    TA=$(jget $FS/selected.json "['alm_d$d']['T']"); AA=$(jget $FS/selected.json "['alm_d$d']['alpha']"); LA=$(jget $FS/selected.json "['alm_d$d']['lr']")
+    TP=$(jget $FS/selected.json "['pc_d$d']['T']"); LP=$(jget $FS/selected.json "['pc_d$d']['lr']")
+    LB=$BP_LR; [ "$BP_LR" = select ] && LB=$(jget $FS/selected.json "['bp_d$d']['lr']")
     for s in 0 1 2; do
-      o=$FR/ffres_alm_d${d}_s$s.json; [ -f $o ] || ff "--arm alm --depth $d --seed $s --T $TA --alpha $AA --save --out $o" $o
-      o=$FR/ffres_pc_d${d}_s$s.json;  [ -f $o ] || ff "--arm pc --depth $d --seed $s --T $TP --save --out $o" $o
-    done; done; } > $LG/e1_wave2.txt
-pool $LG/e1_wave2.txt
+      o=$FZ/ffres_bp_d${d}_s$s.json;  [ -f $o ] || ff "--arm bp --depth $d --seed $s --lr $LB --save --out $o" $o
+      o=$FR/ffres_alm_d${d}_s$s.json; [ -f $o ] || ff "--arm alm --depth $d --seed $s --T $TA --alpha $AA --lr $LA --save --out $o" $o
+      o=$FR/ffres_pc_d${d}_s$s.json;  [ -f $o ] || ff "--arm pc --depth $d --seed $s --T $TP --lr $LP --save --out $o" $o
+    done; done; } > $LG/e1_runs.txt
+pool $LG/e1_runs.txt
 python3 - <<'PYEOF'
 import json, os
 fz, m = "pred_runs/frozen_bp", {}
@@ -103,10 +113,10 @@ for d in (3, 10):
         j = f"{fz}/ffres_bp_d{d}_s{s}.json"
         if os.path.exists(j):
             r = json.load(open(j))
-            m[j] = {k: r.get(k) for k in ("eqx_sha256", "commit", "dirty_files", "matmul_precision")} | {"test_nmse": r["test"]["nmse"]}
+            m[j] = {k: r.get(k) for k in ("eqx_sha256", "commit", "dirty_files", "matmul_precision")} | {"lr": r["cfg"]["lr"], "test_nmse": r["test"]["nmse"]}
 path = f"{fz}/MANIFEST_ffres.json"
 if not os.path.exists(path):
-    json.dump({"what": "frozen residual feedforward BP references (standard parameterisation, no muPC); never retrained", "runs": m},
+    json.dump({"what": "frozen residual feedforward BP references (muPC network, exact gradient); never retrained", "runs": m},
               open(path, "w"), indent=1)
 PYEOF
 note "E1 trained; frozen ffres BP manifest present"

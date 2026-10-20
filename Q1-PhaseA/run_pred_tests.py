@@ -36,6 +36,7 @@ def main():
     ap.add_argument("--rule", default="pc"); ap.add_argument("--depth", type=int, default=3)
     ap.add_argument("--start", default="zero"); ap.add_argument("--gsel", default="pred_runs/gpc_selected.json")
     ap.add_argument("--model", default=None)       # ffres: path of the saved .eqx
+    ap.add_argument("--tag", default="")
     ap.add_argument("--outdir", default="pred_runs/tests")
     a = ap.parse_args()
     ztr, ttr, zte, tte, *_ = PF.load("pred_latents.npz", a.backbone, "emb")
@@ -58,7 +59,7 @@ def main():
         predict = PF.make_pair_predict(PF.load_model(f, seed=a.seed)); Tsweep = {}
     elif a.method == "ffres":
         jax.config.update("jax_default_matmul_precision", "highest")     # same precision as ffres training
-        rc = RF.RCfg(arm=a.arm, depth=a.depth, seed=a.seed)
+        rc = RF.RCfg(arm=a.arm, depth=a.depth, seed=a.seed)        # the architecture does not depend on lr
         predict = RF.make_pair_predict(RF.load_model(a.model, rc), rc); Tsweep = {}
         extra = {"model_sha256": RF.sha256(a.model)}
     else:
@@ -78,7 +79,7 @@ def main():
             for (kind, lvl), zc in corr.items():
                 zs = zte.copy(); zs[np.arange(len(zte)), seen[:, 0]] = zc[np.arange(len(zte)), seen[:, 0]]
                 rows.append({"test": "robust", "condition": f"{kind}={lvl}", "k": k, **PE.run_cases(predict, zte, tte, seen, tgt, zseen=zs)})
-    name = {"ff": f"ff{a.arm}", "ffres": f"ffres_{a.arm}_d{a.depth}", "gpc": f"gpc_{a.rule}_d{a.depth}_{a.start}"}.get(a.method, a.method)
+    name = {"ff": f"ff{a.arm}", "ffres": f"ffres_{a.arm}_d{a.depth}" + (f"_{a.tag}" if a.tag else ""), "gpc": f"gpc_{a.rule}_d{a.depth}_{a.start}"}.get(a.method, a.method)
     os.makedirs(a.outdir, exist_ok=True)
     out = f"{a.outdir}/{name}_{a.backbone}_s{a.seed}.json"
     json.dump({"method": name, "backbone": a.backbone, "seed": a.seed, "rows": rows, "seconds": time.time() - t0,

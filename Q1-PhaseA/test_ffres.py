@@ -29,23 +29,29 @@ for arm in ("bp", "pc", "alm"):
     cfg = R.RCfg(arm=arm, depth=depth)
     params = R.make(jax.random.PRNGKey(depth), 146, 128, cfg)
     a = R.scalings(params, x, cfg)
-    acts = jpc.init_activities_with_ffwd(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)
+    acts = R.activities(params, x, cfg)
     h = list(acts[:-1])
-    # the hand-written layer predictions reproduce jpc's forward pass (all residuals zero at the forward pass)
+    # the forward pass equals a float64 NumPy reference of the same network (jpc's scalings and skips)
+    prev, err = np.asarray(x, np.float64), 0.0
+    for l, m in enumerate(params[0]):
+        W, b = np.asarray(m.layers[1].weight, np.float64), np.asarray(m.layers[1].bias, np.float64)
+        inp = prev if l == 0 else np.maximum(prev, 0.0)
+        nxt = float(a[l]) * (inp @ W.T + b) + (prev if params[1][l] is not None else 0.0)
+        err = max(err, float(np.max(np.abs(np.asarray(acts[l], np.float64) - nxt)) / (np.max(np.abs(nxt)) + 1e-12))); prev = nxt
+    check(f"d{depth} {arm}: forward pass == float64 reference (rel err < 1e-5)", err < 1e-5, f"{err:.1e}")
     r = R.residuals(params, h, x, a)
-    out = R.layer_pred(params, depth - 1, h[-1], a)
-    check(f"d{depth} {arm} ({cfg.ptype}): residuals zero at jpc's forward pass", max(float(jnp.max(jnp.abs(v))) for v in r) < 1e-5
-          and float(jnp.max(jnp.abs(out - acts[-1]))) < 1e-5)
+    check(f"d{depth} {arm}: residuals zero at the forward pass", max(float(jnp.max(jnp.abs(v))) for v in r) <= 1e-6)
+    jz = jpc.init_activities_with_ffwd(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)
+    print(f"     report: |jpc.init_activities_with_ffwd - ours| per layer {[float(jnp.max(jnp.abs(u - v))) for u, v in zip(jz, acts)]}")
     # per-layer activation scale at initialisation (vanishing-signal check, reported)
     print(f"     d{depth} {arm}: rms activation per layer at init {[round(float(jnp.sqrt(jnp.mean(v ** 2))), 4) for v in acts]}")
     print(f"     d{depth} {arm}: scalings {[round(float(v), 4) for v in a]}  skips {[s is not None for s in params[1]]}")
+    check(f"d{depth} {arm}: muPC scaling for every rule", cfg.ptype == "mupc" and float(a[0]) < 1.0)
     if arm == "bp":
-        check(f"d{depth} bp: standard parameterisation, no muPC scaling", all(float(v) == 1.0 for v in a))
         continue
-    check(f"d{depth} {arm}: muPC scaling", cfg.ptype == "mupc" and float(a[0]) < 1.0)
     # energy at lam = None equals jpc.pc_energy_fn on a perturbed state
     hp = [v + 0.1 * jax.random.normal(jax.random.PRNGKey(i), v.shape) for i, v in enumerate(h)]
-    e_j = jpc.pc_energy_fn(params, hp + [acts[-1]], y, x=x, param_type=cfg.ptype, gamma=cfg.gamma)
+    e_j = jpc.pc_energy_fn(params, hp + [acts[-1]], y, x=x, param_type=cfg.ptype, gamma=cfg.gamma)   # not jitted in jpc
     e_m = R.energy(params, hp, x, y, None, a)
     check(f"d{depth} {arm}: energy == jpc.pc_energy_fn", abs(float(e_j - e_m)) <= 1e-5 * abs(float(e_j)), f"{float(e_j):.6g} vs {float(e_m):.6g}")
     # lam = 0 equals lam = None
@@ -54,7 +60,7 @@ cp = R.RCfg(arm="pc", depth=depth, T=50)
 params = R.make(jax.random.PRNGKey(depth), 146, 128, cp)
 # the activity step is below 2 / lambda_max of the energy Hessian (stability), checked on one sample
 x1, y1 = x[:1], y[:1]; a1 = R.scalings(params, x1, cp)
-h1 = list(R.jpc.init_activities_with_ffwd(params[0], x1, skip_model=params[1], param_type=cp.ptype, gamma=cp.gamma)[:-1])
+h1 = R.activities(params, x1, cp)[:-1]
 fl = jnp.concatenate([v.ravel() for v in h1])
 def e_flat(v):
     out, i = [], 0
@@ -82,7 +88,7 @@ check(f"d{depth} power-iteration spectral norm within [1.0, 1.03] x exact", 1.0 
 cb = R.RCfg(arm="bp", depth=depth); pb = R.make(jax.random.PRNGKey(1), 146, 128, cb)
 gb_ = eqx.filter_grad(R.bp_loss)(pb, x, y, cb)[0][1].layers[1].weight[3, 5]
 bump = lambda d: eqx.tree_at(lambda q: q[0][1].layers[1].weight, pb, pb[0][1].layers[1].weight.at[3, 5].add(d))
-fd = (R.bp_loss(bump(1e-2), x, y, cb) - R.bp_loss(bump(-1e-2), x, y, cb)) / 2e-2
+fd = (R.bp_loss(bump(1e-1), x, y, cb) - R.bp_loss(bump(-1e-1), x, y, cb)) / 2e-1      # N(0,1) weights: a larger bump
 check(f"d{depth} bp gradient == central difference", abs(float(gb_ - fd)) <= 2e-2 * max(abs(float(fd)), 1e-3), f"{float(gb_):.5g} vs {float(fd):.5g}")
 # batch independence of the relaxed state
 cfa = dc.replace(cp, arm="alm", alpha=1.0, T=20)
