@@ -25,4 +25,5 @@ say "backed up (would change or vanish): $( [ -f "$JOBDIR/backed_up.txt" ] && wc
 git reset -q --hard "$NEW" || { say "RESET FAILED"; exit 5; }
 say "host HEAD after: $(git rev-parse HEAD)"
 git status --short > "$JOBDIR/status_after.txt"; say "status after: $(grep -vc '^??' "$JOBDIR/status_after.txt") tracked changes, $(grep -c '^??' "$JOBDIR/status_after.txt") untracked (not ignored)"
-grep '^??' "$JOBDIR/status_after.txt" | head -40 >> "$REP"
+grep '^??' "$JOBDIR/status_after.txt" | head -40 >> "$REP" || true   # head closes the pipe early (SIGPIPE under pipefail)
+exit 0
