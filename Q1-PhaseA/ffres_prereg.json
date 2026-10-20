@@ -3,7 +3,7 @@
  "network": "pred_ff's MLP (146 -> 256 x (d-1) -> 128, ReLU before each linear, bias) with jpc identity skips on interior layers 1..d-2; d in {3, 10} weight layers",
  "parameterisation": {
   "all_rules": "jpc 'mupc' (N(0,1) weights, a_1 = 1/sqrt(D), a_l = 1/sqrt(N d) with skips, output 1/sqrt(N) via gamma = 1/sqrt(256))",
-  "bp": "exact gradient on the muPC network; trained once, frozen; lr 1e-3 unless BP_LR=select (user decision pending at rev 3)"
+  "bp": "exact gradient on the muPC network; lr 1e-3 fixed (user decision, no selection); trained once, frozen"
  },
  "rules": {
   "bp": "exact gradient of 1/(2B) sum ||y - yhat||^2",
@@ -24,7 +24,7 @@
   "width fixed at 256, so d10 has about 4x the parameters of d3",
   "holdout = last 10% of train images by index",
   "the credit cosine compares with BP's gradient on the muPC network, not with the frozen sp BP reference",
-  "if BP keeps lr 1e-3 while PC selects lr, the comparison favours PC's tuning"
+  "PC and PC-ALM select lr, BP does not (user decision): tuning favours the PC arms"
  ],
- "revision": "rev 3 (2026-10-20): user decision -- BP trains on the SAME muPC network as PC (exact gradient), frozen as the reference; PC and PC-ALM select lr {1e-3,3e-3,1e-2} with their inference settings; forward pass no longer uses jpc.init_activities_with_ffwd (jitted, ~2% off in layer 1 on the host GPU at batch 64; ours matches a float64 reference)"
+ "revision": "rev 3 (2026-10-20): user decision -- BP trains on the SAME muPC network as PC (exact gradient), frozen as the reference; PC and PC-ALM select lr {1e-3,3e-3,1e-2} with their inference settings; forward pass no longer uses jpc.init_activities_with_ffwd (jitted, ~2% off in layer 1 on the host GPU at batch 64; ours matches a float64 reference); rev 4 (2026-10-20): user decision -- BP keeps lr 1e-3, no lr selection (BP_LR unset)"
 }
