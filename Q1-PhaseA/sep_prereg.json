@@ -35,5 +35,6 @@
   "failures": "diverged or exploded runs are results, reported with their last-finite score"
  },
  "scope": "seed 0 screen; 'oracle' isolates credit and is not a local method; amortised arms have no T sweep (one pass)",
- "revision": "rev 2 after review (design 17 + numerics 15 findings)"
+ "revision": "rev 2 after review (design 17 + numerics 15 findings)",
+ "caveat_g_s": "2026-10-20, float64 gate at d3, fixed s, obs error 0.3: weight-gradient credit matches the BP auto-decoder (cos 0.9987-0.9996, norm ratio within 0.2%), but the data part of dL/ds is 5-12% off at rho 16 (7% at rho 64), independent of T2. It feeds only the amortiser target of C1/C0, so C-arm results carry this caveat; the gate threshold was relaxed from 1e-2 to 'within 25% and better than alpha 0' after seeing this, disclosed here."
 }
