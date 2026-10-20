@@ -107,14 +107,15 @@ else:
         res = float(jnp.sqrt(sum(jnp.sum(v ** 2) for v in G.hid_residuals(p, s, xs, Ph, H)) / sum(jnp.sum(v ** 2) for v in xs)))
         print(f"     report: rho {rho:g} k_in {k} T2 {T2}: cos weight grad {cw:.5f} (alpha 0: {c0:.5f})  norm ratio {ratio:.4f}  "
               f"rel err of data part of g_s {cs_:.2e} (alpha 0: {e0:.2e})  hidden residual {res:.2e}")
-        if (rho, k, T2) in ((64.0, 1, 3000), (16.0, 5, 3000)):
-            check(f"d{depth} float64, rho {rho:g}, T2 3000: PC-ALM weight gradient == BP auto-decoder (cos > 0.995, ratio within 2%)",
+        # code-correctness assertions at d3; at d10 the credit accuracy is the experiment's question, so it is reported
+        if depth == 3 and (rho, k, T2) in ((64.0, 1, 3000), (16.0, 5, 3000)):
+            check(f"d3 float64, rho {rho:g}, T2 3000: PC-ALM weight gradient == BP auto-decoder (cos > 0.995, ratio within 2%)",
                   cw > 0.995 and abs(ratio - 1) < 0.02, f"cos {cw:.5f} ratio {ratio:.4f}")
-            # 2026-10-20: the loop settles ~5-12% off the saddle on the top link at d3 (T2-independent), so this is a
-            # report with a gross-error floor; it only feeds the amortiser target of the C arms (caveat in sep_prereg)
-            check(f"d{depth} float64, rho {rho:g}, T2 3000: data part of g_s within 25% of the auto-decoder's and closer than alpha 0",
-                  cs_ < 0.25 and cs_ < e0, f"{cs_:.2e} vs alpha 0 {e0:.2e}")
-            if rho == 16.0:     # at very large rho plain PC itself approaches BP, so this is asserted at the operating rho only
-                check(f"d{depth} float64, rho 16: the multipliers matter (alpha 0 further from BP)", c0 < cw - 1e-3, f"{c0:.5f} vs {cw:.5f}")
+            # the loop settles ~5-12% off the saddle on the top link at d3 (T2-independent): gross-error floor only; it
+            # feeds only the amortiser target of the C arms (caveat in sep_prereg)
+            check(f"d3 float64, rho {rho:g}, T2 3000: data part of g_s within 25% of the auto-decoder's", cs_ < 0.25, f"{cs_:.2e}")
+            if rho == 16.0:     # at very large rho plain PC itself approaches BP, so the comparisons are made at the operating rho
+                check("d3 float64, rho 16: the multipliers matter for the weight gradient (alpha 0 further from BP)", c0 < cw - 1e-3, f"{c0:.5f} vs {cw:.5f}")
+                check("d3 float64, rho 16: the multipliers matter for g_s (alpha 0 further from BP)", cs_ < e0, f"{cs_:.2e} vs {e0:.2e}")
 print("ALL PASS" if OK[0] else "SOME FAIL")
 sys.exit(0 if OK[0] else 1)
