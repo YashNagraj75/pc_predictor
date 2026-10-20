@@ -162,13 +162,19 @@ def evaluate(params, z, tau, cfg, n_retr=2000):
     return {"nmse": nmse, "retr1": float(np.mean(np.concatenate(hits)))}
 
 
+# pred_ff.optimiser with the warmup capped at a quarter of the run (identical for the 6000-step runs; smoke runs are short).
+def optimiser(cfg):
+    sched = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, min(200, cfg.steps // 4), cfg.steps)
+    return optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(sched, weight_decay=cfg.wd))
+
+
 def train(cfg, data_path, verbose=True, log_every=500):
     ztr, ttr, zte, tte, _, _ = PF.load(data_path, cfg.backbone, cfg.layer)
     if cfg.holdout:
         nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
     X, Y, *_ = PF.pairs(ztr, ttr, cfg.use_tau)
     params = make(jax.random.PRNGKey(cfg.seed), X.shape[1], Y.shape[1], cfg)
-    opt = PF.optimiser(cfg)
+    opt = optimiser(cfg)
     st = opt.init(eqx.filter(params, eqx.is_inexact_array))
 
     @eqx.filter_jit
