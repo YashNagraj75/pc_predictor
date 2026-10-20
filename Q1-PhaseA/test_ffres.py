@@ -84,12 +84,14 @@ for T in (20, 100, 400):
 W = params[0][depth // 2].layers[1].weight + 0.05 * jax.random.normal(jax.random.PRNGKey(3), params[0][depth // 2].layers[1].weight.shape)
 e = float(R.spec_norm(W) / jnp.linalg.norm(W, 2))
 check(f"d{depth} power-iteration spectral norm within [1.0, 1.03] x exact", 1.0 <= e <= 1.03, f"{e:.4f}")
-# BP gradient against a central finite difference on one weight entry, float32 tolerance
+# BP gradient against a central finite difference, at the entry with the largest gradient (float32: a tiny entry is
+# dominated by round-off of a loss of size ~50)
 cb = R.RCfg(arm="bp", depth=depth); pb = R.make(jax.random.PRNGKey(1), 146, 128, cb)
-gb_ = eqx.filter_grad(R.bp_loss)(pb, x, y, cb)[0][1].layers[1].weight[3, 5]
-bump = lambda d: eqx.tree_at(lambda q: q[0][1].layers[1].weight, pb, pb[0][1].layers[1].weight.at[3, 5].add(d))
-fd = (R.bp_loss(bump(1e-1), x, y, cb) - R.bp_loss(bump(-1e-1), x, y, cb)) / 2e-1      # N(0,1) weights: a larger bump
-check(f"d{depth} bp gradient == central difference", abs(float(gb_ - fd)) <= 2e-2 * max(abs(float(fd)), 1e-3), f"{float(gb_):.5g} vs {float(fd):.5g}")
+G1 = eqx.filter_grad(R.bp_loss)(pb, x, y, cb)[0][1].layers[1].weight
+ij = tuple(int(v) for v in np.unravel_index(int(jnp.argmax(jnp.abs(G1))), G1.shape))
+bump = lambda d: eqx.tree_at(lambda q: q[0][1].layers[1].weight, pb, pb[0][1].layers[1].weight.at[ij].add(d))
+fd = (R.bp_loss(bump(3e-2), x, y, cb) - R.bp_loss(bump(-3e-2), x, y, cb)) / 6e-2
+check(f"d{depth} bp gradient == central difference (largest entry)", abs(float(G1[ij] - fd)) <= 3e-2 * abs(float(fd)), f"{float(G1[ij]):.5g} vs {float(fd):.5g}")
 # batch independence of the relaxed state
 cfa = dc.replace(cp, arm="alm", alpha=1.0, T=20)
 _, h1, _ = R.pc_alm_grads(params, x[:8], y[:8], cfa, return_state=True)
