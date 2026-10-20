@@ -55,7 +55,7 @@ class GCfg:
     def name(self):
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
         tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule in ("alm", "sep") else ""
-        tag += f"_{self.belief}_c{self.c:g}" if self.rule == "sep" else ""
+        tag += f"_{self.belief}_c{self.c:g}_T2{self.T2}" if self.rule == "sep" else ""
         tag += (f"_spk{self.spike}" if self.spike != "none" else "") + (f"_fu{self.wrule}" if self.wrule != "pc" else "") + self.tag
         if self.spike != "none" or self.wrule != "pc" or self.tag:      # name carries the step scales (review N4)
             tag += f"_c{self.c:g}" + (f"_cs{self.c_spike:g}" if self.spike == "stable" else "") + (f"_T{self.T}" if self.T != 400 else "")
@@ -376,7 +376,9 @@ def ad_wgrads(p, s, Z, Ph, cfg):
 def amort_grads(amort, Z, T9, s, cfg):
     b, k = Z.shape[:2]
     x = jnp.concatenate([Z, T9], -1).reshape(b * k, -1)
-    y = jnp.repeat(jax.lax.stop_gradient(s)[:, None], k, 1).reshape(b * k, M)
+    # s is one target per image (b, M), or one per view (b, k, M) for rule sep (review E123 F3)
+    y = (s if s.ndim == 3 else jnp.repeat(s[:, None], k, 1)).reshape(b * k, M)
+    y = jax.lax.stop_gradient(y)
     if cfg.rule == "pc":
         return PF.pc_grads(amort, x, y, PF.Cfg(T=cfg.T_amort, adaptive_eta=True))
     if cfg.rule in ("alm", "sep"):          # sep with alpha = 0 is plain PC (pred_ff gate: alpha = 0 == pc_grads)
@@ -412,7 +414,7 @@ def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
 
 # ------------------------------------------------------------------ training
 def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
-    assert cfg.rule != "alm" or cfg.out_w == 1.0, "alm saddle equals the BP auto-decoder only at out_w = 1"
+    assert cfg.rule not in ("alm", "sep") or cfg.out_w == 1.0, "the alm saddle equals the BP auto-decoder only at out_w = 1"
     assert cfg.rule != "sep" or (cfg.belief == "amort") == (cfg.start == "amort"), "sep: belief amort <=> start amort"
     kp, ka = jax.random.split(jax.random.PRNGKey(cfg.seed))
     p = init(kp, cfg, ztr.shape[-1])
@@ -453,8 +455,14 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         p2 = optax.apply_updates(p, upd)
         a_err, amort2, st_a2 = jnp.nan, amort, st_a
         if amort is not None:
-            s_tgt = sep_s_target(p, s, xs2, lam2, Zall, Pall, cfg) if cfg.rule == "sep" else s
-            ga = amort_grads(amort, Zs, Ts, s_tgt, cfg)
+            if cfg.rule == "sep":
+                s_tgt = sep_s_target(p, s, [x[ii, seen] for x in xs2], [l[ii, seen] for l in lam2], Zs, Ps, cfg)
+                # per-view targets: each view's output moves by the same local step, so the views need not agree
+                A_v = PF.forward(amort, jnp.concatenate([Zs, Ts], -1).reshape(-1, Zs.shape[-1] + Ts.shape[-1])).reshape(s.shape[0], -1, M)
+                ga = amort_grads(amort, Zs, Ts, A_v - (s - s_tgt)[:, None], dataclasses.replace(cfg, alpha=1.0))
+            else:
+                s_tgt = s
+                ga = amort_grads(amort, Zs, Ts, s_tgt, cfg)
             upd_a, st_a2 = opt_a.update(ga, st_a, eqx.filter(amort, eqx.is_inexact_array))
             amort2 = eqx.apply_updates(amort, upd_a)
             a_err = jnp.mean(jnp.sum((s0 - s_tgt) ** 2, -1)) / (jnp.mean(jnp.sum(s_tgt ** 2, -1)) + 1e-12)
@@ -476,6 +484,8 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
         m = {"E_init": E_init / Zs.shape[0], "E": E_fin / Zs.shape[0], "pred_err": pred_err, "gnorm": gn,
              "rel_last_step_s": rel, "frac_up_steps": up, "s_norm": jnp.mean(jnp.linalg.norm(s, axis=-1)),
              "amort_rel_err": a_err, "E2": h2[-1] / Zall.shape[0], "res_rel": res_rel, "lam_rel": lam_rel, "finite": finite}
+        if cfg.rule == "sep":
+            m["n_views"] = jnp.asarray(Zall.shape[1], jnp.float32)
         return p2, amort2, st, st_a2, m
 
     # Credit diagnostic (pc / alm only; never feeds training), on a FIXED probe batch with fixed seen views, k = 1 and 3:
@@ -544,6 +554,11 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
             if ckpt and (i + 1) in ckpt[1]:
                 eqx.tree_serialise_leaves(f"{ckpt[0]}_step{i + 1}.eqx", p)
             log.append(row)
+            if cfg.rule == "sep" and exploded(log):        # a sep blow-up is the result; stop early (review N4)
+                log[-1]["exploded_stop"] = True
+                if verbose:
+                    print(f"[{cfg.name} c{cfg.c} s{cfg.seed}] EXPLODED at step {i + 1}; stopping", flush=True)
+                break
             if verbose:
                 print(f"[{cfg.name} c{cfg.c} s{cfg.seed}] " + json.dumps({k_: (round(v, 4) if isinstance(v, float) else v) for k_, v in row.items()})
                       + f"  {time.time() - t0:.0f}s", flush=True)
@@ -565,7 +580,7 @@ def make_predict(p, amort, cfg, T=None):
 #   with absolute floor since PC's seen-view energy can approach 0.
 def exploded(log, factor=5.0, warm=2):
     pv = lambda r: r["pred_err"] / (4 - r["k"]) if "k" in r else r["pred_err"]       # per held-out view
-    ev = lambda r: r["E"] / r["k"] if "k" in r else r["E"]                            # per seen view
+    ev = lambda r: r["E"] / r.get("n_views", r["k"]) if "k" in r else r["E"]          # per view in the energy
     P = [pv(r) for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
     E = [ev(r) for r in log if "E" in r and np.isfinite(r["E"])]
     Rr = [r["res_rel"] for r in log if np.isfinite(r.get("res_rel", np.nan))]

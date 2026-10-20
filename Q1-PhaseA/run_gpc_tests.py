@@ -60,7 +60,11 @@ def main():
     ap.add_argument("--outdir", default="pred_runs/tests")
     ap.add_argument("--belief", default="pc"); ap.add_argument("--k-in", type=int, default=1)   # sep only
     ap.add_argument("--holdout", action="store_true")   # selection: train on 90% of train images, score k=1 on the rest
+    ap.add_argument("--smoke", action="store_true")     # short evaluation lists, one corruption draw (code-path check only)
     a = ap.parse_args()
+    global T_LIST, T_SETTLED
+    if a.smoke:
+        T_LIST, T_SETTLED = (5,), 20
     ztr, ttr, zte, tte, *_ = PF.load("pred_latents.npz", a.backbone, "emb")
     if a.holdout:
         nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
@@ -91,7 +95,8 @@ def main():
     import dataclasses
     ck = (out[:-5], {1000, 2000}) if a.ckpt else None
     attempts = []
-    ladder = (c,) if cfg.spike != "none" else (c, c / 2, c / 4)   # a spike failure is the result (review N1/D7)
+    # a spike or sep failure is the result (review N1/D7; E123 F6): no step-size retries
+    ladder = (c,) if (cfg.spike != "none" or cfg.rule == "sep") else (c, c / 2, c / 4)
     for c_try in ladder:                     # retry on divergence OR blow-up (review N6); c_used is recorded and flagged
         cfg = dataclasses.replace(cfg, c=c_try)
         p, am, log, div = G.train(cfg, ztr, ttr, verbose=True, ckpt=ck)
@@ -112,6 +117,8 @@ def main():
                     out.replace(".json", ".diverged.json"))
         print("DIVERGED -- no result written", flush=True); sys.exit(3)
     eqx.tree_serialise_leaves(out[:-5] + ".eqx", p)
+    if a.rule == "sep" and am is not None:
+        eqx.tree_serialise_leaves(out[:-5] + "_amort.eqx", am)
     if a.holdout:                             # selection runs: one held-out score, nothing else
         k1 = PE.run_cases(G.make_predict(p, am, cfg), zte, tte, *PE.k_cases(len(zte), 1))
         G.dump_json({"method": cfg.name, "seed": a.seed, "holdout": True, "val_k1": k1, "attempts": attempts,
@@ -125,13 +132,20 @@ def main():
     for k in (1, 2, 3):
         rows.append({"test": "k_seen", "condition": "clean", "k": k, "T": cfg.T, **PE.run_cases(predict, zte, tte, *cases[k])})
         rows.append({"test": "k_seen_settled", "condition": "clean", "k": k, "T": T_SETTLED, **PE.run_cases(settled, zte, tte, *cases[k])})
-    Ts = ([0] if a.start == "amort" else []) + list(T_LIST)
+    if a.rule == "sep":     # train-belief x test-belief table (review F8): the same decoder under every test-time belief
+        for tb in ("oracle", "pc"):
+            if tb != a.belief:
+                pt = G.make_predict(p, am, dataclasses.replace(cfg, belief=tb, start="zero",
+                                                              c_belief={"pc": sel[f"gpc_pc_d{a.depth}_zero"]["c"], "oracle": sel[f"gpc_bp_d{a.depth}_zero"]["c"]}[tb]))
+                rows.append({"test": "k_seen_testbelief", "condition": tb, "k": 1, "T": cfg.T, **PE.run_cases(pt, zte, tte, *cases[1])})
+    # an amortised sep belief ignores T, so its T sweep would repeat one number
+    Ts = [] if (a.rule == "sep" and a.belief == "amort") else ([0] if a.start == "amort" else []) + list(T_LIST)
     for T in Ts:
         rows.append({"test": "T_inf", "condition": "clean", "k": 1, "T": T, **PE.run_cases(G.make_predict(p, am, cfg, T=T), zte, tte, *cases[1])})
     if a.backbone == "bp":
         for k in (1, 2):
             seen, tgt = cases[k]
-            for cs in (0, 1, 2):                                    # three corruption draws (review D9)
+            for cs in ((0,) if a.smoke else (0, 1, 2)):             # three corruption draws (review D9)
                 corr = corrupted_latents(a.backbone, zstats, seen[:, 0], seed=cs)
                 for (kind, lvl), zc in corr.items():
                     zs = zte.copy(); zs[np.arange(len(zte)), seen[:, 0]] = zc[np.arange(len(zte)), seen[:, 0]]

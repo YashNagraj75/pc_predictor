@@ -2,19 +2,27 @@
 # E1 residual feedforward PC-ALM (d3, d10) + E2/E3 generative belief/credit separation (d3, d10).
 # Spec: wiki 'Method - Deep feedforward PC-ALM and belief-credit separation plan'; prereg ffres_prereg.json, sep_prereg.json.
 # Resumable: every run skips an existing output.  Frozen BP references are never retrained.
-#   bash job_e123.sh <project_root> <job_dir>
+#   bash job_e123.sh <project_root> <job_dir> [e1|e23|all]
 set -uo pipefail
-P="$1"; JOBDIR="$2"; cd "$P/Q1-PhaseA" || exit 2
-PY=../.venv/bin/python; export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.3
+P="$1"; JOBDIR=$(readlink -f "$2"); WHAT="${3:-all}"; cd "$P/Q1-PhaseA" || exit 2
+PY=../.venv/bin/python; export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.25
 PAR=${PAR:-3}; ST=e123_status.txt; note() { echo "$(date +%m-%d_%H:%M) $*" | tee -a $ST; }
 FZ=pred_runs/frozen_bp; FR=pred_runs/ffres; FS=pred_runs/ffres_sel; SS=pred_runs/sep_sel; TS=pred_runs/tests_sep; LG=pred_runs/logs_e123
 collect() { tar czf "$JOBDIR/q1_e123.tar.gz" --exclude='*.eqx' $ST e123_gates_*.log ffres_prereg.json sep_prereg.json \
             $FZ $FR $FS $SS $TS $LG pred_runs/tests_ffres 2>/dev/null || true; }
 trap collect EXIT
 mkdir -p $FZ $FR $FS $SS $TS $LG pred_runs/tests_ffres
-note "start at $(git rev-parse --short HEAD)"
+note "start at $(git rev-parse --short HEAD) (dirty tracked files: $(git status --porcelain --untracked-files=no | wc -l)), part=$WHAT"
+pool() { xargs -d '\n' -P $PAR -I{} bash -c '{}' < "$1"; collect; }
+# each generated line runs one command, then records ITS exit code (review N8)
+ff() { echo "$PY -W ignore pred_ffres.py $1 > $LG/$(basename $2 .json).log 2>&1; rc=\$?; echo \$(date +%m-%d_%H:%M) rc=\$rc $2 >> $ST"; }
+G="$PY -W ignore run_gpc_tests.py --rule sep --backbone bp --seed 0"
+gp() { t=$(echo "$1" | tr -d '-' | tr ' /' '__' | cut -c1-110); echo "$G $1 > $LG/$t.log 2>&1; rc=\$?; echo \$(date +%m-%d_%H:%M) rc=\$rc gpc $t >> $ST"; }
+jget() { python3 -c "import json,sys; d=json.load(open('$1')); print(eval('d' + sys.argv[1]))" "$2"; }
 
-# ---------------------------------------------------------------- 1. gates (GPU; one depth per process)
+# ---------------------------------------------------------------- 1. gates (one depth per process) + key check
+python3 -c "import json; d=json.load(open('pred_runs/gpc_selected.json')); [d[f'gpc_{r}_d{x}_zero']['c'] for r in ('pc','bp') for x in (3,10)]" \
+  || { note "gpc_selected.json lacks a stage-1 key"; exit 4; }
 for d in 3 10; do
   $PY -W ignore test_ffres.py $d > e123_gates_ffres_d$d.log 2>&1 || { note "GATES FAILED ffres d$d"; grep -h FAIL e123_gates_ffres_d$d.log | head; exit 4; }
   $PY -W ignore test_sep.py $d > e123_gates_sep_d$d.log 2>&1 || { note "GATES FAILED sep d$d"; grep -h FAIL e123_gates_sep_d$d.log | head; exit 4; }
@@ -22,111 +30,138 @@ for d in 3 10; do
 done
 note "gates pass: $(cat e123_gates_*.log | grep -c PASS)"
 
-# ---------------------------------------------------------------- 2. smoke (every code path once)
-for arm in bp pc alm; do
-  $PY -W ignore pred_ffres.py --arm $arm --depth 10 --steps 30 --T 5 --out $LG/smoke_ffres_$arm.json > $LG/smoke_ffres_$arm.log 2>&1 \
-    || { note "SMOKE FAILED ffres $arm"; tail -5 $LG/smoke_ffres_$arm.log; exit 5; }
-done
-for b in oracle pc amort; do
-  st=zero; [ $b = amort ] && st=amort
-  $PY -W ignore run_gpc_tests.py --rule sep --belief $b --start $st --depth 10 --rho 4 --k-in 5 --T2 10 --steps 8 --holdout \
-      --outdir $LG/smoke_sep > $LG/smoke_sep_$b.log 2>&1 || { note "SMOKE FAILED sep $b"; tail -5 $LG/smoke_sep_$b.log; exit 5; }
+# ---------------------------------------------------------------- 2. smoke: every code path once, both depths (fresh each launch)
+rm -rf $LG/smoke_sep $LG/smoke_ffres_*
+for d in 3 10; do
+  for arm in bp pc alm; do
+    $PY -W ignore pred_ffres.py --arm $arm --depth $d --steps 30 --T 5 --save --out $LG/smoke_ffres_${arm}_d$d.json > $LG/smoke_ffres_${arm}_d$d.log 2>&1 \
+      && $PY -W ignore run_pred_tests.py ffres --arm $arm --depth $d --model $LG/smoke_ffres_${arm}_d$d.eqx --outdir $LG/smoke_ffres_tests >> $LG/smoke_ffres_${arm}_d$d.log 2>&1 \
+      || { note "SMOKE FAILED ffres $arm d$d"; tail -5 $LG/smoke_ffres_${arm}_d$d.log; exit 5; }
+  done
+  for b in oracle pc amort; do st=zero; [ $b = amort ] && st=amort
+    for al in 1 0; do
+      $PY -W ignore run_gpc_tests.py --rule sep --belief $b --start $st --depth $d --rho 16 --k-in 5 --alpha $al --T 10 --T2 10 --steps 8 \
+          --ckpt --smoke --outdir $LG/smoke_sep > $LG/smoke_sep_${b}_a${al}_d$d.log 2>&1 || { note "SMOKE FAILED sep $b a$al d$d"; tail -5 $LG/smoke_sep_${b}_a${al}_d$d.log; exit 5; }
+    done
+  done
+  $PY -W ignore run_gpc_tests.py --rule sep --belief oracle --start zero --depth $d --rho 16 --k-in 5 --T 10 --T2 10 --steps 8 --holdout \
+      --outdir $LG/smoke_sep/holdout > $LG/smoke_sep_holdout_d$d.log 2>&1 || { note "SMOKE FAILED sep holdout d$d"; exit 5; }
 done
 note "smoke ok"
 
-# ---------------------------------------------------------------- 3. freeze the generative BP reference (manifest only)
-$PY - <<'PYEOF'
+# ---------------------------------------------------------------- 3. frozen generative BP reference: manifest written once, then verified
+$PY - <<'PYEOF' || { note "generative BP manifest mismatch"; exit 4; }
 import glob, hashlib, json, os
 fs = sorted(glob.glob("pred_runs/tests/gpc_bp_d*_zero_bp_s[012].eqx"))
+assert len(fs) == 6, f"expected 6 frozen BP auto-decoders, found {len(fs)}"
 m = {f: hashlib.sha256(open(f, "rb").read()).hexdigest() for f in fs}
-json.dump({"what": "frozen generative BP auto-decoder references (G1); never retrained", "files": m},
-          open("pred_runs/frozen_bp/MANIFEST_generative.json", "w"), indent=1)
-print(len(m), "files")
+path = "pred_runs/frozen_bp/MANIFEST_generative.json"
+if os.path.exists(path):
+    old = json.load(open(path))["files"]
+    assert old == m, "a frozen generative BP reference changed"
+else:
+    json.dump({"what": "frozen generative BP auto-decoder references (G1); never retrained",
+               "test_k1_nmse_3seed_mean": {"d3": 0.3053, "d10": 0.2783}, "files": m}, open(path, "w"), indent=1)
 PYEOF
-note "generative BP manifest: $(grep -c sha pred_runs/frozen_bp/MANIFEST_generative.json 2>/dev/null || grep -o 'eqx' pred_runs/frozen_bp/MANIFEST_generative.json | wc -l) entries"
-
-pool() { xargs -d '\n' -P $PAR -I{} bash -c '{}' < "$1"; }
-ff() { echo "$PY -W ignore pred_ffres.py $1 > $LG/$(basename $2 .json).log 2>&1; echo \$(date +%m-%d_%H:%M) rc=\$? $2 >> $ST"; }
-export PY ST LG
+note "generative BP references verified (6 files)"
 
 # ---------------------------------------------------------------- 4. E1 residual feedforward
+if [ "$WHAT" = all ] || [ "$WHAT" = e1 ]; then
 { for d in 3 10; do for s in 0 1 2; do o=$FZ/ffres_bp_d${d}_s$s.json; [ -f $o ] || ff "--arm bp --depth $d --seed $s --save --out $o" $o; done; done
-  for T in 20 100; do for A in 0.25 1.0; do o=$FS/alm_d10_T${T}_a${A}.json; [ -f $o ] || ff "--arm alm --depth 10 --T $T --alpha $A --holdout --out $o" $o; done; done
+  for d in 3 10; do for T in 20 100; do
+    for A in 0.25 1.0; do o=$FS/alm_d${d}_T${T}_a${A}.json; [ -f $o ] || ff "--arm alm --depth $d --T $T --alpha $A --holdout --out $o" $o; done
+    o=$FS/pc_d${d}_T${T}.json; [ -f $o ] || ff "--arm pc --depth $d --T $T --holdout --out $o" $o
+  done; done
 } > $LG/e1_wave1.txt
 pool $LG/e1_wave1.txt
-$PY - <<'PYEOF' || { note "E1 selection failed"; exit 6; }
+$PY - <<'PYEOF'
 import json, glob, math
-rows = [json.load(open(f)) for f in glob.glob("pred_runs/ffres_sel/alm_d10_*.json")]
-rows = [r for r in rows if r["finite"] and r["test"]["nmse"] is not None and math.isfinite(r["test"]["nmse"])]
-assert rows, "no finite selection run"
-b = min(rows, key=lambda r: r["test"]["nmse"])
-json.dump({"T": b["cfg"]["T"], "alpha": b["cfg"]["alpha"], "val_nmse": b["test"]["nmse"],
-           "all": [{"T": r["cfg"]["T"], "alpha": r["cfg"]["alpha"], "val_nmse": r["test"]["nmse"]} for r in rows],
-           "rule": "lowest held-out k=1 nmse, d10, seed 0, alpha {0.25,1} x T {20,100}; used at both depths"},
-          open("pred_runs/ffres_sel/selected.json", "w"), indent=1)
-print(b["cfg"]["T"], b["cfg"]["alpha"])
+out = {"rule": "per depth and arm: lowest held-out k=1 nmse, seed 0; PC-ALM over alpha {0.25,1} x T {20,100}, plain PC over T {20,100}"}
+for d in (3, 10):
+    for arm, pat in (("alm", f"alm_d{d}_*"), ("pc", f"pc_d{d}_*")):
+        rows = [json.load(open(f)) for f in glob.glob(f"pred_runs/ffres_sel/{pat}.json")]
+        tab = [{"T": r["cfg"]["T"], "alpha": r["cfg"]["alpha"], "val_nmse": r["test"]["nmse"], "finite": r["finite"]} for r in rows]
+        ok = [t for t in tab if t["finite"] and t["val_nmse"] is not None and math.isfinite(t["val_nmse"])]
+        b = min(ok, key=lambda t: t["val_nmse"]) if ok else {"T": 20, "alpha": 1.0, "val_nmse": None}
+        out[f"{arm}_d{d}"] = {"T": b["T"], "alpha": b["alpha"], "val_nmse": b["val_nmse"], "selection_failed": not ok, "all": tab}
+json.dump(out, open("pred_runs/ffres_sel/selected.json", "w"), indent=1)
 PYEOF
-T=$(python3 -c "import json;print(json.load(open('$FS/selected.json'))['T'])"); A=$(python3 -c "import json;print(json.load(open('$FS/selected.json'))['alpha'])")
-note "E1 selected T=$T alpha=$A"
-{ for d in 3 10; do for s in 0 1 2; do
-    o=$FR/ffres_alm_d${d}_s$s.json; [ -f $o ] || ff "--arm alm --depth $d --seed $s --T $T --alpha $A --save --out $o" $o
-    o=$FR/ffres_pc_d${d}_s$s.json;  [ -f $o ] || ff "--arm pc --depth $d --seed $s --T $T --save --out $o" $o
-  done; done; } > $LG/e1_wave2.txt
+note "E1 selected: $(python3 -c "import json;d=json.load(open('$FS/selected.json'));print({k:(v['T'],v['alpha'],v['selection_failed']) for k,v in d.items() if k!='rule'})")"
+{ for d in 3 10; do
+    TA=$(jget $FS/selected.json "['alm_d$d']['T']"); AA=$(jget $FS/selected.json "['alm_d$d']['alpha']"); TP=$(jget $FS/selected.json "['pc_d$d']['T']")
+    for s in 0 1 2; do
+      o=$FR/ffres_alm_d${d}_s$s.json; [ -f $o ] || ff "--arm alm --depth $d --seed $s --T $TA --alpha $AA --save --out $o" $o
+      o=$FR/ffres_pc_d${d}_s$s.json;  [ -f $o ] || ff "--arm pc --depth $d --seed $s --T $TP --save --out $o" $o
+    done; done; } > $LG/e1_wave2.txt
 pool $LG/e1_wave2.txt
 python3 - <<'PYEOF'
 import json, os
-fz = "pred_runs/frozen_bp"
-m = {}
+fz, m = "pred_runs/frozen_bp", {}
 for d in (3, 10):
     for s in (0, 1, 2):
         j = f"{fz}/ffres_bp_d{d}_s{s}.json"
         if os.path.exists(j):
-            r = json.load(open(j)); m[j] = {"eqx_sha256": r.get("eqx_sha256"), "commit": r.get("commit"), "test_nmse": r["test"]["nmse"]}
-json.dump({"what": "frozen residual feedforward BP references (standard parameterisation, no muPC); never retrained", "runs": m},
-          open(f"{fz}/MANIFEST_ffres.json", "w"), indent=1)
+            r = json.load(open(j))
+            m[j] = {k: r.get(k) for k in ("eqx_sha256", "commit", "dirty_files", "matmul_precision")} | {"test_nmse": r["test"]["nmse"]}
+path = f"{fz}/MANIFEST_ffres.json"
+if not os.path.exists(path):
+    json.dump({"what": "frozen residual feedforward BP references (standard parameterisation, no muPC); never retrained", "runs": m},
+              open(path, "w"), indent=1)
 PYEOF
-note "E1 trained; frozen BP manifest written"
+note "E1 trained; frozen ffres BP manifest present"
 for d in 3 10; do for s in 0 1 2; do
   for pair in "bp:$FZ" "alm:$FR" "pc:$FR"; do arm=${pair%%:*}; dir=${pair#*:}; m=$dir/ffres_${arm}_d${d}_s$s.eqx
     [ -f pred_runs/tests_ffres/ffres_${arm}_d${d}_bp_s$s.json ] || [ ! -f $m ] || \
       $PY -W ignore run_pred_tests.py ffres --arm $arm --depth $d --seed $s --model $m --outdir pred_runs/tests_ffres > $LG/test_ffres_${arm}_d${d}_s$s.log 2>&1 \
       || note "TEST FAILED ffres $arm d$d s$s"
   done; done; done
+collect
 note "E1 tests done: $(ls pred_runs/tests_ffres/*.json 2>/dev/null | wc -l)"
+fi
 
-# ---------------------------------------------------------------- 5. E2/E3 selection: oracle belief + PC-ALM, rho x k_in
-G="$PY -W ignore run_gpc_tests.py --rule sep --backbone bp --seed 0 --T2 200"
-gp() { t=$(echo "$1" | tr -d '-' | tr ' /' '__' | cut -c1-110); echo "$G $1 > $LG/$t.log 2>&1; echo \$(date +%m-%d_%H:%M) rc=\$? gpc $t >> $ST"; }
-{ for d in 10 3; do for rho in 4 16; do for k in 1 5; do
-    gp "--depth $d --belief oracle --start zero --rho $rho --k-in $k --alpha 1 --holdout --outdir $SS"; done; done; done; } > $LG/sep_sel.txt
-pool $LG/sep_sel.txt
-$PY - <<'PYEOF' || { note "sep selection failed"; exit 7; }
-import json, glob, math
-out = {}
-for d in (3, 10):
-    rows = []
-    for f in glob.glob(f"pred_runs/sep_sel/gpc_sep_d{d}_*.json"):
-        if f.endswith(".diverged.json"):
-            continue
-        r = json.load(open(f)); n = r["val_k1"]["nmse"]
-        if math.isfinite(n):
-            rows.append({"rho": r["cfg"]["hid_prec"], "k_in": r["cfg"]["k_inner"], "c_used": r["c_used"], "val_nmse": n})
-    assert rows, f"d{d}: no stable selection run"
-    b = min(rows, key=lambda r: r["val_nmse"])
-    out[str(d)] = {**b, "all": rows}
-out["rule"] = "per depth: lowest held-out k=1 nmse of arm A1 (oracle belief, PC-ALM) over rho {4,16} x k_in {1,5}, full 4000 steps; diverged/exploded excluded; used for every PC arm at that depth"
-json.dump(out, open("pred_runs/sep_sel/selected.json", "w"), indent=1)
-print({k: (v["rho"], v["k_in"]) for k, v in out.items() if k != "rule"})
+# ---------------------------------------------------------------- 5. E2/E3 selection
+if [ "$WHAT" = all ] || [ "$WHAT" = e23 ]; then
+# 5a. A1 (oracle belief + PC-ALM), rho 16, k_in {1,5} x T2 {200,800}, c = 1, no retries (a failure is a result)
+{ for d in 10 3; do for k in 1 5; do for T2 in 200 800; do
+    gp "--depth $d --belief oracle --start zero --rho 16 --k-in $k --T2 $T2 --c 1 --alpha 1 --holdout --outdir $SS"; done; done; done; } > $LG/sep_sel_a1.txt
+pool $LG/sep_sel_a1.txt
+pick() {   # $1 = depth, $2 = glob tag, $3 = output key; falls back to the least-bad failed run (review N3)
+$PY - "$1" "$2" "$3" <<'PYEOF'
+import json, glob, math, os, sys
+d, tag, key = sys.argv[1:4]
+path = "pred_runs/sep_sel/selected.json"
+out = json.load(open(path)) if os.path.exists(path) else {}
+rows = []
+for f in glob.glob(f"pred_runs/sep_sel/gpc_sep_d{d}_*{tag}*.json"):
+    r = json.load(open(f)); cfg = r["cfg"]; fail = f.endswith(".diverged.json")
+    n = (r.get("rows_last_finite") or [{}])[0].get("nmse") if fail else r["val_k1"]["nmse"]
+    rows.append({"rho": cfg["hid_prec"], "k_in": cfg["k_inner"], "T2": cfg["T2"], "failed": fail,
+                 "val_nmse": n if (n is not None and math.isfinite(n)) else None})
+ok = [r for r in rows if not r["failed"] and r["val_nmse"] is not None]
+cand = ok or [r for r in rows if r["val_nmse"] is not None] or rows
+b = min(cand, key=lambda r: r["val_nmse"] if r["val_nmse"] is not None else 1e9)
+out[key] = {**b, "selection_failed": not ok, "all": rows}
+json.dump(out, open(path, "w"), indent=1)
+print(key, b["rho"], b["k_in"], b["T2"], "FAILED" if not ok else "")
 PYEOF
-note "sep selected: $(python3 -c "import json;d=json.load(open('$SS/selected.json'));print({k:(v['rho'],v['k_in'],v['c_used']) for k,v in d.items() if k!='rule'})")"
+}
+for d in 3 10; do pick $d "_a1_" "A1_d$d" >> $ST; done
+# 5b. alpha = 0 controls choose their own hidden precision rho {1,16} at A1's T2 (review F5)
+{ for d in 10 3; do T2=$(jget $SS/selected.json "['A1_d$d']['T2']")
+    for r in 1 16; do gp "--depth $d --belief oracle --start zero --rho $r --k-in 1 --T2 $T2 --c 1 --alpha 0 --holdout --outdir $SS"; done; done; } > $LG/sep_sel_a0.txt
+pool $LG/sep_sel_a0.txt
+for d in 3 10; do pick $d "_a0_" "A0_d$d" >> $ST; done
+note "sep selected: $(python3 -c "import json;d=json.load(open('$SS/selected.json'));print({k:(v['rho'],v['k_in'],v['T2'],v['selection_failed']) for k,v in d.items()})")"
 
 # ---------------------------------------------------------------- 6. E2/E3 screen: belief x {PC-ALM, alpha 0}, seed 0
 { for d in 10 3; do
-    R=$(python3 -c "import json;print(json.load(open('$SS/selected.json'))['$d']['rho'])")
-    K=$(python3 -c "import json;print(json.load(open('$SS/selected.json'))['$d']['k_in'])")
-    C=$(python3 -c "import json;print(json.load(open('$SS/selected.json'))['$d']['c_used'])")
+    R1=$(jget $SS/selected.json "['A1_d$d']['rho']"); K1=$(jget $SS/selected.json "['A1_d$d']['k_in']"); T2=$(jget $SS/selected.json "['A1_d$d']['T2']")
+    R0=$(jget $SS/selected.json "['A0_d$d']['rho']")
     for b in oracle pc amort; do st=zero; [ $b = amort ] && st=amort
-      for al in 1 0; do gp "--depth $d --belief $b --start $st --rho $R --k-in $K --c $C --alpha $al --ckpt --outdir $TS"; done; done
-  done; } > $LG/sep_screen.txt
+      gp "--depth $d --belief $b --start $st --rho $R1 --k-in $K1 --T2 $T2 --c 1 --alpha 1 --ckpt --outdir $TS"
+      gp "--depth $d --belief $b --start $st --rho $R0 --k-in 1 --T2 $T2 --c 1 --alpha 0 --ckpt --outdir $TS"
+    done; done; } > $LG/sep_screen.txt
 pool $LG/sep_screen.txt
-note "ALL DONE: $(ls $TS/gpc_sep_*_s0.json 2>/dev/null | grep -vc diverged) results, $(ls $TS/*.diverged.json 2>/dev/null | wc -l) diverged"
+note "E2/E3 done: $(ls $TS/gpc_sep_*_s0.json 2>/dev/null | grep -vc diverged) results, $(ls $TS/*.diverged.json 2>/dev/null | wc -l) failed"
+fi
+note "ALL DONE ($WHAT)"

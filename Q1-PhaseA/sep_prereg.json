@@ -1,16 +1,39 @@
-{"spec": "wiki Methods/'Method - Deep feedforward PC-ALM and belief-credit separation plan' (E2/E3), 2026-10-19",
+{
+ "spec": "wiki Methods/'Method - Deep feedforward PC-ALM and belief-credit separation plan' (E2/E3), 2026-10-19",
  "model": "generative predictor of pred_gpc.py (residual top-down maps, widths 600 / 256 at depths 3 / 10), 4000 steps, batch 256, k in {1,2,3} seen views",
- "rule_sep": {"stage1_belief": {"pc": "plain-PC relaxation of the joint energy, hidden precision 1, T = 400, c = stage-1 selected PC c",
-                                "oracle": "BP auto-decoder inference of s, T = 400, c = stage-1 selected BP c (backprop for inference only)",
-                                "amort": "one pass of the amortiser, mean over seen views; trained locally toward s - eta_s * dL/ds (PC-ALM feedforward rule, alpha as the arm)"},
-              "stage2_credit": "all 4 views, s fixed, hidden levels start at topdown(s) (zero hidden residuals), lam = 0; T2 = 200 primal steps, dual step lam += r every k_in steps; penalty rho = hidden precision; activity step scale c",
-              "weights": "gradient of the augmented energy at the final stage-2 state"},
- "selection": "per depth, arm A1 (oracle + PC-ALM), seed 0, 90/10 train split, FULL 4000 steps: rho {4, 16} x k_in {1, 5}, c = 1 (halved on divergence, recorded); lowest held-out k=1 nmse; used for every PC arm at that depth",
- "arms_per_depth": {"A1": "oracle + PC-ALM", "A0": "oracle + alpha 0", "B1": "pc + PC-ALM", "B0": "pc + alpha 0", "C1": "amort + PC-ALM", "C0": "amort + alpha 0"},
+ "rule_sep": {
+  "stage1_belief": {
+   "pc": "plain-PC relaxation of the joint energy, hidden precision 1, T = 400, c = stage-1 selected PC c",
+   "oracle": "BP auto-decoder inference of s, T = 400, c = stage-1 selected BP c (backprop for inference only)",
+   "amort": "one pass of the amortiser, mean over seen views; trained locally toward s - eta_s * dL/ds with dL/ds from the SEEN views' stage-2 state; amortiser rule fixed to PC-ALM alpha 1 in both C0 and C1"
+  },
+  "stage2_credit": "all 4 views, s fixed, hidden levels start at topdown(s) (zero hidden residuals), lam = 0; T2 primal steps (selected), dual step lam += r every k_in steps; penalty rho = hidden precision; activity step scale c = 1; no step-size retries",
+  "weights": "gradient of the augmented energy at the final stage-2 state"
+ },
+ "selection": {
+  "A1": "per depth, oracle belief + PC-ALM, seed 0, 90/10 train split, full 4000 steps, c = 1, rho 16: k_in {1,5} x T2 {200, 800}",
+  "A0": "per depth, oracle belief + alpha 0, rho {1, 16} at A1's T2 (k_in irrelevant)",
+  "rule": "lowest held-out k=1 nmse among runs that neither diverge nor explode; a failed run is a result and is never retried. If all fail, the least-bad (last-finite) run is used, flagged selection_failed, and the job continues",
+  "why_rho_16": "float64 gate at fixed s: credit cosine rises with rho (C2: d10 0.83 at rho 1, 0.98 at 16); a linearised analysis (numerics review) finds rho nearly cancels in the stage-2 dynamics while T2 and k_in govern convergence and transient growth, so those are the selected knobs"
+ },
+ "arms_per_depth": {
+  "A1": "oracle + PC-ALM",
+  "A0": "oracle + alpha 0 (own rho)",
+  "B1": "pc + PC-ALM",
+  "B0": "pc + alpha 0",
+  "C1": "amort + PC-ALM",
+  "C0": "amort + alpha 0"
+ },
  "reference": "frozen BP auto-decoder G1 (3 seeds; d3 0.3053, d10 0.2783). No new BP arm (user decision: BP gets none of PC's modifications).",
- "readings": {"credit_at_depth": "if A1 at d10 is stable and within 0.01 of G1, the C2 collapse came from coupling belief and multipliers; if A1 collapses, the multipliers fail at depth",
-              "belief_cost": "B1 - A1 (PC's belief), C1 - A1 (one-pass belief)",
-              "multipliers": "A0 - A1, B0 - B1, C0 - C1",
-              "classes": "|delta| < 0.01 no detectable effect; 0.01-0.03 candidate (seeds 1, 2 in a later job); > 0.03 or failure reportable at screen level",
-              "stability": "res_rel and cos to the BP auto-decoder gradient at the same s, logged every 250 steps; a growing res_rel is reported as unstable"},
- "scope": "seed 0 screen; 'oracle' isolates credit and is not a local method"}
+ "readings": {
+  "metric": "test k=1 nmse, clean, T = 400 for the belief stage; compared with frozen G1 seed 0 (shares init and batch stream); G1 3-seed sd reported beside every threshold",
+  "credit_at_depth": "A1 at d10 stable (finite, not exploded, res_rel not growing, at c = 1 without retry) and within 0.01 of G1 seed 0 => 'the multiplier loop at fixed oracle s gives working credit at depth'. A1 unstable or collapsed => 'the multipliers fail at depth even with the belief removed'. Stability of A1 is reported over all 4 selection configs, not only the winner.",
+  "coupling": "NOT claimed from A1 alone: A1 differs from C2 in belief source, frozen s, cold stage-2 start, T2 and k_in. B1 (local PC belief, decoupled) vs C2 is the coupling comparison, stated with those differences.",
+  "belief_cost": "B1 - A1 and C1 - A1 at their own test-time belief, plus the train-belief x test-belief table (every decoder evaluated under oracle and PC test-time beliefs)",
+  "multipliers": "A0 - A1, B0 - B1, C0 - C1 (alpha 0 controls have their own rho)",
+  "classes": "|delta| < 0.01 no detectable effect; 0.01-0.03 candidate (seeds 1, 2 later); > 0.03 or failure reportable at screen level; effects under 2 x G1 sd are 'unresolved'",
+  "failures": "diverged or exploded runs are results, reported with their last-finite score"
+ },
+ "scope": "seed 0 screen; 'oracle' isolates credit and is not a local method; amortised arms have no T sweep (one pass)",
+ "revision": "rev 2 after review (design 17 + numerics 15 findings)"
+}

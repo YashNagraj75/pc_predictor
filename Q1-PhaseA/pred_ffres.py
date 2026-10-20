@@ -80,15 +80,25 @@ def energy(params, h, x, y, lam, a):
     return 0.5 * (sum(jnp.sum(ri ** 2) for ri in r) + jnp.sum(out ** 2)) / x.shape[0]
 
 
-# Activity step 0.9 / (1 + 2 max_l c_l): c_l bounds the curvature that layer l+1's term adds to h_l
-# ((1 + a||W||)^2 through a skip, (a||W||)^2 without; ReLU slope <= 1).  Recomputed from the current weights.
+# Spectral norm by power iteration from a fixed start (no SVD in the training step), 2% safety margin.
+def spec_norm(W, iters=20):
+    W = jax.lax.stop_gradient(W)
+    v = jax.random.normal(jax.random.PRNGKey(17), (W.shape[1],), W.dtype)
+    v = v / jnp.linalg.norm(v)
+    for _ in range(iters):
+        v = W.T @ (W @ v); v = v / (jnp.linalg.norm(v) + 1e-30)
+    return 1.02 * jnp.linalg.norm(W @ v)
+
+
+# Activity step 0.9 / (1 + j)^2, j = max_l ||J_l|| bound (1 + a||W|| through a skip, a||W|| without; ReLU slope <= 1):
+# the energy Hessian is M^T M with M = I - (block-subdiagonal J), so ||H|| <= (1 + j)^2.  From the current weights.
 def step_size(params, a):
     model, skip = params
     c = []
     for l in range(1, len(model)):
-        w = a[l] * jnp.linalg.norm(jax.lax.stop_gradient(model[l].layers[1].weight), 2)
+        w = a[l] * spec_norm(model[l].layers[1].weight)
         c.append((1.0 + w) ** 2 if skip[l] is not None else w ** 2)
-    return 0.9 / (1.0 + 2.0 * jnp.max(jnp.stack(c)))
+    return 0.9 / (1.0 + jnp.sqrt(jnp.max(jnp.stack(c)))) ** 2
 
 
 # T primal steps, each followed by lam += alpha * r (not after the last); weights from the energy at the final state.
@@ -119,7 +129,7 @@ def grads(params, x, y, cfg):
 
 
 def weight_norms(params):
-    return [float(jnp.linalg.norm(m.layers[1].weight, 2)) for m in params[0]]
+    return [float(spec_norm(m.layers[1].weight)) for m in params[0]]
 
 
 def make_predict_x(params, cfg):
@@ -169,6 +179,8 @@ def train(cfg, data_path, verbose=True, log_every=500):
         return (cs(ga, gb), jnp.linalg.norm(f(ga)) / (jnp.linalg.norm(f(gb)) + 1e-30),
                 jnp.stack([cs(u, v) for u, v in zip(ga[0], gb[0])]), res)
 
+    pidx = np.random.default_rng(999).integers(0, len(X), cfg.batch)    # fixed probe batch for the credit readout
+    xp, yp = jnp.asarray(X[pidx]), jnp.asarray(Y[pidx])
     rng = np.random.default_rng(cfg.seed + 1000)          # batch stream depends on seed only, as in pred_ff
     log, t0, finite = [], time.time(), True
     for s in range(cfg.steps):
@@ -181,13 +193,15 @@ def train(cfg, data_path, verbose=True, log_every=500):
         if (s + 1) % log_every == 0 or s == 0:
             row = {"step": s + 1, "train_loss": float(l), "grad_norm": float(gn), "w_norms": weight_norms(params)}
             if cfg.arm != "bp":
-                c, ratio, lc, res = credit(params, xb, yb)
+                c, ratio, lc, res = credit(params, xp, yp)
                 row.update({"cos_bp": float(c), "ratio_bp": float(ratio), "layer_cos": np.asarray(lc).round(4).tolist(),
-                            "res_rel": float(res)})
+                            "min_layer_cos": float(jnp.min(lc)), "res_rel": float(res)})
             log.append(row)
             if verbose:
                 print(f"[{cfg.name} s{cfg.seed}] step {s + 1} loss {float(l):.4f} {row.get('cos_bp', '')} {time.time() - t0:.0f}s", flush=True)
     res = evaluate(params, zte, tte, cfg) if finite else {"nmse": None, "retr1": None}
+    if finite and not np.isfinite(res["nmse"]):       # the last update can be the one that broke (review F10)
+        finite, res = False, {"nmse": None, "retr1": None}
     return params, log, res, finite
 
 
@@ -212,6 +226,7 @@ def sha256(path):
 
 
 if __name__ == "__main__":
+    jax.config.update("jax_default_matmul_precision", "highest")     # no TF32, as pred_gpc
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="pred_latents.npz"); ap.add_argument("--arm", default="bp")
     ap.add_argument("--depth", type=int, default=10); ap.add_argument("--seed", type=int, default=0)
@@ -225,7 +240,9 @@ if __name__ == "__main__":
     params, log, res, ok = train(c, a.data)
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     rec = {"cfg": dataclasses.asdict(c), "ptype": c.ptype, "log": log, "test": res, "finite": ok,
-           "commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()}
+           "commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
+           "dirty_files": len(subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.splitlines()),
+           "matmul_precision": str(jax.config.jax_default_matmul_precision)}
     if ok and a.save:
         eqx.tree_serialise_leaves(a.out.replace(".json", ".eqx"), params)
         rec["eqx_sha256"] = sha256(a.out.replace(".json", ".eqx"))

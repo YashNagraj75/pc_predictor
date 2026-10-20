@@ -57,6 +57,7 @@ def main():
         f = f"pred_runs/ff_{a.arm}_{a.backbone}_emb_s{a.seed}.eqx"
         predict = PF.make_pair_predict(PF.load_model(f, seed=a.seed)); Tsweep = {}
     elif a.method == "ffres":
+        jax.config.update("jax_default_matmul_precision", "highest")     # same precision as ffres training
         rc = RF.RCfg(arm=a.arm, depth=a.depth, seed=a.seed)
         predict = RF.make_pair_predict(RF.load_model(a.model, rc), rc); Tsweep = {}
         extra = {"model_sha256": RF.sha256(a.model)}
