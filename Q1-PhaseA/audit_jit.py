@@ -75,6 +75,13 @@ def gpc_case(name, base, amort_path=None):
 # positive control: residual muPC feedforward BP gradient (known bad on this GPU without the fix)
 rc = RF.RCfg(arm="bp", depth=10, seed=0); pb = RF.load_model("pred_runs/frozen_bp/ffres_bp_d10_s0.eqx", rc)
 case("CONTROL_ffres_bp_d10", lambda p, a, b: eqx.filter_grad(RF.bp_loss)(p, a, b, rc), pb, x, y)
+if MODE == "ffres":     # residual ff PC-ALM d10 at trained weights, rho 1 and 16, under the current env
+    import dataclasses as _dc
+    ra = RF.RCfg(arm="alm", depth=10, seed=0, T=100, alpha=0.25, lr=0.01); pa = RF.load_model("pred_runs/ffres/ffres_alm_d10_s0.eqx", ra)
+    for rho, T in ((1.0, 100), (16.0, 400)):
+        rr = _dc.replace(ra, rho=rho, T=T, alpha=1.0 if rho > 1 else 0.25)
+        case(f"ffres_alm_d10_rho{rho:g}", lambda p, a, b, rr=rr: RF.grads(p, a, b, rr), pa, x, y)
+    json.dump(res, open(OUT, "w"), indent=1); print("DONE"); sys.exit(0)
 TS, TT = "pred_runs/tests_sep/", "pred_runs/tests/"
 gpc_case("gpc_sep_d10_amort_alm", TS + "gpc_sep_d10_amort_hp16_a1_k1_amort_c1_T2200_bp_s0", TS + "gpc_sep_d10_amort_hp16_a1_k1_amort_c1_T2200_bp_s0_amort.eqx")
 gpc_case("gpc_sep_d10_oracle_alm", TS + "gpc_sep_d10_zero_hp16_a1_k1_oracle_c1_T2200_bp_s0")

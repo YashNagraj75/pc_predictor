@@ -18,6 +18,7 @@ class RCfg:
     steps: int = 6000
     batch: int = 512
     lr: float = 1e-3            # selected per depth for pc / alm; bp see job_e123.sh
+    rho: float = 1.0            # alm penalty; 1 = the pre-registered E1 setting
     wd: float = 1e-4
     T: int = 20                 # pc / alm inference steps
     alpha: float = 1.0          # alm dual rate (pc arm forces 0)
@@ -36,7 +37,7 @@ class RCfg:
 
     @property
     def name(self):
-        return f"ffres_{self.arm}_d{self.depth}_lr{self.lr:g}"
+        return f"ffres_{self.arm}_d{self.depth}_lr{self.lr:g}" + (f"_rho{self.rho:g}" if self.rho != 1.0 else "")
 
 
 def make(key, din, dout, cfg):
@@ -80,14 +81,14 @@ def residuals(params, h, x, a):
     return r
 
 
-# PC-ALM energy, completing-the-square form with rho = 1, output clamped to y, batch mean like jpc.
-# lam = None gives the plain PC energy (gated against jpc.pc_energy_fn).
-def energy(params, h, x, y, lam, a):
+# PC-ALM energy, completing-the-square form with penalty rho, output clamped to y, batch mean like jpc.
+# lam = None gives the plain PC energy (gated against jpc.pc_energy_fn).  rho = 1 is the original E1 energy.
+def energy(params, h, x, y, lam, a, rho=1.0):
     r = residuals(params, h, x, a)
     if lam is not None:
         r = [ri + li for ri, li in zip(r, lam)]
     out = y - layer_pred(params, len(h), h[-1], a)
-    return 0.5 * (sum(jnp.sum(ri ** 2) for ri in r) + jnp.sum(out ** 2)) / x.shape[0]
+    return 0.5 * (rho * sum(jnp.sum(ri ** 2) for ri in r) + jnp.sum(out ** 2)) / x.shape[0]
 
 
 # Spectral norm by power iteration from a fixed start (no SVD in the training step), 2% safety margin.
@@ -118,8 +119,8 @@ def pc_alm_grads(params, x, y, cfg, return_state=False):
     alpha = cfg.alpha if cfg.arm == "alm" else 0.0
     h0 = activities(params, x, cfg)[:-1]
     lam0 = [jnp.zeros_like(v) for v in h0]
-    eta, B = step_size(params, a), x.shape[0]
-    gfn = jax.grad(lambda h, lam: energy(params, h, x, y, lam, a))
+    eta, B = step_size(params, a) / max(1.0, cfg.rho), x.shape[0]     # curvature grows ~ rho
+    gfn = jax.grad(lambda h, lam: energy(params, h, x, y, lam, a, cfg.rho))
 
     def step(c, t):
         h, lam = c
@@ -130,7 +131,7 @@ def pc_alm_grads(params, x, y, cfg, return_state=False):
 
     (h, lam), _ = jax.lax.scan(step, (h0, lam0), jnp.arange(cfg.T))
     h, lam = jax.lax.stop_gradient(h), jax.lax.stop_gradient(lam)
-    g = eqx.filter_grad(lambda p: energy(p, h, x, y, lam, a))(params)
+    g = eqx.filter_grad(lambda p: energy(p, h, x, y, lam, a, cfg.rho))(params)
     return (g, h, lam) if return_state else g
 
 
@@ -248,10 +249,10 @@ if __name__ == "__main__":
     ap.add_argument("--depth", type=int, default=10); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=6000); ap.add_argument("--T", type=int, default=20)
     ap.add_argument("--alpha", type=float, default=1.0); ap.add_argument("--holdout", action="store_true")
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--rho", type=float, default=1.0)
     ap.add_argument("--out", required=True); ap.add_argument("--save", action="store_true")
     a = ap.parse_args()
-    c = RCfg(arm=a.arm, depth=a.depth, seed=a.seed, steps=a.steps, T=a.T, alpha=a.alpha, holdout=a.holdout, lr=a.lr)
+    c = RCfg(arm=a.arm, depth=a.depth, seed=a.seed, steps=a.steps, T=a.T, alpha=a.alpha, holdout=a.holdout, lr=a.lr, rho=a.rho)
     if os.path.exists(a.out):
         print("EXISTS -- skipping", a.out); sys.exit(0)
     params, log, res, ok = train(c, a.data)
