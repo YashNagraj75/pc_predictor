@@ -20,12 +20,13 @@ def cmp(a, b):
 res = {"env": {"TF32": os.environ.get("NVIDIA_TF32_OVERRIDE"), "XLA_FLAGS": os.environ.get("XLA_FLAGS"), "device": str(jax.devices()[0]), "jax": jax.__version__}, "cases": {}}
 
 
-def case(name, fn):
+# fn takes the arrays as ARGUMENTS so the compiled call traces them (closed-over arrays would be baked in as constants).
+def case(name, fn, *args):
     t0 = time.time()
     try:
-        gj = fn()
+        gj = eqx.filter_jit(fn)(*args)
         with jax.disable_jit():
-            ge = fn()
+            ge = fn(*args)
         res["cases"][name] = {**cmp(gj, ge), "sec": round(time.time() - t0, 1)}
     except Exception as e:
         res["cases"][name] = {"error": f"{type(e).__name__}: {str(e)[:300]}", "trace": traceback.format_exc()[-800:]}
@@ -47,7 +48,7 @@ def gcfg(path):
     return G.GCfg(**{f.name: d[f.name] for f in dc.fields(G.GCfg) if f.name in d})
 
 
-def gpc_grad(p, amort, cfg, k=1):
+def gpc_grad(p, amort, Zall, Tall, perm, cfg, k=1):
     ii = jnp.arange(Zall.shape[0])[:, None]; seen = perm[:, :k]
     Zs, Ts = Zall[ii, seen], Tall[ii, seen]; Ps, Pall = G.phi(Ts), G.phi(Tall)
     s0 = G.start_s(p, amort, Zs, Ts, cfg)
@@ -68,12 +69,12 @@ def gpc_case(name, base, amort_path=None):
     cfg = gcfg(base + ".json")
     p = eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), cfg, Zall.shape[-1]))
     am = eqx.tree_deserialise_leaves(amort_path, G.init_amort(jax.random.PRNGKey(0), Zall.shape[-1])) if amort_path else None
-    case(name, lambda: gpc_grad(p, am, cfg))
+    case(name, lambda p, am, Z, T, pm: gpc_grad(p, am, Z, T, pm, cfg), p, am, Zall, Tall, perm)
 
 
 # positive control: residual muPC feedforward BP gradient (known bad on this GPU without the fix)
 rc = RF.RCfg(arm="bp", depth=10, seed=0); pb = RF.load_model("pred_runs/frozen_bp/ffres_bp_d10_s0.eqx", rc)
-case("CONTROL_ffres_bp_d10", lambda: eqx.filter_grad(RF.bp_loss)(pb, x, y, rc))
+case("CONTROL_ffres_bp_d10", lambda p, a, b: eqx.filter_grad(RF.bp_loss)(p, a, b, rc), pb, x, y)
 TS, TT = "pred_runs/tests_sep/", "pred_runs/tests/"
 gpc_case("gpc_sep_d10_amort_alm", TS + "gpc_sep_d10_amort_hp16_a1_k1_amort_c1_T2200_bp_s0", TS + "gpc_sep_d10_amort_hp16_a1_k1_amort_c1_T2200_bp_s0_amort.eqx")
 gpc_case("gpc_sep_d10_oracle_alm", TS + "gpc_sep_d10_zero_hp16_a1_k1_oracle_c1_T2200_bp_s0")
@@ -92,7 +93,7 @@ if MODE == "all":
         fc = PF.Cfg(**{f.name: cd[f.name] for f in dc.fields(PF.Cfg) if f.name in cd})
         m = PF.load_model(f"pred_runs/{nm}.eqx", seed=fc.seed)
         fn = {"bp": PF.bp_grads, "alm": PF.alm_grads}.get(fc.arm, PF.pc_grads)
-        case(f"ff_{nm}", lambda m=m, fc=fc, fn=fn: fn(m, x, y, fc))
+        case(f"ff_{nm}", lambda m, a, b, fc=fc, fn=fn: fn(m, a, b, fc), m, x, y)
     # Phase-A encoder (residual muPC, LeJEPA + SIGReg): backbone BP, plain PC, PC-ALM
     import train as TR, data as D, sigreg as S, run_probes as RP
     for run in ("bp_sigreg_etafix_s0", "pc_sigreg_T16_coupled_etafix_s0", "pc_sigreg_T16_coupled_alm_s0"):
@@ -104,9 +105,9 @@ if MODE == "all":
             Zin, _ = D.make_views(kv, jnp.asarray(Xtr)[ib], ecfg.data)
             A = S.sample_directions(ka, ecfg.enc.embed_dim, ecfg.sig.num_slices)
             if ecfg.arm == "bp":
-                case(f"enc_{run}", lambda: TR.bp_grads(ep, Zin, A, ecfg)[0])
+                case(f"enc_{run}", lambda p, z, a: TR.bp_grads(p, z, a, ecfg)[0], ep, Zin, A)
             else:
-                case(f"enc_{run}", lambda: TR.pc_grads(ep, Zin, A, ecfg, kg)[0])
+                case(f"enc_{run}", lambda p, z, a, kk: TR.pc_grads(p, z, a, ecfg, kk)[0], ep, Zin, A, kg)
         except Exception as e:
             res["cases"][f"enc_{run}"] = {"error": f"{type(e).__name__}: {str(e)[:300]}", "trace": traceback.format_exc()[-800:]}
             print(f"enc_{run}", "ERROR", str(e)[:200], flush=True)
