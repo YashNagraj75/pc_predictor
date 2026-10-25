@@ -1,0 +1,138 @@
+{
+ "ffres_bp_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 0.0006737743656999672
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 0.0006737743656999672
+  }
+ },
+ "ffres_init_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.517374083311131e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.517374083311131e-07
+  }
+ },
+ "ffres_bp_d3_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.989735374996453e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.989735374996453e-07
+  }
+ },
+ "ffres_init_d3_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.824455537715509e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.824455537715509e-07
+  }
+ },
+ "ffres_alm_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 4.0516104484689434e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 4.0516104484689434e-07
+  }
+ },
+ "ffres_alm_d10_pcalmgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 8.09327050371482e-06
+  },
+  "eager_vs_f64": {
+   "cos": 0.999374,
+   "relmax": 0.05186755476146303
+  },
+  "jit_vs_f64": {
+   "cos": 0.999374,
+   "relmax": 0.05186758216798448
+  }
+ },
+ "sp_mlp_d3_init_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.5345153068602782e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.5345153068602782e-07
+  }
+ },
+ "mupc_mlp_d3_init_noscale_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.0056257565932522e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.0056257565932522e-07
+  }
+ },
+ "matmul_chain_fwd": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 5.048579802543002e-07
+  }
+ },
+ "gpc_bp_d10_adwgrads": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.654643494326112e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.654643494326112e-07
+  }
+ }
+}

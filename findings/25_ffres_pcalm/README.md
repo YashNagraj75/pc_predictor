@@ -1,5 +1,13 @@
 # 25 — Residual feedforward predictor on the µPC network, depths 3 and 10 (E1)
 
+> **INVALID (2026-10-25).** Every arm in this experiment was trained with wrong gradients. On the host GPU, the compiled
+> (`eqx.filter_jit`) gradient of this residual µPC network disagrees with the uncompiled one and with a float64 reference:
+> cosine 0.23 (BP d10), 0.47 (BP d3), 0.14 (PC-ALM d10, BP loss), 0.18 (PC-ALM d10, PC-ALM rule) at the trained weights,
+> 0.99 at initialisation. Uncompiled GPU, compiled CPU, and compiled GPU with `NVIDIA_TF32_OVERRIDE=0
+> XLA_FLAGS=--xla_gpu_autotune_level=0` all agree with float64 (cos 1.0000). Audit: host job 89f38512,
+> `diag/jit_audit_*.json`. These numbers must not be used; E1 needs a rerun with the fix.
+
+
 Host job a91e2def (commit 5eb580a), finished 2026-10-20 22:11; 18/18 runs finite. Prereg: ffres_prereg.json (rev 4).
 Network: jpc MLP + identity skips, µPC scaling for every rule. BP: exact gradient, lr 1e-3 fixed (user decision, not
 tuned), frozen reference. PC / PC-ALM: T, alpha, lr selected per depth on a 90/10 train holdout.

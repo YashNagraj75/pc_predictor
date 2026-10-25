@@ -1,0 +1,138 @@
+{
+ "ffres_bp_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 0.233597,
+   "relmax": 1.5544826137213357
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.2988909765201365e-07
+  },
+  "jit_vs_f64": {
+   "cos": 0.233597,
+   "relmax": 1.5544825224984384
+  }
+ },
+ "ffres_init_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 0.989607,
+   "relmax": 0.24914906629748118
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.8876674498273486e-07
+  },
+  "jit_vs_f64": {
+   "cos": 0.989607,
+   "relmax": 0.24914902377142675
+  }
+ },
+ "ffres_bp_d3_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 0.466929,
+   "relmax": 1.5079285394450421
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.277179526782105e-07
+  },
+  "jit_vs_f64": {
+   "cos": 0.466929,
+   "relmax": 1.5079284804327944
+  }
+ },
+ "ffres_init_d3_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 0.996917,
+   "relmax": 0.09500446387051709
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.817784511363087e-07
+  },
+  "jit_vs_f64": {
+   "cos": 0.996917,
+   "relmax": 0.09500440855052134
+  }
+ },
+ "ffres_alm_d10_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 0.139537,
+   "relmax": 0.9986169877135346
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 4.780389047505078e-07
+  },
+  "jit_vs_f64": {
+   "cos": 0.139537,
+   "relmax": 0.9986169879084722
+  }
+ },
+ "ffres_alm_d10_pcalmgrad": {
+  "jit_vs_eager": {
+   "cos": 0.183192,
+   "relmax": 1.0034681404585972
+  },
+  "eager_vs_f64": {
+   "cos": 0.999374,
+   "relmax": 0.0518698934512939
+  },
+  "jit_vs_f64": {
+   "cos": 0.181028,
+   "relmax": 1.003433237781577
+  }
+ },
+ "sp_mlp_d3_init_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 3.3783000839912966e-08
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.2363305164283515e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.2363305164283515e-07
+  }
+ },
+ "mupc_mlp_d3_init_noscale_bpgrad": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 3.680661671076345e-08
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.7581677441622166e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.7581677441622166e-07
+  }
+ },
+ "matmul_chain_fwd": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 0.0
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 5.048579802543002e-07
+  }
+ },
+ "gpc_bp_d10_adwgrads": {
+  "jit_vs_eager": {
+   "cos": 1.0,
+   "relmax": 1.4664786445513866e-07
+  },
+  "eager_vs_f64": {
+   "cos": 1.0,
+   "relmax": 2.654643494326112e-07
+  },
+  "jit_vs_f64": {
+   "cos": 1.0,
+   "relmax": 1.9467752548759432e-07
+  }
+ }
+}
