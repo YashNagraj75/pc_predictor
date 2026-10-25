@@ -1,0 +1,126 @@
+{
+ "A1_d3": {
+  "rho": 16.0,
+  "k_in": 1,
+  "T2": 200,
+  "failed": false,
+  "val_nmse": 0.3130491077899933,
+  "selection_failed": false,
+  "all": [
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.3130491077899933
+   },
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 800,
+    "failed": false,
+    "val_nmse": 0.3153199255466461
+   },
+   {
+    "rho": 16.0,
+    "k_in": 5,
+    "T2": 800,
+    "failed": false,
+    "val_nmse": 0.3202527165412903
+   },
+   {
+    "rho": 16.0,
+    "k_in": 5,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.3137703835964203
+   }
+  ]
+ },
+ "A1_d10": {
+  "rho": 16.0,
+  "k_in": 1,
+  "T2": 200,
+  "failed": false,
+  "val_nmse": 0.3814998269081116,
+  "selection_failed": false,
+  "all": [
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 800,
+    "failed": false,
+    "val_nmse": 0.4209793210029602
+   },
+   {
+    "rho": 16.0,
+    "k_in": 5,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.4008049964904785
+   },
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.3814998269081116
+   },
+   {
+    "rho": 16.0,
+    "k_in": 5,
+    "T2": 800,
+    "failed": false,
+    "val_nmse": 0.3901757299900055
+   }
+  ]
+ },
+ "A0_d3": {
+  "rho": 1.0,
+  "k_in": 1,
+  "T2": 200,
+  "failed": false,
+  "val_nmse": 0.37952908873558044,
+  "selection_failed": false,
+  "all": [
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.38086023926734924
+   },
+   {
+    "rho": 1.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.37952908873558044
+   }
+  ]
+ },
+ "A0_d10": {
+  "rho": 1.0,
+  "k_in": 1,
+  "T2": 200,
+  "failed": false,
+  "val_nmse": 0.3923146426677704,
+  "selection_failed": false,
+  "all": [
+   {
+    "rho": 1.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.3923146426677704
+   },
+   {
+    "rho": 16.0,
+    "k_in": 1,
+    "T2": 200,
+    "failed": false,
+    "val_nmse": 0.3971121907234192
+   }
+  ]
+ }
+}

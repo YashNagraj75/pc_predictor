@@ -1,0 +1,53 @@
+{
+ "what": "frozen residual feedforward BP references (muPC network, exact gradient); never retrained",
+ "runs": {
+  "pred_runs/frozen_bp/ffres_bp_d3_s0.json": {
+   "eqx_sha256": "d6204323ac5ae2ca6b317fd187ce7ab29221c05fc9e7c65e8ca202fe58d6da7c",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.36054727435112
+  },
+  "pred_runs/frozen_bp/ffres_bp_d3_s1.json": {
+   "eqx_sha256": "3c8698fee9501d9c92cdcc52b3d726fcce08d117e944d044b81a8ba862946f63",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.3607342839241028
+  },
+  "pred_runs/frozen_bp/ffres_bp_d3_s2.json": {
+   "eqx_sha256": "1f0841b7916dbcbbccf7f8fbcaeab2f611c222f2eb1d4528926e839a0e4886cd",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.36052578687667847
+  },
+  "pred_runs/frozen_bp/ffres_bp_d10_s0.json": {
+   "eqx_sha256": "6e62e3dcffdc96ddfba59a339076451d6f1d9cce79c2b5c9742c91a7974884ef",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.3512403070926666
+  },
+  "pred_runs/frozen_bp/ffres_bp_d10_s1.json": {
+   "eqx_sha256": "d84d01410b23f7df77c4c8e29b206b88c11b2a130cdc92bc4c83086fbc720db6",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.3517201542854309
+  },
+  "pred_runs/frozen_bp/ffres_bp_d10_s2.json": {
+   "eqx_sha256": "738877b4aac9b4151029d0f1773b7c09ca93185966d31a62079d69b38053bc0e",
+   "commit": "5eb580a7b8733a380ada340d4a6c9fe2ac900bf5",
+   "dirty_files": 0,
+   "matmul_precision": "highest",
+   "lr": 0.001,
+   "test_nmse": 0.35104870796203613
+  }
+ }
+}

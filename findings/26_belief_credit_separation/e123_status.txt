@@ -1,0 +1,108 @@
+10-20_10:02 start at 2c232cb (dirty tracked files: 0), part=e23
+10-20_10:04 GATES FAILED ffres d3
+10-20_10:30 start at 593ab54 (dirty tracked files: 0), part=e23
+10-20_10:39 GATES FAILED sep64 d3
+10-20_10:47 start at b02b1e9 (dirty tracked files: 0), part=e23
+10-20_10:55 GATES FAILED sep64 d3
+10-20_11:01 start at 110440f (dirty tracked files: 0), part=e23
+10-20_11:22 gates pass: 92
+10-20_11:22 SMOKE FAILED ffres bp d3
+10-20_11:29 start at abac29f (dirty tracked files: 0), part=e23
+10-20_11:39 GATES FAILED ffres d10
+10-20_11:47 start at 369a7f8 (dirty tracked files: 0), part=e23
+10-20_12:08 gates pass: 92
+10-20_13:13 smoke ok
+10-20_13:13 generative BP references verified: 4 files
+10-20_13:16 start at 5eb580a (dirty tracked files: 0), part=e1
+10-20_13:55 gates pass: 92
+10-20_15:08 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16_kin_1_T2_200_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_15:08 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16_kin_5_T2_200_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_15:22 smoke ok
+10-20_15:22 generative BP references verified: 4 files
+10-20_15:26 rc=0 pred_runs/ffres_sel/alm_d3_T20_a0.25_lr0.001.json
+10-20_15:26 rc=0 pred_runs/ffres_sel/alm_d3_T20_a1.0_lr0.001.json
+10-20_15:30 rc=0 pred_runs/ffres_sel/pc_d3_T20_lr0.001.json
+10-20_15:35 rc=0 pred_runs/ffres_sel/alm_d3_T100_a0.25_lr0.001.json
+10-20_15:38 rc=0 pred_runs/ffres_sel/alm_d3_T100_a1.0_lr0.001.json
+10-20_15:42 rc=0 pred_runs/ffres_sel/alm_d3_T20_a0.25_lr0.003.json
+10-20_15:43 rc=0 pred_runs/ffres_sel/pc_d3_T100_lr0.001.json
+10-20_15:46 rc=0 pred_runs/ffres_sel/alm_d3_T20_a1.0_lr0.003.json
+10-20_15:47 rc=0 pred_runs/ffres_sel/pc_d3_T20_lr0.003.json
+10-20_15:55 rc=0 pred_runs/ffres_sel/alm_d3_T100_a0.25_lr0.003.json
+10-20_15:56 rc=0 pred_runs/ffres_sel/alm_d3_T100_a1.0_lr0.003.json
+10-20_16:00 rc=0 pred_runs/ffres_sel/alm_d3_T20_a0.25_lr0.01.json
+10-20_16:03 rc=0 pred_runs/ffres_sel/pc_d3_T100_lr0.003.json
+10-20_16:04 rc=0 pred_runs/ffres_sel/alm_d3_T20_a1.0_lr0.01.json
+10-20_16:07 rc=0 pred_runs/ffres_sel/pc_d3_T20_lr0.01.json
+10-20_16:13 rc=0 pred_runs/ffres_sel/alm_d3_T100_a0.25_lr0.01.json
+10-20_16:15 rc=0 pred_runs/ffres_sel/alm_d3_T100_a1.0_lr0.01.json
+10-20_16:22 rc=0 pred_runs/ffres_sel/pc_d3_T100_lr0.01.json
+10-20_16:26 rc=0 pred_runs/ffres_sel/alm_d10_T20_a0.25_lr0.001.json
+10-20_16:32 rc=0 pred_runs/ffres_sel/alm_d10_T20_a1.0_lr0.001.json
+10-20_16:33 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16_kin_1_T2_200_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_16:36 rc=0 pred_runs/ffres_sel/pc_d10_T20_lr0.001.json
+10-20_17:11 rc=0 pred_runs/ffres_sel/alm_d10_T100_a0.25_lr0.001.json
+10-20_17:15 rc=0 pred_runs/ffres_sel/alm_d10_T100_a1.0_lr0.001.json
+10-20_17:27 rc=0 pred_runs/ffres_sel/alm_d10_T20_a0.25_lr0.003.json
+10-20_17:38 rc=0 pred_runs/ffres_sel/alm_d10_T20_a1.0_lr0.003.json
+10-20_17:49 rc=0 pred_runs/ffres_sel/pc_d10_T100_lr0.001.json
+10-20_17:49 rc=0 pred_runs/ffres_sel/pc_d10_T20_lr0.003.json
+10-20_18:28 rc=0 pred_runs/ffres_sel/alm_d10_T100_a0.25_lr0.003.json
+10-20_18:28 rc=0 pred_runs/ffres_sel/alm_d10_T100_a1.0_lr0.003.json
+10-20_18:40 rc=0 pred_runs/ffres_sel/alm_d10_T20_a0.25_lr0.01.json
+10-20_18:46 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16_kin_1_T2_800_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_18:50 rc=0 pred_runs/ffres_sel/alm_d10_T20_a1.0_lr0.01.json
+10-20_19:02 rc=0 pred_runs/ffres_sel/pc_d10_T20_lr0.01.json
+10-20_19:05 rc=0 pred_runs/ffres_sel/pc_d10_T100_lr0.003.json
+10-20_19:41 rc=0 pred_runs/ffres_sel/alm_d10_T100_a0.25_lr0.01.json
+10-20_19:44 rc=0 pred_runs/ffres_sel/alm_d10_T100_a1.0_lr0.01.json
+10-20_20:14 rc=0 pred_runs/ffres_sel/pc_d10_T100_lr0.01.json
+10-20_20:14 E1 selected: {'alm_d3': (20, 1.0, 0.003, False), 'pc_d3': (100, 1.0, 0.003, False), 'alm_d10': (100, 0.25, 0.01, False), 'pc_d10': (100, 1.0, 0.01, False)}
+10-20_20:16 rc=0 pred_runs/frozen_bp/ffres_bp_d3_s0.json
+10-20_20:16 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16_kin_1_T2_800_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_20:17 rc=0 pred_runs/ffres/ffres_alm_d3_s0.json
+10-20_20:19 rc=0 pred_runs/frozen_bp/ffres_bp_d3_s1.json
+10-20_20:20 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16_kin_5_T2_200_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_20:23 rc=0 pred_runs/ffres/ffres_alm_d3_s1.json
+10-20_20:23 rc=0 pred_runs/ffres/ffres_pc_d3_s0.json
+10-20_20:25 rc=0 pred_runs/frozen_bp/ffres_bp_d3_s2.json
+10-20_20:28 rc=0 pred_runs/ffres/ffres_alm_d3_s2.json
+10-20_20:29 rc=0 pred_runs/ffres/ffres_pc_d3_s1.json
+10-20_20:31 rc=0 pred_runs/frozen_bp/ffres_bp_d10_s0.json
+10-20_20:35 rc=0 pred_runs/ffres/ffres_pc_d3_s2.json
+10-20_21:02 rc=0 pred_runs/ffres/ffres_alm_d10_s0.json
+10-20_21:05 rc=0 pred_runs/frozen_bp/ffres_bp_d10_s1.json
+10-20_21:06 rc=0 pred_runs/ffres/ffres_pc_d10_s0.json
+10-20_21:21 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16_kin_5_T2_800_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+10-20_21:32 rc=0 pred_runs/ffres/ffres_alm_d10_s1.json
+10-20_21:32 rc=0 pred_runs/ffres/ffres_pc_d10_s1.json
+10-20_21:34 rc=0 pred_runs/frozen_bp/ffres_bp_d10_s2.json
+10-20_21:56 rc=0 pred_runs/ffres/ffres_alm_d10_s2.json
+10-20_21:57 rc=0 pred_runs/ffres/ffres_pc_d10_s2.json
+10-20_21:57 E1 trained; frozen ffres BP manifest present
+10-20_22:11 E1 tests done: 18
+10-20_22:11 ALL DONE (e1)
+10-20_22:14 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16_kin_5_T2_800_c_1_alpha_1_holdout_outdir_pred_runs_sep_sel
+A1_d3 16.0 1 200 
+A1_d10 16.0 1 200 
+10-20_23:19 rc=0 gpc depth_3_belief_oracle_start_zero_rho_1_kin_1_T2_200_c_1_alpha_0_holdout_outdir_pred_runs_sep_sel
+10-21_00:02 rc=0 gpc depth_10_belief_oracle_start_zero_rho_1_kin_1_T2_200_c_1_alpha_0_holdout_outdir_pred_runs_sep_sel
+10-21_00:03 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16_kin_1_T2_200_c_1_alpha_0_holdout_outdir_pred_runs_sep_sel
+10-21_00:10 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16_kin_1_T2_200_c_1_alpha_0_holdout_outdir_pred_runs_sep_sel
+A0_d3 1.0 1 200 
+A0_d10 1.0 1 200 
+10-21_00:10 sep selected: {'A1_d3': (16.0, 1, 200, False), 'A1_d10': (16.0, 1, 200, False), 'A0_d3': (1.0, 1, 200, False), 'A0_d10': (1.0, 1, 200, False)}
+10-21_02:03 rc=0 gpc depth_10_belief_oracle_start_zero_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_02:04 rc=0 gpc depth_10_belief_oracle_start_zero_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_02:07 rc=0 gpc depth_10_belief_pc_start_zero_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_03:06 rc=0 gpc depth_10_belief_amort_start_amort_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_03:10 rc=0 gpc depth_10_belief_amort_start_amort_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_03:50 rc=0 gpc depth_10_belief_pc_start_zero_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_04:12 rc=0 gpc depth_3_belief_oracle_start_zero_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_04:16 rc=0 gpc depth_3_belief_oracle_start_zero_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_04:54 rc=0 gpc depth_3_belief_pc_start_zero_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_04:58 rc=0 gpc depth_3_belief_amort_start_amort_rho_16.0_kin_1_T2_200_c_1_alpha_1_ckpt_outdir_pred_runs_tests_sep
+10-21_05:10 rc=0 gpc depth_3_belief_pc_start_zero_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_05:14 rc=0 gpc depth_3_belief_amort_start_amort_rho_1.0_kin_1_T2_200_c_1_alpha_0_ckpt_outdir_pred_runs_tests_sep
+10-21_05:14 E2/E3 done: 12 results, 0 failed
+10-21_05:14 ALL DONE (e23)

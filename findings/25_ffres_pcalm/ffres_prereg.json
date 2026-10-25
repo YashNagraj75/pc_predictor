@@ -1,0 +1,30 @@
+{
+ "spec": "wiki Methods/'Method - Deep feedforward PC-ALM and belief-credit separation plan' (E1), 2026-10-19",
+ "network": "pred_ff's MLP (146 -> 256 x (d-1) -> 128, ReLU before each linear, bias) with jpc identity skips on interior layers 1..d-2; d in {3, 10} weight layers",
+ "parameterisation": {
+  "all_rules": "jpc 'mupc' (N(0,1) weights, a_1 = 1/sqrt(D), a_l = 1/sqrt(N d) with skips, output 1/sqrt(N) via gamma = 1/sqrt(256))",
+  "bp": "exact gradient on the muPC network; lr 1e-3 fixed (user decision, no selection); trained once, frozen"
+ },
+ "rules": {
+  "bp": "exact gradient of 1/(2B) sum ||y - yhat||^2",
+  "pc": "pc_alm_grads with alpha = 0: T activity steps from the forward pass, output clamped",
+  "alm": "rho = 1, lam += alpha r after every step but the last; weights from the energy at the final state"
+ },
+ "shared": "data, 12 view pairs, AdamW lr 1e-3 wd 1e-4, warmup 200 + cosine, clip 1.0, 6000 steps x batch 512, seed-only batch stream",
+ "selection": "seed 0, 90/10 split of train images, per depth and per arm: PC-ALM alpha {0.25,1} x T {20,100} x lr {1e-3,3e-3,1e-2}; plain PC T {20,100} x lr; lowest held-out nmse. Full table reported.",
+ "runs": "BP, PC, PC-ALM x d {3, 10} x seeds {0, 1, 2}",
+ "readings": {
+  "metric": "test k=1 nmse, clean views; per-seed paired differences (all arms share init key and batch stream per seed)",
+  "parity": "PC-ALM matches BP if all 3 paired differences |ALM_s - BP_s| <= 0.01 nmse (absolute margin fixed now); otherwise win/loss by sign of the mean; n=3 supports a range, not a test",
+  "depth": "Delta_depth(arm) = nmse(d10) - nmse(d3); PC-ALM gains from depth if all 3 paired Delta < -0.01; the reading also reports Delta_depth(ALM) - Delta_depth(BP)",
+  "credit": "on a fixed probe batch every 500 steps: min over layers of the cosine to BP's gradient on the SAME (muPC) network; holds if >= 0.95 at every log point; global cosine and norm ratio reported",
+  "failures": "a diverged run counts as a failure of that arm and is reported; means are over completed runs with the failure count"
+ },
+ "caveats": [
+  "width fixed at 256, so d10 has about 4x the parameters of d3",
+  "holdout = last 10% of train images by index",
+  "the credit cosine compares with BP's gradient on the muPC network, not with the frozen sp BP reference",
+  "PC and PC-ALM select lr, BP does not (user decision): tuning favours the PC arms"
+ ],
+ "revision": "rev 3 (2026-10-20): user decision -- BP trains on the SAME muPC network as PC (exact gradient), frozen as the reference; PC and PC-ALM select lr {1e-3,3e-3,1e-2} with their inference settings; forward pass no longer uses jpc.init_activities_with_ffwd (jitted, ~2% off in layer 1 on the host GPU at batch 64; ours matches a float64 reference); rev 4 (2026-10-20): user decision -- BP keeps lr 1e-3, no lr selection (BP_LR unset)"
+}

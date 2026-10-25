@@ -1,0 +1,13 @@
+{
+ "what": "frozen generative BP auto-decoder references (G1); never retrained",
+ "test_k1_nmse_3seed_mean": {
+  "d3": 0.3053,
+  "d10": 0.2783
+ },
+ "files": {
+  "pred_runs/tests/gpc_bp_d10_zero_bp_s1.eqx": "a49a11aa82833c17a334813b6c6214f4ce261c29f4c97edaf64e2c96cab026f8",
+  "pred_runs/tests/gpc_bp_d10_zero_bp_s2.eqx": "dfd03d69b1c68dbb99f8285741ddfe17cf24a71272c15c04744b77ad3389c89e",
+  "pred_runs/tests/gpc_bp_d3_zero_bp_s1.eqx": "ccb938d3acc02ab877b9bdb73d9efdbfca41c1cf55db5b7ae98b0bb45c58c46b",
+  "pred_runs/tests/gpc_bp_d3_zero_bp_s2.eqx": "221337d34d35e960f020777c7b6ba3f35c9b8ecf2cbb2a0537d5e91b4e47ff6b"
+ }
+}
