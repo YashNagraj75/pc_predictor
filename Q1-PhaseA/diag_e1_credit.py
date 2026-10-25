@@ -51,9 +51,17 @@ def run(params, x, y, cfg, T, rho, alpha):
     return g, h, u, r, out
 
 
-# cfg is closed over (dataclasses are unhashable as jit static args); T, rho, alpha are static Python numbers.
+# Run eagerly (the scan body is still compiled): under an outer eqx.filter_jit on the host GPU this function gave a
+# different state from the identical eager code (activities moved ~12x further; dbg 2026-10-25).
 def make_run(cfg):
-    return eqx.filter_jit(lambda params, x, y, T, rho, alpha: run(params, x, y, cfg, T, rho, alpha))
+    return lambda params, x, y, T, rho, alpha: run(params, x, y, cfg, T, rho, alpha)
+
+
+# Does an outer filter_jit change the TRAINING gradient?  Same function, same inputs, compiled vs eager.
+def jit_check(params, x, y, cfg):
+    ge = R.grads(params, x, y, cfg)
+    gj = eqx.filter_jit(lambda p, a, b: R.grads(p, a, b, cfg))(params, x, y)
+    return {"rel_maxdiff": float(jnp.max(jnp.abs(flat(ge) - flat(gj))) / (jnp.max(jnp.abs(flat(ge))) + 1e-30)), "cos": cos(ge, gj)}
 
 
 # BP's error at each hidden activity: delta_l = dL_BP/dh_l, via additive perturbations of the forward pass.
@@ -74,6 +82,10 @@ def main():
     pidx = np.random.default_rng(999).integers(0, len(X), 512)       # the training run's fixed probe batch
     x, y = jnp.asarray(X[pidx]), jnp.asarray(Y[pidx])
     res = {"gates": [], "rows": []}
+    for arm, depth in (("bp", 3), ("bp", 10)):             # BP training gradient, compiled vs eager
+        cfg = R.RCfg(arm=arm, depth=depth, seed=0)
+        params = R.load_model(f"pred_runs/frozen_bp/ffres_bp_d{depth}_s0.eqx", cfg)
+        res["gates"].append({"ckpt": f"bp_d{depth}_s0", "train_grad_jit_vs_eager": jit_check(params, x, y, cfg)}); print("GATE", res["gates"][-1], flush=True)
     for arm, depth, seed in CKPTS:
         src = json.load(open(f"pred_runs/ffres/ffres_{arm}_d{depth}_s{seed}.json"))
         cfg = R.RCfg(arm=arm, depth=depth, seed=seed, T=src["cfg"]["T"], alpha=src["cfg"]["alpha"], lr=src["cfg"]["lr"])
@@ -87,7 +99,8 @@ def main():
         g_me = run_j(params, x, y, cfg.T, 1.0, cfg.alpha if arm == "alm" else 0.0)[0]
         gd = float(jnp.max(jnp.abs(flat(g_ref) - flat(g_me))) / (jnp.max(jnp.abs(flat(g_ref))) + 1e-30))
         logged = [r_ for r_ in src["log"] if "cos_bp" in r_][-1]["cos_bp"]
-        res["gates"].append({"ckpt": f"{arm}_d{depth}_s{seed}", "rel_diff_vs_pred_ffres": gd, "cos_now": cos(g_ref, gb), "cos_logged_last": logged})
+        res["gates"].append({"ckpt": f"{arm}_d{depth}_s{seed}", "rel_diff_vs_pred_ffres": gd, "cos_now": cos(g_ref, gb), "cos_logged_last": logged,
+                             "train_grad_jit_vs_eager": jit_check(params, x, y, cfg)})
         print("GATE", res["gates"][-1], flush=True)
         for name, rho, alpha in GRID:
             if name == "trained":
