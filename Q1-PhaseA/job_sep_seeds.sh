@@ -30,6 +30,14 @@ G="$PY -W ignore run_gpc_tests.py --rule sep --backbone bp"
     echo "$G --seed $s --depth $d --belief amort --start amort --rho 1 --k-in 1 --T2 200 --c 1 --alpha 0 --ckpt --outdir $OUT > $LG/amort_none_d${d}_s$s.log 2>&1; rc=\$?; echo \$(date +%m-%d_%H:%M) rc=\$rc amort_none_d${d}_s$s >> $ST"
     echo "$G --seed $s --depth $d --belief pc --start zero --rho 1 --k-in 1 --T2 200 --c 1 --alpha 0 --ckpt --outdir $OUT > $LG/pc_none_d${d}_s$s.log 2>&1; rc=\$?; echo \$(date +%m-%d_%H:%M) rc=\$rc pc_none_d${d}_s$s >> $ST"
   done; done; } > $LG/runs.txt
+# resume: drop runs already finished (rc=0 recorded in the status file)
+python3 - "$ST" "$LG/runs.txt" <<'PYEOF'
+import re, sys
+done = set(re.findall(r"rc=0 (\S+)", open(sys.argv[1]).read()))
+lines = [l for l in open(sys.argv[2]) if re.search(r"rc=\$rc (\S+) >>", l).group(1) not in done]
+open(sys.argv[2], "w").writelines(lines); print(f"runs to do: {len(lines)} (skipping {len(done)} done)")
+PYEOF
+note "resume: $(wc -l < $LG/runs.txt) runs to do"
 xargs -d '\n' -P $PAR -I{} bash -c '{}' < $LG/runs.txt
 note "ALL DONE: $(ls $OUT/gpc_sep_*_s?.json 2>/dev/null | wc -l) results, $(ls $OUT/*.diverged.json 2>/dev/null | wc -l) failed"
 exit 0
