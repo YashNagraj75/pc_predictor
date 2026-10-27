@@ -139,8 +139,8 @@ def main():
     Xo, occ = S.corrupt_images(X, "occlude"); Xo2 = np.ones_like(X); Xo2, _ = S.corrupt_images(Xo2, "occlude")
     for (cy, cx, s) in ((0.0, 0.0, 1.0), (0.24, -0.3, S.S_F), (-0.3, 0.3, S.S_F)):
         v = np.asarray(S.render(jnp.asarray(Xo2), cy, cx, s, 69))
-        frac_px = np.mean(np.all(v == 0, -1).reshape(n, -1), 1); pred = S.occluded_frac(cy, cx, s, occ)
-        check(f"occluded_frac == black-pixel fraction (crop {cy},{cx},{s:.2f})", np.max(np.abs(frac_px - pred)) < 0.04, f"max diff {np.max(np.abs(frac_px - pred)):.3f}")
+        frac_px = np.mean((v.mean(-1) < 0.5).reshape(n, -1), 1); pred = S.occluded_frac(cy, cx, s, occ)   # pixel-area coverage
+        check(f"occluded_frac == occluded-pixel fraction (crop {cy},{cx},{s:.2f})", np.max(np.abs(frac_px - pred)) < 0.03, f"max diff {np.max(np.abs(frac_px - pred)):.3f}")
     # 10. whole-view controls reproduce the stored k = 1 regime (fresh augmented draw)
     Zv, Tv, _ = S.whole_views(Xte, enc, cfg, 1, False, 303)
     for name in ("G_d10_s0", "F_d10_s0"):

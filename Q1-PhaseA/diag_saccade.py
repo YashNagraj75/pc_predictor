@@ -339,13 +339,15 @@ class BPg:                                      # frozen BP auto-decoder G1: one
         self.predict = G.make_predict(eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), cfg)), None, cfg)
 
 
-class BPf:                                      # frozen residual BP d10: one whole view only
+# Frozen residual BP d10, one whole view only.  Uses the GPU-fix retrain (frozen_bp_fix, job ab3c17c4): the original
+# frozen_bp weights score 0.351 only under the faulty GPU numerics they were trained with, 0.393 under correct numerics.
+class BPf:
     kind = "BPf"
 
     def __init__(self, seed):
         rc = RF.RCfg(arm="bp", depth=10, seed=seed, lr=0.001); self.seed = seed
-        self.predict = RF.make_pair_predict(RF.load_model(f"pred_runs/frozen_bp/ffres_bp_d10_s{seed}.eqx", rc), rc)
-        p = f"pred_runs/tests_ffres/ffres_bp_d10_bp_s{seed}.json"
+        self.predict = RF.make_pair_predict(RF.load_model(f"pred_runs/frozen_bp_fix/ffres_bp_d10_s{seed}.eqx", rc), rc)
+        p = f"pred_runs/tests_ffres_bpfix/ffres_bp_d10_bp_s{seed}.json"
         self.k1_stored = next(r["nmse"] for r in json.load(open(p))["rows"] if r["test"] == "k_seen" and r.get("k") == 1) if os.path.exists(p) else None
 
 
