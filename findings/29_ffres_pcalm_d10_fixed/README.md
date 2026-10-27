@@ -1,5 +1,12 @@
 # 29 — Residual feedforward PC-ALM, depth 10, rerun with correct gradients
 
+> **CORRECTION (2026-10-27, saccade gates, host job 1d1bc6a2).** The original frozen residual BP d10 weights
+> (`pred_runs/frozen_bp/ffres_bp_d10_s*`, sha unchanged) score 0.393 / 0.400 / 0.399 under the GPU fix, against 0.351
+> under the faulty numerics they were trained and tested with. They adapted to the faulty computation, so they are not a
+> valid reference under correct numerics. The valid frozen reference is the GPU-fix retrain (`frozen_bp_fix`,
+> 0.3511 / 0.3514 / 0.3513). The PC-ALM vs BP comparison below already used those numbers and is unchanged.
+
+
 Replaces the INVALID findings/25 PC-ALM d10 arm. Host jobs dc7a9a37 (selection + A s0, s1) + cbd08078 (rest), commit
 fa672a4/12b318f, NVIDIA_TF32_OVERRIDE=0 + XLA_FLAGS=--xla_gpu_autotune_level=0, audit gate cos 1.0000. No BP trained.
 
