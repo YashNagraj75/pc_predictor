@@ -1,0 +1,24 @@
+10-25_14:13 start at a60fa2c, env TF32=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+10-25_14:19 audit gate passed: {'CONTROL_ffres_bp_d10': 1.0, 'gpc_sep_d10_amort_alm': 1.0, 'gpc_sep_d10_oracle_alm': 1.0, 'gpc_sep_d10_pc_none': 1.0, 'gpc_sep_d3_amort_alm': 1.0}
+10-25_19:05 rc=0 amort_none_d10_s0
+10-25_19:05 rc=0 amort_alm_d10_s0
+10-25_23:33 rc=0 pc_none_d10_s0
+10-25_23:36 rc=0 amort_alm_d3_s0
+10-25_23:36 rc=0 amort_none_d3_s0
+10-26_04:06 rc=0 amort_alm_d10_s1
+10-26_04:06 rc=0 amort_none_d10_s1
+10-26_07:22 rc=0 pc_none_d3_s0
+10-26_07:46 rc=0 amort_alm_d3_s1
+10-26_11:22 start at 12b318f, env TF32=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+10-26_11:31 audit gate passed: {'CONTROL_ffres_bp_d10': 1.0, 'gpc_sep_d10_amort_alm': 1.0, 'gpc_sep_d10_oracle_alm': 1.0, 'gpc_sep_d10_pc_none': 1.0, 'gpc_sep_d3_amort_alm': 1.0}
+10-26_11:31 resume: 9 runs to do
+10-26_16:04 rc=0 amort_none_d3_s1
+10-26_20:30 rc=0 pc_none_d3_s1
+10-26_20:46 rc=0 pc_none_d10_s1
+10-26_20:47 rc=0 amort_alm_d10_s2
+10-27_00:09 rc=0 amort_none_d10_s2
+10-27_00:10 rc=0 amort_alm_d3_s2
+10-27_02:58 rc=0 amort_none_d3_s2
+10-27_03:04 rc=0 pc_none_d10_s2
+10-27_03:55 rc=0 pc_none_d3_s2
+10-27_03:55 ALL DONE: 18 results, 0 failed

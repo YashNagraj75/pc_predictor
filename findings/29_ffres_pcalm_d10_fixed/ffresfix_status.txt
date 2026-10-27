@@ -1,0 +1,30 @@
+10-25_14:23 start at fa672a4, env TF32=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+{'CONTROL_ffres_bp_d10': 1.0, 'ffres_alm_d10_rho1': 1.0, 'ffres_alm_d10_rho16': 1.0}
+10-25_14:30 gates and audit passed
+10-25_14:52 rc=0 pred_runs/ffres_fix_sel/A_T20_a0.25_lr0.001.json
+10-25_14:52 rc=0 pred_runs/ffres_fix_sel/A_T20_a1.0_lr0.001.json
+10-25_16:31 rc=0 pred_runs/ffres_fix_sel/A_T100_a0.25_lr0.001.json
+10-25_16:31 rc=0 pred_runs/ffres_fix_sel/A_T100_a1.0_lr0.001.json
+10-25_16:53 rc=0 pred_runs/ffres_fix_sel/A_T20_a0.25_lr0.003.json
+10-25_17:16 rc=0 pred_runs/ffres_fix_sel/A_T20_a1.0_lr0.003.json
+10-25_18:55 rc=0 pred_runs/ffres_fix_sel/A_T100_a0.25_lr0.003.json
+10-25_20:32 rc=0 pred_runs/ffres_fix_sel/A_T100_a1.0_lr0.003.json
+10-25_22:50 rc=0 pred_runs/ffres_fix_sel/R16_lr0.001.json
+10-25_23:12 rc=0 pred_runs/ffres_fix_sel/A_T20_a0.25_lr0.01.json
+10-25_23:34 rc=0 pred_runs/ffres_fix_sel/A_T20_a1.0_lr0.01.json
+10-26_01:08 rc=0 pred_runs/ffres_fix_sel/A_T100_a0.25_lr0.01.json
+10-26_02:44 rc=0 pred_runs/ffres_fix_sel/R16_lr0.003.json
+10-26_02:45 rc=0 pred_runs/ffres_fix_sel/A_T100_a1.0_lr0.01.json
+10-26_07:45 rc=0 pred_runs/ffres_fix_sel/R16_lr0.01.json
+10-26_07:45 selected: {'A': (100, 1.0, 0.001, 1.0, 0.3596, True), 'R16': (400, 1.0, 0.01, 16.0, 0.2964, True)}
+10-26_09:23 rc=0 pred_runs/ffres_fix/ffres_almA_d10_s0.json
+10-26_09:23 rc=0 pred_runs/ffres_fix/ffres_almA_d10_s1.json
+10-26_11:22 start at 12b318f, env TF32=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+{'CONTROL_ffres_bp_d10': 1.0, 'ffres_alm_d10_rho1': 1.0, 'ffres_alm_d10_rho16': 1.0}
+10-26_11:25 gates and audit passed
+10-26_11:25 selected: {'A': (100, 1.0, 0.001, 1.0, 0.3596, True), 'R16': (400, 1.0, 0.01, 16.0, 0.2964, True)}
+10-26_12:54 rc=0 pred_runs/ffres_fix/ffres_almA_d10_s2.json
+10-26_17:41 rc=0 pred_runs/ffres_fix/ffres_almR16_d10_s0.json
+10-26_19:24 rc=0 pred_runs/ffres_fix/ffres_almR16_d10_s1.json
+10-26_23:10 rc=0 pred_runs/ffres_fix/ffres_almR16_d10_s2.json
+10-26_23:14 ALL DONE: 6 trained, 6 tested

@@ -1,0 +1,50 @@
+{
+ "method": "ffres_alm_d10",
+ "backbone": "bp",
+ "seed": 1,
+ "rows": [
+  {
+   "test": "pairs",
+   "condition": "clean",
+   "k": 1,
+   "nmse": 0.29754453897476196,
+   "cos": 0.8088803887367249,
+   "retr1": 0.24483333333333332
+  },
+  {
+   "test": "k_seen",
+   "condition": "clean",
+   "k": 1,
+   "nmse": 0.2989993393421173,
+   "cos": 0.8069301843643188,
+   "retr1": 0.255
+  },
+  {
+   "test": "robust",
+   "condition": "noise=0.1",
+   "k": 1,
+   "nmse": 0.6816079616546631,
+   "cos": 0.5709587335586548,
+   "retr1": 0.043333333333333335
+  },
+  {
+   "test": "robust",
+   "condition": "noise=0.2",
+   "k": 1,
+   "nmse": 1.4098516702651978,
+   "cos": 0.30132588744163513,
+   "retr1": 0.007166666666666667
+  },
+  {
+   "test": "robust",
+   "condition": "occlude=0.25",
+   "k": 1,
+   "nmse": 1.8418607711791992,
+   "cos": 0.16009260714054108,
+   "retr1": 0.005833333333333334
+  }
+ ],
+ "seconds": 29.135631322860718,
+ "model_sha256": "aff3ecd1f37e2fe59791ec09bba2f6d4372684732e32f6f33a960ea94b546aaa",
+ "train_log": null
+}

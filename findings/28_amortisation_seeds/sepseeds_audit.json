@@ -1,0 +1,35 @@
+{
+ "env": {
+  "TF32": "0",
+  "XLA_FLAGS": "--xla_gpu_autotune_level=0",
+  "device": "cuda:0",
+  "jax": "0.11.0"
+ },
+ "cases": {
+  "CONTROL_ffres_bp_d10": {
+   "cos": 1.0,
+   "relmax": 0.0,
+   "sec": 9.2
+  },
+  "gpc_sep_d10_amort_alm": {
+   "cos": 1.0,
+   "relmax": 0.0008589126518927515,
+   "sec": 66.1
+  },
+  "gpc_sep_d10_oracle_alm": {
+   "cos": 0.9999998211860657,
+   "relmax": 0.001218366320244968,
+   "sec": 101.9
+  },
+  "gpc_sep_d10_pc_none": {
+   "cos": 0.9999998807907104,
+   "relmax": 2.1795403881696984e-05,
+   "sec": 287.8
+  },
+  "gpc_sep_d3_amort_alm": {
+   "cos": 1.0000001192092896,
+   "relmax": 7.844623178243637e-05,
+   "sec": 52.6
+  }
+ }
+}
