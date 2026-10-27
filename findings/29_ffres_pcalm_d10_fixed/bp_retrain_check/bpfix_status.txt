@@ -1,0 +1,7 @@
+10-27_10:55 start at 3ae2a90, env TF32=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+{'CONTROL_ffres_bp_d10': 1.0, 'ffres_alm_d10_rho1': 1.0, 'ffres_alm_d10_rho16': 1.0}
+10-27_10:58 gates and audit passed
+10-27_10:59 rc=0 bp_d10_s1
+10-27_10:59 rc=0 bp_d10_s0
+10-27_10:59 rc=0 bp_d10_s2
+10-27_11:01 ALL DONE: 3 trained, 3 tested

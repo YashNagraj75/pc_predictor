@@ -1,5 +1,11 @@
 # 25 — Residual feedforward predictor on the µPC network, depths 3 and 10 (E1)
 
+> **CORRECTION (2026-10-27): only the PC and PC-ALM arms are invalid; the BP arms stand.** Retraining BP d10 with the
+> GPU fix (findings/29/bp_retrain_check, job ab3c17c4) reproduced the old runs: test nmse 0.3511/0.3514/0.3513 vs
+> 0.3512/0.3517/0.3510, training loss matched within ~0.3% at every logged step. The audit's bad cosine came from a
+> standalone jitted gradient that the fused training step does not reproduce for BP. The PC-ALM selection runs DID differ
+> (e.g. T 20, alpha 1, lr 1e-2: 1.680 old vs 0.438 fixed), so the PC/PC-ALM arms remain invalid.
+
 > **INVALID (2026-10-25).** Every arm in this experiment was trained with wrong gradients. On the host GPU, the compiled
 > (`eqx.filter_jit`) gradient of this residual µPC network disagrees with the uncompiled one and with a float64 reference:
 > cosine 0.23 (BP d10), 0.47 (BP d3), 0.14 (PC-ALM d10, BP loss), 0.18 (PC-ALM d10, PC-ALM rule) at the trained weights,

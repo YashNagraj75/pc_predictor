@@ -1,0 +1,20 @@
+{
+ "pred_runs/frozen_bp_fix/ffres_bp_d10_s0.json": {
+  "eqx_sha256": "4b2b22ed99553479b92a28ff926bf2659c8e7eaf31d67382fa70c4ffa52c4776",
+  "commit": "3ae2a90d3fcc383995f9b4420ba22d9b8c929928",
+  "lr": 0.001,
+  "test_nmse": 0.351133793592453
+ },
+ "pred_runs/frozen_bp_fix/ffres_bp_d10_s1.json": {
+  "eqx_sha256": "01393ee6b5d68bd3db0e264f6ca37e9a3276606c13c81967121156d1f5d15e14",
+  "commit": "3ae2a90d3fcc383995f9b4420ba22d9b8c929928",
+  "lr": 0.001,
+  "test_nmse": 0.35141536593437195
+ },
+ "pred_runs/frozen_bp_fix/ffres_bp_d10_s2.json": {
+  "eqx_sha256": "4bad432588f8d51a15795044b8266fa2ffd4233562b7c8b71e4928f439cbb2a8",
+  "commit": "3ae2a90d3fcc383995f9b4420ba22d9b8c929928",
+  "lr": 0.001,
+  "test_nmse": 0.3512845039367676
+ }
+}

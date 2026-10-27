@@ -22,3 +22,17 @@ BP noise 0.2 1.469, occlusion 1.831.
   BUT the frozen residual BP d10 reference trained on faulty gradients (findings/27), so there is NO same-network
   BP comparison; the plain-MLP BP is a different, shallower network.
 - lr 1e-2 is the top of the grid, so R16 may not be at its best.
+
+## Same-network BP reference (2026-10-27)
+
+Residual BP d10, standard training, lr 1e-3 fixed (user rule: no tuning), retrained with the fix (job ab3c17c4):
+0.3511 / 0.3514 / 0.3513 (sd 0.0001), noise 0.2 1.543, occlusion 1.811. Identical to the original frozen reference
+(0.3513), which therefore STANDS and stays the reference; the retrain is a verification, kept in bp_retrain_check/.
+
+| vs BP (paired by seed) | clean | noise 0.2 | occlusion 25% |
+|---|---|---|---|
+| PC-ALM rho 16, T 400 (lr 1e-2) | **-0.053** (all 3 seeds): WIN | 1.411 vs 1.543: better | 1.892 vs 1.811: worse |
+| PC-ALM rho 1, T 100 (prereg, lr 1e-3) | +0.008 / +0.011 / +0.012: LOSS | 1.569: worse | 1.778: better |
+
+Caveat: PC-ALM rho 16 selected lr 1e-2 (grid top); BP is fixed at lr 1e-3. On this muPC network that lr asymmetry may
+explain much of the win. Separating rule from step size needs a diagnostic BP run at lr 1e-2 (not a reference).

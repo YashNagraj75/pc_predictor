@@ -1,5 +1,10 @@
 # 27 — GPU compiled-gradient audit (2026-10-25)
 
+> **CORRECTION (2026-10-27):** the audit measures a standalone `filter_jit` of the gradient. For residual ff BP that
+> standalone gradient is wrong (cos 0.23) but BP *training* was unaffected (retrain with the fix reproduced every seed,
+> findings/29/bp_retrain_check). PC-ALM training WAS affected (findings/25 CORRECTION). So a failed audit flags a path
+> to check, not proof that a training run is wrong; the training-level check is a retrain with the fix.
+
 Host job bde58a8b (commit 7b12a3f), `Q1-PhaseA/audit_jit.py`. For each training path, the training gradient at TRAINED
 weights is computed compiled (`eqx.filter_jit`) and uncompiled (`jax.disable_jit()`) on the host A4000 (jax 0.11.0),
 once with default settings (as all past runs trained) and once with `NVIDIA_TF32_OVERRIDE=0
