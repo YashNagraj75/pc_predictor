@@ -15,6 +15,7 @@ KS = [1, 2, 4, 8, 16, 32]
 KV = [1, 3, 6, 12, 24, 48, 96, 192]
 POLICIES = ["random", "epi", "epi_shuf", "ig", "ig_shuf", "ior", "bu"]
 LAM = 0.1
+DIAG_SEED = 1                                  # Gmap rows and the T vs 4T check run on this seed only (rev 3, cost)
 ROWS = 65536                                   # multiple of 8192 (make_predict_x's chunk): padded to avoid recompiles
 
 
@@ -273,7 +274,7 @@ def attach_bpg(m, name):
     import equinox as eqx
     d, s = int(name.split("_d")[1].split("_")[0]), int(name.rsplit("_s", 1)[1])
     base = f"pred_runs/tests/gpc_bp_d{d}_zero_bp_s{s}"
-    m.cfg = S._cfg_from(json.load(open(base + ".json")))
+    m.cfg = S._cfg_from(json.load(open(base + ".json"))); m.seed = s
     m.p = eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), m.cfg))
     return m
 
@@ -321,7 +322,7 @@ def main():
     for name, m in models.items():              # BPg weights/config, for the T vs 4T convergence check
         if m.kind == "BPg":
             attach_bpg(m, name)
-    for name in [k for k in models if k.startswith("G_")]:
+    for name in [k for k in models if k.startswith("G_") and k.endswith(f"_s{DIAG_SEED}")]:   # diagnostic: one seed
         models[name.replace("G_", "Gmap_")] = GMap(models[name])
     geom = S.make_geom("grid4")
     res = {"n": len(zte), "kmax": a.kmax, "vmax": a.vmax, "lam": LAM, "rows": [], "stats": [], "conv": [],
@@ -329,7 +330,7 @@ def main():
                    "sd_min": float(sd.min()), "z_absmax": float(np.abs(zte).max())},
            "env": {k: os.environ.get(k) for k in ("NVIDIA_TF32_OVERRIDE", "XLA_FLAGS")}}
     per = {}; npz = a.out.replace(".json", "_perimage.npz")
-    for cond in ("clean", "noise", "occlude"):
+    for cond in ("occlude", "noise", "clean"):    # occlusion first (rev 3: the full grid did not fit the time limit)
         t0 = time.time()
         Xc, occ = S.corrupt_images(Xte, cond)
         Zc, Tc = S.crop_table(Xc, enc, cfg.data.img_size)
@@ -338,12 +339,14 @@ def main():
         for name, m in models.items():
             base = {"model": name, "kind": m.kind, "cond": cond}
             for v, (Zv, Tv, Bv) in views.items():
+                if m.kind in ("BPg", "BPf", "Gmap") and v != "aug":   # BP-side rows: augmented views only (rev 3)
+                    continue
                 if m.kind in ("BPg", "BPf", "Gmap"):     # frozen BP / BP inference: same weights, whole views only
                     for k in kv:
                         P = _bp_predict(m, Zv, Tv, tte, k)
                         res["rows"].append({**base, "input": f"whole_{v}", "policy": "-", "pool": "own", "K": k, "n_latents": k,
                                             **score(P, zte, yte, knn, per, f"{name}|{cond}|whole_{v}|{k}|own")})
-                    if m.kind in ("BPg", "Gmap") and v == "aug":        # inference convergence at T vs 4T
+                    if m.kind in ("BPg", "Gmap") and v == "aug" and m.seed == DIAG_SEED:        # inference convergence at T vs 4T
                         for k in (48, 192):
                             if k in kv:
                                 P4 = _bp_predict(m, Zv, Tv, tte, k, T=4 * m.cfg.T)

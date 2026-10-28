@@ -10,7 +10,7 @@ note "start at $(git rev-parse --short HEAD) ${ONLY}"
 $PY -W ignore test_saccade.py > "$JOBDIR/gates_old.log" 2>&1; rc=$?; note "old gates rc=$rc"; [ $rc -eq 0 ] || exit 4
 $PY -W ignore test_saccade2.py > "$JOBDIR/gates.log" 2>&1; rc=$?
 note "gates rc=$rc $(grep -c PASS "$JOBDIR/gates.log") pass $(grep -c FAIL "$JOBDIR/gates.log") fail"; [ $rc -eq 0 ] || exit 4
-$PY -W ignore diag_saccade2.py --out "$JOBDIR/smoke.json" --n 200 --kmax 4 --vmax 12 --seeds 0 > "$JOBDIR/smoke.log" 2>&1; rc=$?
+$PY -W ignore diag_saccade2.py --out "$JOBDIR/smoke.json" --n 200 --kmax 4 --vmax 12 --seeds 0 1 > "$JOBDIR/smoke.log" 2>&1; rc=$?
 note "smoke rc=$rc"; [ $rc -eq 0 ] || exit 5
 [ "$ONLY" = "gates_only" ] && exit 0
 $PY -W ignore diag_saccade2.py --out "$JOBDIR/diag_saccade2.json" > "$JOBDIR/full.log" 2>&1; rc=$?
