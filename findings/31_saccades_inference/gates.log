@@ -1,0 +1,64 @@
+  [PASS] renderer == data._one_view (area 0.4, all 32)  1.5e-08
+  [PASS] crop_tau == tau_features (area 0.4)  0.0e+00
+  [PASS] renderer == data._one_view (area 0.6, all 32)  1.5e-08
+  [PASS] crop_tau == tau_features (area 0.6)  0.0e+00
+  [PASS] renderer == data._one_view (area 1.0, all 32)  1.5e-08
+  [PASS] crop_tau == tau_features (area 1.0)  0.0e+00
+  [PASS] Encoder re-encodes the stored test latents  rel err 6.9e-04
+  [PASS] crop table row for lattice (-6,-6) == direct render (foveal, parafoveal, tau)  
+  [PASS] crop table row for lattice (1,5) == direct render (foveal, parafoveal, tau)  
+  [PASS] crop table row for lattice (6,-2) == direct render (foveal, parafoveal, tau)  
+  [PASS] grid4: foveal crops at fixation +- 2h (row = y, col = x)  
+  [PASS] fov1: foveal crop at the fixation  
+  [PASS] both: parafoveal crop at the clipped fixation  
+Could not load symbol cuStreamGetGreenCtx. Error: /lib/x86_64-linux-gnu/libcuda.so.1: undefined symbol: cuStreamGetGreenCtx
+  [PASS] orientation: first bottom-up fixation moves up and right towards the blob  fix [-0.36  0.36]
+  [PASS] grid4: plan_scores(norm=False) == MPC score map at the lattice  max rel 0.0e+00
+  [PASS] fov1: plan_scores(norm=False) == MPC score map at the lattice  max rel 0.0e+00
+  [PASS] bottom-up map peaks on the blob  
+  [PASS] G_d3_s0 reproduces its stored k=1 nmse  0.33097 vs 0.33097
+  [PASS] G_d10_s0 reproduces its stored k=1 nmse  0.30633 vs 0.30633
+  [PASS] F_d10_s0 reproduces its stored k=1 nmse  0.29971 vs 0.29971
+  [PASS] BPf_d10_s0 reproduces its stored k=1 nmse  0.35086 vs 0.35086
+  [PASS] G_d3_s1 reproduces its stored k=1 nmse  0.33180 vs 0.33180
+  [PASS] BPg_d3_s1 reproduces its stored k=1 nmse  0.30440 vs 0.30440
+  [PASS] G_d10_s1 reproduces its stored k=1 nmse  0.30645 vs 0.30645
+  [PASS] BPg_d10_s1 reproduces its stored k=1 nmse  0.27925 vs 0.27925
+  [PASS] F_d10_s1 reproduces its stored k=1 nmse  0.29900 vs 0.29900
+  [PASS] BPf_d10_s1 reproduces its stored k=1 nmse  0.35129 vs 0.35129
+  [PASS] G_d3_s2 reproduces its stored k=1 nmse  0.32999 vs 0.32999
+  [PASS] BPg_d3_s2 reproduces its stored k=1 nmse  0.30559 vs 0.30568
+  [PASS] G_d10_s2 reproduces its stored k=1 nmse  0.30959 vs 0.30959
+  [PASS] BPg_d10_s2 reproduces its stored k=1 nmse  0.27767 vs 0.27767
+  [PASS] F_d10_s2 reproduces its stored k=1 nmse  0.30021 vs 0.30021
+  [PASS] BPf_d10_s2 reproduces its stored k=1 nmse  0.35095 vs 0.35095
+  [PASS] G grid4 pool full: K=3 aggregation == direct prediction from 18 latents  0.216268 vs 0.216268
+  [PASS] G grid4 pool noperi: K=3 aggregation == direct prediction from 15 latents  0.235425 vs 0.235425
+  [PASS] G fov1 pool full: K=3 aggregation == direct prediction from 9 latents  0.215285 vs 0.215285
+  [PASS] G fov1 pool noperi: K=3 aggregation == direct prediction from 6 latents  0.244978 vs 0.244978
+  [PASS] F grid4 pool full: K=3 aggregation == direct prediction from 18 latents  0.260308 vs 0.260308
+  [PASS] F grid4 pool noperi: K=3 aggregation == direct prediction from 15 latents  0.274717 vs 0.274717
+  [PASS] F fov1 pool full: K=3 aggregation == direct prediction from 9 latents  0.253529 vs 0.253529
+  [PASS] F fov1 pool noperi: K=3 aggregation == direct prediction from 6 latents  0.278713 vs 0.278713
+  [PASS] G: surprise == brute-force error under the pool held before each glimpse (3 glimpses)  max rel 3.4e-07
+  [PASS] F: surprise == brute-force error under the pool held before each glimpse (3 glimpses)  max rel 1.4e-07
+  [PASS] G policy random: 4 glimpses, no revisits, finite  
+  [PASS] G policy epi: 4 glimpses, no revisits, finite  
+  [PASS] G policy epi_shuf: 4 glimpses, no revisits, finite  
+  [PASS] G policy ior: 4 glimpses, no revisits, finite  
+  [PASS] G policy bu: 4 glimpses, no revisits, finite  
+  [PASS] G policy oracle_occ: 4 glimpses, no revisits, finite  
+  [PASS] F policy random: 4 glimpses, no revisits, finite  
+  [PASS] F policy epi: 4 glimpses, no revisits, finite  
+  [PASS] F policy epi_shuf: 4 glimpses, no revisits, finite  
+  [PASS] F policy ior: 4 glimpses, no revisits, finite  
+  [PASS] F policy bu: 4 glimpses, no revisits, finite  
+  [PASS] F policy oracle_occ: 4 glimpses, no revisits, finite  
+  [PASS] occluded_frac == occluded-pixel fraction (crop 0.0,0.0,1.00)  max diff 0.007
+  [PASS] occluded_frac == occluded-pixel fraction (crop 0.24,-0.3,0.63)  max diff 0.014
+  [PASS] occluded_frac == occluded-pixel fraction (crop -0.3,0.3,0.63)  max diff 0.018
+  [PASS] G_d10_s0: fresh augmented whole view k=1 within 0.01 of the stored k=1 nmse  0.3022 vs 0.3063
+  [PASS] F_d10_s0: fresh augmented whole view k=1 within 0.01 of the stored k=1 nmse  0.2940 vs 0.2997
+  [PASS] G readout: compiled == eager  0.0e+00
+  [PASS] F forward: compiled == eager  0.0e+00
+ALL PASS
