@@ -15,6 +15,7 @@ KS = [1, 2, 4, 8, 16, 32]
 KV = [1, 3, 6, 12, 24, 48, 96, 192]
 POLICIES = ["random", "epi", "epi_shuf", "ig", "ig_shuf", "ior", "bu"]
 LAM = 0.1
+HH = 69                                        # image side for occluded_frac; set from the data in main()
 DIAG_SEED = 1                                  # Gmap rows and the T vs 4T check run on this seed only (rev 3, cost)
 ROWS = 65536                                   # multiple of 8192 (make_predict_x's chunk): padded to avoid recompiles
 
@@ -252,7 +253,7 @@ def whole_pools(model, Zv, Tv, Bv, tte, zte, yte, knn, ks, occ, per=None, key=""
     pool = LPool(model, tte); out = {}; prng = np.random.default_rng(11)
     modes = ["mean", "pw", "pwg_shuf"] + (["oracle"] if occ is not None else [])
     for v in range(max(ks)):
-        o = S.occluded_frac(Bv[:, v, 1], Bv[:, v, 0], Bv[:, v, 2], occ)[:, None] if occ is not None else None
+        o = S.occluded_frac(Bv[:, v, 1], Bv[:, v, 0], Bv[:, v, 2], occ, Hh=HH)[:, None] if occ is not None else None
         pool.add(Zv[:, v:v + 1], Tv[:, v:v + 1], -2 - v, o)
         if v + 1 in ks:
             for md in modes:
@@ -308,21 +309,26 @@ def main():
     ap.add_argument("--out", default="pred_runs/diag_saccade2.json"); ap.add_argument("--n", type=int, default=0)
     ap.add_argument("--kmax", type=int, default=32); ap.add_argument("--vmax", type=int, default=192)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    # other datasets (2026-10-30): whole views only, chosen depths, own backbone, no Gmap / convergence diagnostics
+    ap.add_argument("--whole-only", action="store_true"); ap.add_argument("--depths", type=int, nargs="+", default=[3, 10])
+    ap.add_argument("--backbone", default=S.BACKBONE); ap.add_argument("--no-diag", action="store_true")
     a = ap.parse_args()
+    global HH
     ks = [k for k in KS if k <= a.kmax]; kv = [k for k in KV if k <= a.vmax]
     L_ = np.load("pred_latents.npz")
     raw_tr = L_["bp_emb_tr"]; mu, sd = raw_tr.reshape(-1, 128).mean(0), raw_tr.reshape(-1, 128).std(0) + 1e-6
     zte, tte, yte = (L_["bp_emb_te"] - mu) / sd, L_["tau_te"].astype(np.float32), np.asarray(L_["yte"])
     knn = KNN((raw_tr - mu) / sd, np.asarray(L_["ytr"]))
-    cfg, params = load_run(S.BACKBONE); enc = S.Encoder(cfg, params, mu, sd)
-    _, _, Xte, _ = D.load_dataset(cfg.data); Xte = np.asarray(Xte, np.float32)
+    cfg, params = load_run(a.backbone); enc = S.Encoder(cfg, params, mu, sd)
+    _, _, Xte, _ = D.load_dataset(cfg.data); Xte = np.asarray(Xte, np.float32); HH = Xte.shape[1]
+    assert Xte.shape[1] == Xte.shape[2] and len(Xte) == len(zte), (Xte.shape, zte.shape)
     if a.n:
         Xte, zte, tte, yte = Xte[:a.n], zte[:a.n], tte[:a.n], yte[:a.n]
-    models = S.load_models(a.seeds)
+    models = {k: v for k, v in S.load_models(a.seeds, a.depths).items()}
     for name, m in models.items():              # BPg weights/config, for the T vs 4T convergence check
         if m.kind == "BPg":
             attach_bpg(m, name)
-    for name in [k for k in models if k.startswith("G_") and k.endswith(f"_s{DIAG_SEED}")]:   # diagnostic: one seed
+    for name in [] if a.no_diag else [k for k in models if k.startswith("G_") and k.endswith(f"_s{DIAG_SEED}")]:   # diagnostic: one seed
         models[name.replace("G_", "Gmap_")] = GMap(models[name])
     geom = S.make_geom("grid4")
     res = {"n": len(zte), "kmax": a.kmax, "vmax": a.vmax, "lam": LAM, "rows": [], "stats": [], "conv": [],
@@ -333,7 +339,7 @@ def main():
     for cond in ("occlude", "noise", "clean"):    # occlusion first (rev 3: the full grid did not fit the time limit)
         t0 = time.time()
         Xc, occ = S.corrupt_images(Xte, cond)
-        Zc, Tc = S.crop_table(Xc, enc, cfg.data.img_size)
+        Zc, Tc = (None, None) if a.whole_only else S.crop_table(Xc, enc, cfg.data.img_size)
         views = {v: S.whole_views(Xc, enc, cfg, max(kv), v == "canon", 303 if v == "aug" else 404) for v in ("aug", "canon")}
         print(cond, "encoded", round(time.time() - t0), "s", flush=True)
         for name, m in models.items():
@@ -346,7 +352,7 @@ def main():
                         P = _bp_predict(m, Zv, Tv, tte, k)
                         res["rows"].append({**base, "input": f"whole_{v}", "policy": "-", "pool": "own", "K": k, "n_latents": k,
                                             **score(P, zte, yte, knn, per, f"{name}|{cond}|whole_{v}|{k}|own")})
-                    if m.kind in ("BPg", "Gmap") and v == "aug" and m.seed == DIAG_SEED:        # inference convergence at T vs 4T
+                    if m.kind in ("BPg", "Gmap") and v == "aug" and m.seed == DIAG_SEED and not a.no_diag:        # inference convergence at T vs 4T
                         for k in (48, 192):
                             if k in kv:
                                 P4 = _bp_predict(m, Zv, Tv, tte, k, T=4 * m.cfg.T)
@@ -354,7 +360,7 @@ def main():
                 else:
                     for (k, pl), r in whole_pools(m, Zv, Tv, Bv, tte, zte, yte, knn, kv, occ, per, f"{name}|{cond}|whole_{v}").items():
                         res["rows"].append({**base, "input": f"whole_{v}", "policy": "-", "pool": pl, "K": k, "n_latents": k, **r})
-            if m.kind not in ("G", "F"):
+            if m.kind not in ("G", "F") or a.whole_only:
                 print(cond, name, "whole views done", round(time.time() - t0), "s", flush=True)
                 dump(res, a.out); continue
             zp, tp = Zc[:, S.PERI:S.PERI + 1], np.repeat(Tc[None, S.PERI:S.PERI + 1], len(zte), 0)

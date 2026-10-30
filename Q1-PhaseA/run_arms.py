@@ -5,7 +5,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import OptCfg, PCCfg, RunCfg, SparseCfg
+from config import OptCfg, PCCfg, RunCfg, SparseCfg, data_preset
 from train import train
 
 
@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--init-only", action="store_true",
                     help="write config.json + params.eqx at INITIALISATION and "
                          "stop: the untrained floor for this architecture")
+    ap.add_argument("--dataset", default="galaxy10", choices=["galaxy10", "mnist", "cifar10"],
+                    help="view settings from config.data_preset; galaxy10 is the unchanged default")
     ap.add_argument("--force", action="store_true",
                     help="permit overwriting a run directory that has weights")
     args = ap.parse_args()
@@ -94,7 +96,7 @@ def main():
     for seed in args.seeds:
         for arm in args.arms:
             tag = f"{args.tag}_s{seed}" if args.tag else f"s{seed}"
-            cfg = RunCfg(arm=arm, use_sigreg=True, out_dir=args.out, tag=tag,
+            cfg = RunCfg(arm=arm, use_sigreg=True, out_dir=args.out, tag=tag, data=data_preset(args.dataset),
                          pc=PCCfg(T=args.T, eta_h=args.eta_h,
                                   alpha=args.alpha),
                          opt=OptCfg(n_steps=args.steps,

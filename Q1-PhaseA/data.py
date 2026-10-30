@@ -69,11 +69,33 @@ def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
     return Xtr, ytr, Xte, yte
 
 
+# CIFAR-10 python batches (cifar-10-batches-py/) -> (N, 32, 32, 3) float32 in [0, 1].  Test = first n_test of the
+# official test batch, as load_mnist does.
+def load_cifar10(root="../data", n_train=-1, n_test=2000, seed=0):
+    import pickle
+    d = os.path.join(root, "cifar10", "cifar-10-batches-py")
+    def rd(name):
+        with open(os.path.join(d, name), "rb") as f:
+            b = pickle.load(f, encoding="bytes")
+        X = np.asarray(b[b"data"], np.uint8).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+        return X.astype(np.float32) / 255.0, np.asarray(b[b"labels"], np.int32)
+    parts = [rd(f"data_batch_{i}") for i in range(1, 6)]
+    Xtr, ytr = np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+    Xte, yte = rd("test_batch")
+    if n_test > 0:
+        Xte, yte = Xte[:n_test], yte[:n_test]
+    if n_train > 0:
+        Xtr, ytr = Xtr[:n_train], ytr[:n_train]
+    return Xtr, ytr, Xte, yte
+
+
 def load_dataset(cfg):
     if cfg.dataset == "galaxy10":
         return load_galaxy10(cfg.root, cfg.n_train, cfg.n_test, cfg.seed)
     if cfg.dataset == "mnist":
         return load_mnist(cfg.root, cfg.n_train, cfg.n_test, cfg.seed)
+    if cfg.dataset == "cifar10":
+        return load_cifar10(cfg.root, cfg.n_train, cfg.n_test, cfg.seed)
     raise ValueError(cfg.dataset)
 
 

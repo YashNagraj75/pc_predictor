@@ -5,7 +5,7 @@ import json
 
 @dataclass(frozen=True)
 class DataCfg:
-    dataset: Literal["galaxy10", "mnist"] = "galaxy10"
+    dataset: Literal["galaxy10", "mnist", "cifar10"] = "galaxy10"
     root: str = "../data"
     img_size: int = 32              # all views resized to this; FC encoder needs fixed dim
     grayscale: bool = False
@@ -31,6 +31,18 @@ class DataCfg:
     def input_dim(self) -> int:
         c = 1 if self.grayscale else 3
         return self.img_size * self.img_size * c
+
+
+# Per-dataset view settings for the frozen backbone and latents (plan_datasets_precision.md, 2026-10-30).
+# galaxy10 is the default DataCfg unchanged; MNIST digits have an orientation (no rotation, no flip).
+def data_preset(name):
+    if name == "galaxy10":
+        return DataCfg()
+    if name == "mnist":
+        return DataCfg(dataset="mnist", grayscale=True, max_rotation=0.0, hflip=False)
+    if name == "cifar10":
+        return DataCfg(dataset="cifar10", max_rotation=0.2617993878, hflip=True)
+    raise ValueError(name)
 
 
 # muPC-parameterised fully-connected residual net (see mu_pc.ipynb).

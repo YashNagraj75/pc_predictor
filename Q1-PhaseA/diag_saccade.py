@@ -365,10 +365,10 @@ def score_whole(model, Zv, Tv, tte, zte, ks, batch=250):
     return res
 
 
-def load_models(seeds):
+def load_models(seeds, depths=(3, 10)):
     models = {}
     for s in seeds:
-        for d in (3, 10):
+        for d in depths:
             models[f"G_d{d}_s{s}"] = GPred(d, s)
             if os.path.exists(f"pred_runs/tests/gpc_bp_d{d}_zero_bp_s{s}.eqx"):      # seed 0 weights were never saved
                 models[f"BPg_d{d}_s{s}"] = BPg(d, s)
