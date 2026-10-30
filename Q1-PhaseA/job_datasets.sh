@@ -17,7 +17,7 @@ note "start at $(git rev-parse --short HEAD)"
 # ---------------------------------------------------------------- data (idempotent)
 mkdir -p ../data
 if [ ! -f ../data/MNIST/raw/train-images-idx3-ubyte.gz ]; then          # both datasets: the gates test both
-  mkdir -p ../data/MNIST/raw && cp "$JOBDIR"/mnist_raw/*.gz ../data/MNIST/raw/ || { note "MNIST copy failed"; exit 3; }
+  mkdir -p ../data/MNIST/raw && cp "$JOBDIR"/*-idx?-ubyte.gz ../data/MNIST/raw/ || { note "MNIST copy failed"; exit 3; }
 fi
 if [ ! -f ../data/cifar10/cifar-10-batches-py/test_batch ]; then
   mkdir -p ../data/cifar10 && ( cd ../data/cifar10 && curl -sSL -o c10.tgz https://cave.cs.toronto.edu/kriz/cifar-10-python.tar.gz \
