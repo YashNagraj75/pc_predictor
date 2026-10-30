@@ -2,6 +2,7 @@ import argparse, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jax, jax.numpy as jnp, numpy as np
 import data as D, encoder as E
+jax.config.update("jax_default_matmul_precision", "highest")   # same precision as the tests' re-encoding (review N6)
 from run_probes import load_run
 
 LAYERS = {"h3": 3, "h7": 7, "emb": None}
@@ -41,7 +42,8 @@ def main():
         for k_, v in lats.items():
             out[f"{k_}_{split}"] = np.concatenate(v, 1).transpose(1, 0, 2)        # (N, V, d)
         print(split, out[f"tau_{split}"].shape, out[f"bp_emb_{split}"].shape, flush=True)
-    np.savez_compressed(a.out, **out)
+    tmp = a.out[:-4] + ".tmp.npz"                                 # atomic: a killed job leaves no truncated file
+    np.savez_compressed(tmp, **out); os.replace(tmp, a.out)
     print("wrote", a.out, os.path.getsize(a.out) // 2**20, "MB")
 
 

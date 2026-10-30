@@ -16,7 +16,7 @@ def check(name, cond, info=""):
 
 
 def loaders():
-    for name, ntr, shape in (("mnist", 60000, (28, 28, 1)), ("cifar10", 50000, (32, 32, 3))):
+    for name, ntr, shape in (("mnist", 15675, (28, 28, 1)), ("cifar10", 15675, (32, 32, 3))):   # matched to Galaxy
         cfg = data_preset(name)
         Xtr, ytr, Xte, yte = D.load_dataset(cfg)
         ok = (Xtr.shape == (ntr,) + shape and Xte.shape == (2000,) + shape and Xtr.dtype == np.float32
@@ -29,9 +29,16 @@ def loaders():
               and cnt.max() < 0.15 * ntr and len(np.unique(yte)) == 10, str(cnt.tolist()))
         X2 = D.load_dataset(cfg)[0]
         check(f"{name}: loading is deterministic", np.array_equal(Xtr[:500], X2[:500]))
+        full = D.load_dataset(dc.replace(cfg, n_train=-1, n_test=-1))
+        check(f"{name}: subsets are drawn from the full sets ({len(full[0])} train, {len(full[2])} test)",
+              len(full[0]) == {"mnist": 60000, "cifar10": 50000}[name] and len(full[2]) == 10000)
+        tl = np.bincount(yte, minlength=10)
+        check(f"{name}: random test subset (each class 6-14% of the 2000)", tl.min() > 120 and tl.max() < 280, str(tl.tolist()))
         if name == "cifar10":                    # class 0 (airplane) images are bluer than class 7 (horse) on average
             b = Xtr[ytr == 0][..., 2].mean() - Xtr[ytr == 7][..., 2].mean()
             check("cifar10: channel order RGB (airplanes bluer than horses)", b > 0.05, f"blue diff {b:.3f}")
+            sm = float(np.mean(np.abs(Xtr[:500, :, 1:] - Xtr[:500, :, :-1])))
+            check("cifar10: spatially smooth images (a scrambled layout gives ~0.25)", sm < 0.1, f"{sm:.3f}")
         # views: the encoder input dimension matches the preset
         Zin, bx, pr = D.make_views_labeled(jax.random.PRNGKey(0), jnp.asarray(Xtr[:16]), cfg)
         check(f"{name}: view dim == cfg.input_dim ({cfg.input_dim})", Zin.shape == (cfg.n_views, 16, cfg.input_dim), str(Zin.shape))
@@ -77,15 +84,30 @@ def ds_dir():                                    # scripts run inside Q1-PhaseA/
         cwd = os.getcwd(); os.chdir(os.path.join(t, "x"))
         try:
             Xtr = D.load_dataset(data_preset("mnist"))[0]
-            check("dataset loads from inside a ds/<name> working directory", len(Xtr) == 60000)
+            check("dataset loads from inside a ds/<name> working directory", len(Xtr) == 15675)
         finally:
             os.chdir(cwd)
+
+
+def galaxy_reproduction():                      # dataset-generic test_views/encode on Galaxy == stored latents (DS-7b)
+    import pred_eval as PE
+    from run_probes import load_run
+    cfg, p = load_run(os.path.join(HERE, S.BACKBONE))
+    check("Galaxy backbone data config == data_preset('galaxy10')", cfg.data == data_preset("galaxy10"))
+    cwd = os.getcwd(); os.chdir(HERE)
+    try:
+        _, _, Xte, _ = D.load_dataset(cfg.data); L = np.load("pred_latents.npz")
+        z = PE.encode(p, cfg.enc, PE.test_views(cfg.data, np.asarray(Xte[:256])))
+        err = float(np.max(np.abs(z - L["bp_emb_te"][:256])) / np.max(np.abs(L["bp_emb_te"][:256])))
+        check("Galaxy: re-encoded test views reproduce the stored latents (rel err < 1e-3)", err < 1e-3, f"{err:.1e}")
+    finally:
+        os.chdir(cwd)
 
 
 def galaxy_regression():                         # the new whole-only path must reproduce findings/32 exactly on Galaxy
     out = os.path.join(tempfile.mkdtemp(), "reg.json")
     r = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "diag_saccade2.py"), "--whole-only", "--depths", "10",
-                        "--no-diag", "--seeds", "1", "--vmax", "6", "--out", out], cwd=HERE, capture_output=True, text=True)
+                        "--no-diag", "--require-all", "--seeds", "1", "--vmax", "6", "--out", out], cwd=HERE, capture_output=True, text=True)
     check("Galaxy whole-only run exits 0", r.returncode == 0, r.stderr[-400:] if r.returncode else "")
     if r.returncode:
         return
@@ -102,7 +124,7 @@ def galaxy_regression():                         # the new whole-only path must 
 
 
 def main():
-    presets(); loaders(); corruption(); ds_dir(); galaxy_regression()
+    presets(); loaders(); corruption(); ds_dir(); galaxy_reproduction(); galaxy_regression()
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
 

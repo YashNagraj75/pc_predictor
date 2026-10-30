@@ -62,15 +62,20 @@ def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
     ytr = rd("train-labels-idx1-ubyte").astype(np.int32)
     Xte = rd("t10k-images-idx3-ubyte")[..., None].astype(np.float32) / 255.0
     yte = rd("t10k-labels-idx1-ubyte").astype(np.int32)
-    if n_test > 0:
-        Xte, yte = Xte[:n_test], yte[:n_test]
-    if n_train > 0:
-        Xtr, ytr = Xtr[:n_train], ytr[:n_train]
-    return Xtr, ytr, Xte, yte
+    return _subsets(Xtr, ytr, Xte, yte, n_train, n_test, seed)
+
+
+# Seeded random subsets (as load_galaxy10): the first 5000 MNIST test digits are the easier half (review DS-5).
+def _subsets(Xtr, ytr, Xte, yte, n_train, n_test, seed):
+    rng = np.random.default_rng(seed)
+    pte, ptr = rng.permutation(len(Xte)), rng.permutation(len(Xtr))
+    pte = pte[:n_test] if n_test > 0 else pte
+    ptr = ptr[:n_train] if n_train > 0 else ptr
+    return Xtr[ptr], ytr[ptr], Xte[pte], yte[pte]
 
 
 # CIFAR-10 python batches (cifar-10-batches-py/) -> (N, 32, 32, 3) float32 in [0, 1].  Test = first n_test of the
-# official test batch, as load_mnist does.
+# official test batch, both as seeded random subsets (_subsets).
 def load_cifar10(root="../data", n_train=-1, n_test=2000, seed=0):
     import pickle
     d = os.path.join(root, "cifar10", "cifar-10-batches-py")
@@ -82,11 +87,7 @@ def load_cifar10(root="../data", n_train=-1, n_test=2000, seed=0):
     parts = [rd(f"data_batch_{i}") for i in range(1, 6)]
     Xtr, ytr = np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
     Xte, yte = rd("test_batch")
-    if n_test > 0:
-        Xte, yte = Xte[:n_test], yte[:n_test]
-    if n_train > 0:
-        Xtr, ytr = Xtr[:n_train], ytr[:n_train]
-    return Xtr, ytr, Xte, yte
+    return _subsets(Xtr, ytr, Xte, yte, n_train, n_test, seed)
 
 
 def load_dataset(cfg):

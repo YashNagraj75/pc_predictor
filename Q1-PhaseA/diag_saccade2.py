@@ -311,9 +311,13 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     # other datasets (2026-10-30): whole views only, chosen depths, own backbone, no Gmap / convergence diagnostics
     ap.add_argument("--whole-only", action="store_true"); ap.add_argument("--depths", type=int, nargs="+", default=[3, 10])
-    ap.add_argument("--backbone", default=S.BACKBONE); ap.add_argument("--no-diag", action="store_true")
+    ap.add_argument("--backbone", default=S.BACKBONE)
+    ap.add_argument("--no-diag", action="store_true")          # drops Gmap only; the BPg T-vs-4T check always runs
+    ap.add_argument("--require-all", action="store_true")      # every G, BPg, F, BPf x depth x seed must load
+    ap.add_argument("--diag-seed", type=int, default=1)
     a = ap.parse_args()
-    global HH
+    global HH, DIAG_SEED
+    DIAG_SEED = a.diag_seed
     ks = [k for k in KS if k <= a.kmax]; kv = [k for k in KV if k <= a.vmax]
     L_ = np.load("pred_latents.npz")
     raw_tr = L_["bp_emb_tr"]; mu, sd = raw_tr.reshape(-1, 128).mean(0), raw_tr.reshape(-1, 128).std(0) + 1e-6
@@ -321,10 +325,14 @@ def main():
     knn = KNN((raw_tr - mu) / sd, np.asarray(L_["ytr"]))
     cfg, params = load_run(a.backbone); enc = S.Encoder(cfg, params, mu, sd)
     _, _, Xte, _ = D.load_dataset(cfg.data); Xte = np.asarray(Xte, np.float32); HH = Xte.shape[1]
+    assert a.whole_only or HH == 69, "the saccade front end has Galaxy 69-px constants; use --whole-only (review DS-9)"
     assert Xte.shape[1] == Xte.shape[2] and len(Xte) == len(zte), (Xte.shape, zte.shape)
     if a.n:
         Xte, zte, tte, yte = Xte[:a.n], zte[:a.n], tte[:a.n], yte[:a.n]
     models = {k: v for k, v in S.load_models(a.seeds, a.depths).items()}
+    if a.require_all:                        # load_models skips missing BPg silently (Galaxy seed 0); not allowed here
+        want = {f"{k}_d10_s{s}" if k in ("F", "BPf") else f"{k}_d{d}_s{s}" for k in ("G", "BPg", "F", "BPf") for d in a.depths for s in a.seeds}
+        miss = sorted(want - set(models)); assert not miss, f"missing models: {miss}"
     for name, m in models.items():              # BPg weights/config, for the T vs 4T convergence check
         if m.kind == "BPg":
             attach_bpg(m, name)
@@ -352,7 +360,7 @@ def main():
                         P = _bp_predict(m, Zv, Tv, tte, k)
                         res["rows"].append({**base, "input": f"whole_{v}", "policy": "-", "pool": "own", "K": k, "n_latents": k,
                                             **score(P, zte, yte, knn, per, f"{name}|{cond}|whole_{v}|{k}|own")})
-                    if m.kind in ("BPg", "Gmap") and v == "aug" and m.seed == DIAG_SEED and not a.no_diag:        # inference convergence at T vs 4T
+                    if m.kind in ("BPg", "Gmap") and v == "aug" and m.seed == DIAG_SEED:        # inference convergence at T vs 4T
                         for k in (48, 192):
                             if k in kv:
                                 P4 = _bp_predict(m, Zv, Tv, tte, k, T=4 * m.cfg.T)

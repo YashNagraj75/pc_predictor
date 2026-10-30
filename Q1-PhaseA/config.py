@@ -35,13 +35,15 @@ class DataCfg:
 
 # Per-dataset view settings for the frozen backbone and latents (plan_datasets_precision.md, 2026-10-30).
 # galaxy10 is the default DataCfg unchanged; MNIST digits have an orientation (no rotation, no flip).
+# Training sets are matched to Galaxy10's 15,675 images (user 2026-10-30, fairness across datasets).
+N_TRAIN_MATCHED = 15675
 def data_preset(name):
     if name == "galaxy10":
         return DataCfg()
     if name == "mnist":
-        return DataCfg(dataset="mnist", grayscale=True, max_rotation=0.0, hflip=False)
+        return DataCfg(dataset="mnist", grayscale=True, max_rotation=0.0, hflip=False, n_train=N_TRAIN_MATCHED)
     if name == "cifar10":
-        return DataCfg(dataset="cifar10", max_rotation=0.2617993878, hflip=True)
+        return DataCfg(dataset="cifar10", max_rotation=0.2617993878, hflip=True, n_train=N_TRAIN_MATCHED)
     raise ValueError(name)
 
 
