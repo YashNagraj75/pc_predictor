@@ -318,6 +318,7 @@ def main():
     a = ap.parse_args()
     global HH, DIAG_SEED
     DIAG_SEED = a.diag_seed
+    assert DIAG_SEED in a.seeds, "--diag-seed must be one of --seeds"
     ks = [k for k in KS if k <= a.kmax]; kv = [k for k in KV if k <= a.vmax]
     L_ = np.load("pred_latents.npz")
     raw_tr = L_["bp_emb_tr"]; mu, sd = raw_tr.reshape(-1, 128).mean(0), raw_tr.reshape(-1, 128).std(0) + 1e-6
@@ -387,6 +388,11 @@ def main():
                       round(time.time() - t0), "s", flush=True)
             dump(res, a.out)
         np.savez_compressed(npz, **per)
+    for cv in res["conv"]:                       # report-only: BP inference settled? (findings/32 criterion 0.04)
+        own = [r for r in res["rows"] if r["model"] == cv["model"] and r["cond"] == cv["cond"] and r["input"] == "whole_aug" and r["pool"] == "own" and r["K"] == cv["K"]]
+        if own:
+            d = cv["T4_nmse"] - own[0]["nmse"]; cv["T4_minus_T"] = d
+            print(f"CONV {cv['model']} {cv['cond']} K={cv['K']}: nmse T {own[0]['nmse']:.4f} 4T {cv['T4_nmse']:.4f} ({'ok' if abs(d) <= 0.04 else 'NOT SETTLED'})", flush=True)
     res["per_image_file"] = os.path.basename(npz)
     dump(res, a.out)
     print("DONE")

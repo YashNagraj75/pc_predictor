@@ -15,6 +15,8 @@ sha = hashlib.sha256(open(os.path.join(a.run, "params.eqx"), "rb").read()).hexdi
 if os.path.exists(a.stamp):
     assert open(a.stamp).read().strip() == sha, "pred_latents.npz was made by a different backbone; delete it and re-extract"
 cfg, p = load_run(a.run)
+from config import data_preset
+assert cfg.data == data_preset(cfg.data.dataset), f"{a.run} was trained with stale data settings; delete it (review N2-6)"
 L = np.load(a.latents)
 assert str(L["backbone_run"]) == a.run, (str(L["backbone_run"]), a.run)
 _, ytr, Xte, yte = D.load_dataset(cfg.data)

@@ -8,10 +8,12 @@ from run_probes import load_run, embed_split
 # (kNN k=20 cosine on deterministic centre views).  Also reports embedding spread, to catch collapse.
 ap = argparse.ArgumentParser()
 ap.add_argument("--run", required=True); ap.add_argument("--out", required=True)
-ap.add_argument("--n-train", type=int, default=10000); ap.add_argument("--rel", type=float, default=0.2)
+ap.add_argument("--n-train", type=int, default=10000); ap.add_argument("--rel", type=float, default=0.05)    # calibrate against the Galaxy line printed by the gates stage
 ap.add_argument("--report-only", action="store_true")
 a = ap.parse_args()
 cfg, p = load_run(a.run)
+from config import data_preset
+assert cfg.data == data_preset(cfg.data.dataset), f"{a.run} was trained with stale data settings; delete it (review N2-6)"
 p0 = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
 Xtr, ytr, Xte, yte = D.load_dataset(cfg.data)
 res = {"run": a.run, "dataset": cfg.data.dataset, "n_train_total": int(len(Xtr)), "n_test": int(len(Xte)),

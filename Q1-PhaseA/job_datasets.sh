@@ -17,14 +17,14 @@ note "start at $(git rev-parse --short HEAD); $($PY -c 'import sys, jax; print(s
 
 # ---------------------------------------------------------------- data (idempotent, checksummed; review P9)
 mkdir -p ../data
-if [ ! -f ../data/MNIST/raw/.ok ]; then
-  mkdir -p ../data/MNIST/raw && cp "$JOBDIR"/*-idx?-ubyte.gz ../data/MNIST/raw/ && ( cd ../data/MNIST/raw && md5sum -c - <<'EOF'
-f68b3c2dcbeaaa9fbdd348bbdeb94873  train-images-idx3-ubyte.gz
+MD5_MNIST="f68b3c2dcbeaaa9fbdd348bbdeb94873  train-images-idx3-ubyte.gz
 d53e105ee54ea40749a09fcbcd1e9432  train-labels-idx1-ubyte.gz
 9fb629c4189551a2d022fa330f9573f3  t10k-images-idx3-ubyte.gz
-ec29112dd5afa0611ce80d1b7f02629c  t10k-labels-idx1-ubyte.gz
-EOF
-  ) && touch ../data/MNIST/raw/.ok || { note "MNIST copy or checksum failed"; exit 3; }
+ec29112dd5afa0611ce80d1b7f02629c  t10k-labels-idx1-ubyte.gz"
+mnist_ok() { ( cd ../data/MNIST/raw 2>/dev/null && echo "$MD5_MNIST" | md5sum -c --quiet - >/dev/null 2>&1 ); }
+if [ ! -f ../data/MNIST/raw/.ok ]; then                     # files already in place (earlier job) or from the job dir
+  mnist_ok || { mkdir -p ../data/MNIST/raw && cp "$JOBDIR"/*-idx?-ubyte.gz ../data/MNIST/raw/ 2>/dev/null; }
+  mnist_ok && touch ../data/MNIST/raw/.ok || { note "MNIST copy or checksum failed"; exit 3; }
 fi
 # an earlier job (d857b6b) downloaded and md5-checked the archive before extracting in place; the loader gates
 # (full 50,000 / 10,000 counts) catch a partial extraction
@@ -47,6 +47,8 @@ fi
 
 W=ds/$DS; [ -n "$SMOKE" ] && W=ds/${DS}_smoke
 mkdir -p "$W/pred_runs" "$W/logs" && cd "$W" || exit 2
+exec 9>"$Q/ds/.lock_${DS}${SMOKE:+_smoke}"                    # one job per dataset dir; orphaned children keep it (NF3)
+flock -n 9 || { note "another job (or an orphaned process) holds the lock for $W"; exit 10; }
 collect() {                                    # results + weight manifest back to the job dir (review P6)
   ( find . -name '*.eqx' -o -name 'pred_latents.npz' | sort | xargs -r sha256sum > MANIFEST_weights.txt
     cd "$Q" && tar czf "$JOBDIR/ds_${DS}${SMOKE:+_smoke}.tar.gz" --exclude='*.eqx' --exclude='pred_latents*.npz' "$W" ) \
@@ -57,14 +59,17 @@ if [ -n "$SMOKE" ]; then ENC=200; NTR=2048; GST=30; FST=30; EV="--smoke"; SEEDS=
 
 # ---------------------------------------------------------------- prep: frozen backbone (feature extractor only) + latents
 if [ "$STAGE" = prep ] || [ "$STAGE" = all ]; then
-  if [ ! -f runs/bp_sigreg_enc_s0/params.eqx ]; then
+  if [ ! -f runs/bp_sigreg_enc_s0/.complete ]; then
     rm -f pred_latents.npz pred_latents.backbone_sha256        # latents must never outlive their backbone (review P7)
+    [ -d pred_runs/tests ] && mv pred_runs "old_pred_runs_$(date +%m%d_%H%M)" && mkdir -p pred_runs   # nor predictors (NF4)
+    rm -rf runs/bp_sigreg_enc_s0
     $PY -W ignore $Q/run_arms.py --dataset $DS --arms bp --seeds 0 --tag enc --steps $ENC --out runs > logs/prep_backbone.log 2>&1
     [ -f runs/bp_sigreg_enc_s0/DIVERGED ] && { note "backbone DIVERGED"; exit 5; }
     [ -f runs/bp_sigreg_enc_s0/params.eqx ] || { note "backbone training failed (no params.eqx)"; exit 5; }
+    echo "$ENC" > runs/bp_sigreg_enc_s0/.complete
   fi
   G=""; [ -n "$SMOKE" ] && G="--report-only"                 # smoke backbone is undertrained: report only
-  $PY -W ignore $Q/ds_gate.py --run runs/bp_sigreg_enc_s0 --out backbone_gate.json $G > logs/prep_gate.log 2>&1; rc=$?
+  $PY -W ignore $Q/ds_gate.py --run runs/bp_sigreg_enc_s0 --out backbone_gate.json --rel ${REL:-0.05} $G > logs/prep_gate.log 2>&1; rc=$?
   note "backbone gate rc=$rc $(tail -1 logs/prep_gate.log | cut -c1-300)"; [ $rc -eq 0 ] || exit 6
   if [ ! -f pred_latents.npz ]; then
     $PY -W ignore $Q/pred_data.py --run runs/bp_sigreg_enc_s0 --out pred_latents.npz --n-train $NTR > logs/prep_latents.log 2>&1 \
@@ -91,8 +96,8 @@ if [ "$STAGE" = train ] || [ "$STAGE" = all ]; then
       echo "BPg_s$s|[ -f $BJ$s.json ] || $PY -W ignore $Q/run_gpc_tests.py --rule bp --backbone bp --seed $s --depth 10 --start zero --steps $GST $EV --outdir pred_runs/tests"
     done
     for s in $SEEDS; do
-      echo "F_s$s|{ [ -f $FM$s.eqx ] || $PY -W ignore $Q/pred_ffres.py --arm alm --depth 10 --seed $s --T 400 --alpha 1.0 --lr 0.01 --rho 16 --steps $FST --save --out $FM$s.json; } && { [ -f pred_runs/tests_ffres_fix/R16/ffres_alm_d10_bp_s$s.json ] || $PY -W ignore $Q/run_pred_tests.py ffres --arm alm --depth 10 --seed $s --model $FM$s.eqx --outdir pred_runs/tests_ffres_fix/R16; }"
-      echo "BPf_s$s|{ [ -f $BM$s.eqx ] || $PY -W ignore $Q/pred_ffres.py --arm bp --depth 10 --seed $s --lr 0.001 --steps $FST --save --out $BM$s.json; } && { [ -f pred_runs/tests_ffres_bpfix/ffres_bp_d10_bp_s$s.json ] || $PY -W ignore $Q/run_pred_tests.py ffres --arm bp --depth 10 --seed $s --model $BM$s.eqx --outdir pred_runs/tests_ffres_bpfix; }"
+      echo "F_s$s|{ [ -f $FM$s.eqx ] || { rm -f $FM$s.json; $PY -W ignore $Q/pred_ffres.py --arm alm --depth 10 --seed $s --T 400 --alpha 1.0 --lr 0.01 --rho 16 --steps $FST --save --out $FM$s.json; }; } && { [ -f pred_runs/tests_ffres_fix/R16/ffres_alm_d10_bp_s$s.json ] || $PY -W ignore $Q/run_pred_tests.py ffres --arm alm --depth 10 --seed $s --model $FM$s.eqx --outdir pred_runs/tests_ffres_fix/R16; }"
+      echo "BPf_s$s|{ [ -f $BM$s.eqx ] || { rm -f $BM$s.json; $PY -W ignore $Q/pred_ffres.py --arm bp --depth 10 --seed $s --lr 0.001 --steps $FST --save --out $BM$s.json; }; } && { [ -f pred_runs/tests_ffres_bpfix/ffres_bp_d10_bp_s$s.json ] || $PY -W ignore $Q/run_pred_tests.py ffres --arm bp --depth 10 --seed $s --model $BM$s.eqx --outdir pred_runs/tests_ffres_bpfix; }"
     done; } > logs/runs.txt
   rm -f logs/*.rc                                              # one status file per run, fresh each launch (review P1/P5)
   run_one() { n="${1%%|*}"; cmd="${1#*|}"; bash -c "set -o pipefail; $cmd" > "logs/$n.log" 2>&1; rc=$?
@@ -106,7 +111,7 @@ fi
 
 # ---------------------------------------------------------------- eval: 1-192 whole views, mean + precision pools, kNN
 if [ "$STAGE" = eval ] || [ "$STAGE" = all ]; then
-  if [ -n "$SMOKE" ]; then EA="--n 200 --vmax 12 --seeds 0 --diag-seed 0"; else EA=""; fi
+  if [ -n "$SMOKE" ]; then EA="--n 100 --vmax 48 --seeds 0 --diag-seed 0"; else EA=""; fi
   $PY -W ignore $Q/diag_saccade2.py --whole-only --depths 10 --no-diag --require-all --backbone runs/bp_sigreg_enc_s0 \
       --out pred_runs/eval_views.json $EA > logs/eval.log 2>&1; rc=$?
   note "eval rc=$rc"; [ $rc -eq 0 ] || exit 9

@@ -15,6 +15,19 @@ def check(name, cond, info=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
+def _raw_test(name):                            # raw-file decode, independent of data.py: (image 0, all labels)
+    import gzip, pickle
+    root = os.path.join(HERE, "..", "data")
+    if name == "mnist":
+        p = os.path.join(root, "MNIST", "raw", "t10k-labels-idx1-ubyte.gz")
+        lab = np.frombuffer(gzip.open(p).read()[8:], np.uint8).astype(np.int32)
+        return None, lab
+    b = pickle.load(open(os.path.join(root, "cifar10", "cifar-10-batches-py", "test_batch"), "rb"), encoding="bytes")
+    r = np.asarray(b[b"data"][0], np.float32) / 255.0
+    img = np.stack([r[:1024], r[1024:2048], r[2048:]], -1).reshape(32, 32, 3)
+    return img, np.asarray(b[b"labels"], np.int32)
+
+
 def loaders():
     for name, ntr, shape in (("mnist", 15675, (28, 28, 1)), ("cifar10", 15675, (32, 32, 3))):   # matched to Galaxy
         cfg = data_preset(name)
@@ -32,13 +45,19 @@ def loaders():
         full = D.load_dataset(dc.replace(cfg, n_train=-1, n_test=-1))
         check(f"{name}: subsets are drawn from the full sets ({len(full[0])} train, {len(full[2])} test)",
               len(full[0]) == {"mnist": 60000, "cifar10": 50000}[name] and len(full[2]) == 10000)
+        raw_te = _raw_test(name)
+        check(f"{name}: test subset is not the file's first 2000 (seeded random draw)", not np.array_equal(yte, raw_te[1][:2000]))
+        if name == "cifar10":                    # independent decode of raw test image 0 must appear in the full test set
+            ref = raw_te[0]
+            check("cifar10: an independently decoded test image is found in the loaded set (layout and RGB)",
+                  bool(np.any(np.all(full[2] == ref, axis=(1, 2, 3)))))
         tl = np.bincount(yte, minlength=10)
         check(f"{name}: random test subset (each class 6-14% of the 2000)", tl.min() > 120 and tl.max() < 280, str(tl.tolist()))
         if name == "cifar10":                    # class 0 (airplane) images are bluer than class 7 (horse) on average
             b = Xtr[ytr == 0][..., 2].mean() - Xtr[ytr == 7][..., 2].mean()
             check("cifar10: channel order RGB (airplanes bluer than horses)", b > 0.05, f"blue diff {b:.3f}")
             sm = float(np.mean(np.abs(Xtr[:500, :, 1:] - Xtr[:500, :, :-1])))
-            check("cifar10: spatially smooth images (a scrambled layout gives ~0.25)", sm < 0.1, f"{sm:.3f}")
+            check("cifar10: spatially smooth images (report; the raw-decode check below is the strict one)", sm < 0.1, f"{sm:.3f}")
         # views: the encoder input dimension matches the preset
         Zin, bx, pr = D.make_views_labeled(jax.random.PRNGKey(0), jnp.asarray(Xtr[:16]), cfg)
         check(f"{name}: view dim == cfg.input_dim ({cfg.input_dim})", Zin.shape == (cfg.n_views, 16, cfg.input_dim), str(Zin.shape))
@@ -97,8 +116,9 @@ def galaxy_reproduction():                      # dataset-generic test_views/enc
     cwd = os.getcwd(); os.chdir(HERE)
     try:
         _, _, Xte, _ = D.load_dataset(cfg.data); L = np.load("pred_latents.npz")
-        z = PE.encode(p, cfg.enc, PE.test_views(cfg.data, np.asarray(Xte[:256])))
-        err = float(np.max(np.abs(z - L["bp_emb_te"][:256])) / np.max(np.abs(L["bp_emb_te"][:256])))
+        # views depend on the chunk size (keys split over n_views x B): compare one whole 512-image chunk (review N2-1)
+        z = PE.encode(p, cfg.enc, PE.test_views(cfg.data, np.asarray(Xte[:512])))
+        err = float(np.max(np.abs(z - L["bp_emb_te"][:512])) / np.max(np.abs(L["bp_emb_te"][:512])))
         check("Galaxy: re-encoded test views reproduce the stored latents (rel err < 1e-3)", err < 1e-3, f"{err:.1e}")
     finally:
         os.chdir(cwd)
