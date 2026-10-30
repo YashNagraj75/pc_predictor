@@ -16,10 +16,10 @@ note "start at $(git rev-parse --short HEAD)"
 
 # ---------------------------------------------------------------- data (idempotent)
 mkdir -p ../data
-if [ "$DS" = mnist ] && [ ! -f ../data/MNIST/raw/train-images-idx3-ubyte.gz ]; then
+if [ ! -f ../data/MNIST/raw/train-images-idx3-ubyte.gz ]; then          # both datasets: the gates test both
   mkdir -p ../data/MNIST/raw && cp "$JOBDIR"/mnist_raw/*.gz ../data/MNIST/raw/ || { note "MNIST copy failed"; exit 3; }
 fi
-if [ "$DS" = cifar10 ] && [ ! -f ../data/cifar10/cifar-10-batches-py/test_batch ]; then
+if [ ! -f ../data/cifar10/cifar-10-batches-py/test_batch ]; then
   mkdir -p ../data/cifar10 && ( cd ../data/cifar10 && curl -sSL -o c10.tgz https://cave.cs.toronto.edu/kriz/cifar-10-python.tar.gz \
     && echo "c58f30108f718f92721af3b95e74349a  c10.tgz" | md5sum -c - && tar xzf c10.tgz && rm c10.tgz ) || { note "CIFAR-10 download failed"; exit 3; }
 fi
