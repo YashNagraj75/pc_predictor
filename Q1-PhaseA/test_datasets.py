@@ -91,7 +91,9 @@ def corruption():
         # occluded_frac(Hh=H) vs the black-pixel fraction of unrotated whole views cut from the occluded image
         ks = jax.random.split(jax.random.PRNGKey(3), 200)
         v, bx, _ = jax.vmap(lambda k, im: D._one_view(k, im, 32, 0.4, 1.0, 0.0, False, 0.0, 0.0))(ks, jnp.asarray(Xo))
-        bx = np.asarray(bx); px = np.mean(np.all(np.asarray(v) < 1e-6, -1).reshape(200, -1), 1)
+        # measured as mean darkening 1 - v of an all-white image: bilinear edge pixels count by their covered share (an
+        # exactly-black count misses the occluder's 1-px edge ring, ~0.05 bias at 28-32 px)
+        bx = np.asarray(bx); px = np.mean(1.0 - np.asarray(v).mean(-1).reshape(200, -1), 1)
         pred = S.occluded_frac(bx[:, 1], bx[:, 0], bx[:, 2], occ, Hh=H)
         err = float(np.mean(np.abs(px - pred)))
         check(f"{H}px: occluded_frac(Hh={H}) matches the black-pixel fraction (mean abs err < 0.03)", err < 0.03, f"{err:.3f}")
