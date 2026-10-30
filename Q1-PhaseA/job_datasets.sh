@@ -69,7 +69,7 @@ if [ "$STAGE" = prep ] || [ "$STAGE" = all ]; then
     echo "$ENC" > runs/bp_sigreg_enc_s0/.complete
   fi
   G=""; [ -n "$SMOKE" ] && G="--report-only"                 # smoke backbone is undertrained: report only
-  $PY -W ignore $Q/ds_gate.py --run runs/bp_sigreg_enc_s0 --out backbone_gate.json --rel ${REL:-0.05} $G > logs/prep_gate.log 2>&1; rc=$?
+  $PY -W ignore $Q/ds_gate.py --run runs/bp_sigreg_enc_s0 --out backbone_gate.json --rel ${REL:-0.02} $G > logs/prep_gate.log 2>&1; rc=$?
   note "backbone gate rc=$rc $(tail -1 logs/prep_gate.log | cut -c1-300)"; [ $rc -eq 0 ] || exit 6
   if [ ! -f pred_latents.npz ]; then
     $PY -W ignore $Q/pred_data.py --run runs/bp_sigreg_enc_s0 --out pred_latents.npz --n-train $NTR > logs/prep_latents.log 2>&1 \

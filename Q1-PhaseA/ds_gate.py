@@ -8,7 +8,7 @@ from run_probes import load_run, embed_split
 # (kNN k=20 cosine on deterministic centre views).  Also reports embedding spread, to catch collapse.
 ap = argparse.ArgumentParser()
 ap.add_argument("--run", required=True); ap.add_argument("--out", required=True)
-ap.add_argument("--n-train", type=int, default=10000); ap.add_argument("--rel", type=float, default=0.05)    # calibrate against the Galaxy line printed by the gates stage
+ap.add_argument("--n-train", type=int, default=10000); ap.add_argument("--rel", type=float, default=0.02)    # user 2026-10-30: Galaxy-level bar (its own backbone: 0.038)
 ap.add_argument("--report-only", action="store_true")
 a = ap.parse_args()
 cfg, p = load_run(a.run)
