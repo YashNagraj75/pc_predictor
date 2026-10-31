@@ -1,0 +1,5 @@
+predictor,input,MNIST clean PC/BP,MNIST noise PC/BP,MNIST occl PC/BP,Galaxy clean,Galaxy noise,Galaxy occl
+Generative amortised PC-ALM d10,1 view,0.206 / 0.183,0.331 / 0.312,1.123 / 1.142,0.308 / 0.278,1.797 / 1.887,2.156 / 2.053
+Generative amortised PC-ALM d10,"192 views, precision pool",0.118 / 0.094,0.157 / 0.137,1.096 / 1.114,0.193 / 0.169,0.615 / 0.618,1.458 / 1.623
+Residual feedforward PC-ALM d10,1 view,0.191 / 0.246,0.306 / 0.355,1.123 / 1.116,0.298 / 0.351,1.411 / 1.543,1.892 / 1.811
+Residual feedforward PC-ALM d10,"192 views, precision pool",0.125 / 0.167,0.167 / 0.214,1.077 / 1.050,0.227 / 0.264,0.529 / 0.577,1.298 / 1.352

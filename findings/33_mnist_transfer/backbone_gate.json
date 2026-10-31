@@ -1,0 +1,36 @@
+{
+ "run": "runs/bp_sigreg_enc_s0",
+ "dataset": "mnist",
+ "n_train_total": 15675,
+ "n_test": 2000,
+ "class_counts_train": [
+  1593,
+  1765,
+  1475,
+  1631,
+  1508,
+  1456,
+  1542,
+  1627,
+  1530,
+  1548
+ ],
+ "trained": {
+  "knn": 0.9175,
+  "finite": true,
+  "mean_std": 0.5459412336349487,
+  "min_over_median_std": 0.7184931039810181,
+  "eff_rank": 32.065513610839844
+ },
+ "init": {
+  "knn": 0.898,
+  "finite": true,
+  "mean_std": 0.16380180418491364,
+  "min_over_median_std": 0.6648951172828674,
+  "eff_rank": 26.73172950744629
+ },
+ "raw_pixel_knn": 0.947,
+ "chance_majority": 0.123,
+ "rel_err_reduction": 0.19117647058823495,
+ "pass": true
+}
