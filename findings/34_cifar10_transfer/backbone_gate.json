@@ -1,0 +1,36 @@
+{
+ "run": "runs/bp_sigreg_enc_s0",
+ "dataset": "cifar10",
+ "n_train_total": 15675,
+ "n_test": 2000,
+ "class_counts_train": [
+  1558,
+  1611,
+  1501,
+  1508,
+  1594,
+  1574,
+  1579,
+  1556,
+  1589,
+  1605
+ ],
+ "trained": {
+  "knn": 0.385,
+  "finite": true,
+  "mean_std": 0.4951077401638031,
+  "min_over_median_std": 0.6845342516899109,
+  "eff_rank": 34.79362487792969
+ },
+ "init": {
+  "knn": 0.2745,
+  "finite": true,
+  "mean_std": 0.17296960949897766,
+  "min_over_median_std": 0.6885437965393066,
+  "eff_rank": 18.250822067260742
+ },
+ "raw_pixel_knn": 0.292,
+ "chance_majority": 0.1115,
+ "rel_err_reduction": 0.15230875258442458,
+ "pass": true
+}
