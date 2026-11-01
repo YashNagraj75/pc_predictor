@@ -1,6 +1,7 @@
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
+import jax.numpy as jnp, pred_gpc as G
 import diag_saccade as S, diag_saccade2 as S2, latent_analysis as LA
 from diag_saccade import D, load_run
 
@@ -81,7 +82,7 @@ def main(backbone, seeds, ref_json):
         for pool in pools:
             for cond, (Zv, Tv) in (("occlude", (Z, T)), ("clean", (Z0, T0))):
                 P = LA.predict(m, Zv, Tv, tte, pool); r = S.metrics(P, zte)[0]["nmse"]; s = ref.get((name, cond, pool, 6))
-                if m.kind == "Gmap" and s is None:   # stored only where findings/32 ran it (Galaxy seed 1)
+                if m.kind == "Gmap":                 # findings/32 ran Gmap at the unstable c = 1; nothing to reproduce
                     print(f"     report: {name} {cond} K=6 nmse {r:.4f} (no stored value)"); continue
                 check(f"{name} {pool} {cond} K=6 reproduces the stored evaluation", s is not None and abs(r - s) < 1e-4 * max(1, abs(s)), f"{r:.6f} vs {s}")
         if m.kind in ("G", "F", "BPf"):
@@ -92,9 +93,15 @@ def main(backbone, seeds, ref_json):
         if m.kind != "MapPool":
             continue
         joint = models[name.replace("BPgMP_", "BPg_").replace("GMP_", "Gmap_")]
-        P1 = LA.pool_c(m, m.beliefs(Z0[:300, :1], T0[:300, :1]), tte[:300]); J1 = S2._bp_predict(joint, Z0[:300, :1], T0[:300, :1], tte[:300], 1)
+        z, t, tt = Z0[:300, :1], T0[:300, :1], tte[:300]
+        P1 = LA.pool_c(m, m.beliefs(z, t, chunk=250), tt); J1 = S2._bp_predict(joint, z, t, tt, 1, batch=250)
         e = float(np.max(np.abs(P1 - J1)) / np.max(np.abs(J1)))
-        check(f"{name}: at K=1, mean of per-view MAP == joint MAP of the same weights", e < 1e-4, f"rel {e:.1e}")
+        check(f"{name}: at K=1, mean of per-view MAP == joint MAP of the same weights (same batching)", e < 1e-4, f"rel {e:.1e}")
+        J3 = S2._bp_predict(joint, z, t, tt, 1, batch=300); eb = float(np.max(np.abs(J3 - J1)) / np.max(np.abs(J1)))
+        hist = np.asarray(G.infer_s(joint.p, None, jnp.asarray(Z0[:300, :6]), jnp.asarray(T0[:300, :6]), joint.cfg)[2])
+        mono = float(np.mean(np.diff(hist) <= 1e-6 * np.abs(hist[:-1])))
+        check(f"{name.replace('MP_', '_')}: BP inference settles (energy non-increasing on >= 99% of steps at K=6; batch-size effect < 1e-2)",
+              mono >= 0.99 and eb < 1e-2, f"monotone {mono:.3f}, batch effect {eb:.1e}, c {joint.cfg.c}")
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
 

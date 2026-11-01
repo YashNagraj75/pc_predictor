@@ -164,13 +164,17 @@ def contrib_centred(Cc, C0, cbar, disp):         # does a more-displaced view's 
 
 def build_models(seeds):
     models = S.load_models(seeds, (10,))
+    # BP inference on G's weights uses the BP reference's selected step scale: at G's own c = 1 it oscillates (energy rises
+    # on 37% of steps, output changes 32% with batch size; dbg job 669e6547), at the BP c it decreases monotonically.
+    c_bp = sorted({S2.attach_bpg(m, n).cfg.c for n, m in models.items() if m.kind == "BPg"})
+    assert len(c_bp) == 1, f"BP references disagree on the step scale: {c_bp}"
     for name in list(models):
         m = models[name]
         if m.kind == "BPg":
-            S2.attach_bpg(m, name)
             models[name.replace("BPg_", "BPgMP_")] = MapPool(m.p, m.cfg, "MapPool", m.seed)      # BPg weights, mean of per-view MAP
         if m.kind == "G":
-            gm = S2.GMap(m); models[name.replace("G_", "Gmap_")] = gm                             # G weights, joint MAP
+            gm = S2.GMap(m); gm.cfg = dc.replace(gm.cfg, c=c_bp[0]); gm.predict = G.make_predict(gm.p, None, gm.cfg)
+            models[name.replace("G_", "Gmap_")] = gm                                                # G weights, joint MAP
             models[name.replace("G_", "GMP_")] = MapPool(gm.p, gm.cfg, "MapPool", m.seed)         # G weights, mean of per-view MAP
     for name, m in models.items():
         m.name = name
