@@ -115,8 +115,8 @@ def gain(p, ctx, cidx, cvalid, tidx, tvalid, gn_iters=50):
     return _gn_max(f, jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1])), gn_iters)
 
 
-def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c):
-    one = epc_one if method == "epc" else spc_one
+def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_iters=12):
+    one = (lambda *a: epc_one(*a, gn_iters=gn_iters)) if method == "epc" else spc_one
     inner = lambda ti, tv, y: one(p, ctx, cidx, cvalid, ti, tv, y, rho, alpha, T, c)
     return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image
 
@@ -129,7 +129,7 @@ def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, 
 # chunks of `chunk` images with lax.map so activation memory is bounded (review N4).  ctx (B, NC, dim) context-encoder
 # output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.  Returns (grad_params, grad_ctx | None,
 # energy (B, K, 2) at relaxation start/end | None).
-def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32):
+def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32, gn_iters=12):
     B = ctx.shape[0]; chunk = min(chunk, B)
     assert B % chunk == 0, (B, chunk)
     N = jnp.sum(tvalid) * Y.shape[-1]
@@ -142,7 +142,7 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
                 return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
             en = jnp.zeros((cx.shape[0], ti.shape[1], 2))
         else:
-            HS, U, en, EE = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c))(cx, ci, cv, ti, tv, y)
+            HS, U, en, EE = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters))(cx, ci, cv, ti, tv, y)
             HS, U, EE = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U), jax.lax.stop_gradient(EE)
             exact = method == "epc"
             def L(q, a):
