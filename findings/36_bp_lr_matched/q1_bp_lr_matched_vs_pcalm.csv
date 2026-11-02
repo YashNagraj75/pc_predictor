@@ -1,0 +1,10 @@
+dataset,cond,PC_ALM,BP_lr1e-2,diff_min,diff_max,paired,BP_sd
+galaxy10,clean,0.2996,0.2929,0.0066,0.007,True,0.0007
+galaxy10,noise,1.4114,1.4257,-0.0383,-0.0003,True,0.0202
+galaxy10,occlude,1.8915,1.8323,0.0003,0.1143,True,0.0501
+mnist,clean,0.1911,0.1828,0.0068,0.0091,True,0.0003
+mnist,noise,0.3063,0.2985,0.0063,0.0088,True,0.0008
+mnist,occlude,1.1225,1.1256,-0.0038,-0.0026,True,0.0037
+cifar10,clean,0.2385,0.2304,0.0077,0.009,False,0.0007
+cifar10,noise,0.3763,0.3697,0.0064,0.0067,False,0.0002
+cifar10,occlude,0.9697,0.9714,-0.0039,0.0012,False,0.0026
