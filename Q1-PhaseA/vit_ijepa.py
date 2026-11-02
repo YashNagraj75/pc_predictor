@@ -10,7 +10,7 @@ import data as D
 # excluded as attention keys and from the loss.
 
 
-@dc.dataclass
+@dc.dataclass(frozen=True)              # frozen: hashable, so it can be a static jit argument
 class VCfg:
     img: int = 32
     patch: int = 4
