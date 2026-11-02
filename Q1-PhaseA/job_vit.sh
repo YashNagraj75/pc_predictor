@@ -13,6 +13,9 @@ case "$MODE" in
   gates|smoke)
     $PY -W ignore test_vit.py > "$JOBDIR/gates.log" 2>&1; rc=$?
     note "gates rc=$rc $(grep -cF '[PASS]' "$JOBDIR/gates.log") pass $(grep -cF '[FAIL]' "$JOBDIR/gates.log") fail"; [ $rc -eq 0 ] || exit 4
+    # speed with XLA GEMM autotuning back on (TF32 stays off), with the compiled-vs-eager audits re-run: report only
+    XLA_FLAGS= $PY -W ignore -c "import test_vit as t, vit_ijepa as V; c = V.VCfg(); t.train_smoke(c); t.scale(c); print('AUDITS PASS' if t.OK[0] else 'AUDITS FAIL')" > "$JOBDIR/speed_autotune.log" 2>&1
+    note "autotune-on speed report rc=$? $(grep -c 'AUDITS PASS' "$JOBDIR/speed_autotune.log")"
     [ "$MODE" = gates ] && exit 0
     rm -rf runs_vit/smoke
     $PY -W ignore vit_ijepa.py --out runs_vit/smoke --epochs 3 --warmup 1 --max-steps 400 --smoke > "$JOBDIR/smoke.log" 2>&1; rc=$?

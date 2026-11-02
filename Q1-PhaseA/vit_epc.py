@@ -46,7 +46,7 @@ def states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e):
 
 
 def feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid):
-    z = jnp.zeros((p.n_sub, cidx.shape[0] + tidx.shape[0], p.pos.shape[1]))
+    z = jnp.zeros((p.n_sub, cidx.shape[0] + tidx.shape[0], p.pos.shape[-1]))
     return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, z)
 
 
@@ -69,7 +69,7 @@ def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iter
     kv, row, tm = _masks(cvalid, tvalid)
     nt = tidx.shape[0]
     yhat = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], nt)
-    e0 = jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[1]))
+    e0 = jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1]))
     lam = _gn_max(lambda e: yhat(e) * tm, e0, gn_iters)
     eta = c * 0.9 / (rho + lam)
     E = lambda e, u: 0.5 * rho * jnp.sum(((e + u) * row) ** 2) + 0.5 * jnp.sum(tm * (yhat(e) - y) ** 2)
