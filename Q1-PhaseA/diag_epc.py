@@ -164,8 +164,10 @@ def main():
     ff = ff_ckpts(); res["ckpts"]["ff"] = [n for n, *_ in ff]
     for name, cfg, params in ff:
         gb = eqx.filter_grad(R.bp_loss)(params, x, y, cfg)
-        for rho in (1.0, 4.0, 16.0, 64.0):
+        for rho in (1.0, 4.0, 16.0, 64.0, 256.0, 1024.0):
             for alpha in (0.0, 1.0):
+                if rho > 64 and alpha > 0:
+                    continue
                 for T in TS:
                     for meth in ("ePC", "sPC"):
                         if meth == "sPC" and rho not in (1.0, 16.0):
@@ -190,10 +192,18 @@ def main():
         cad = dc.replace(cfg0, c=0.25, out_w=1.0, hid_prec=1.0)
         s_ad = jax.lax.stop_gradient(G.ad_infer(p, jnp.zeros((Z.shape[0], G.M)), Z, Ph, cad, 1600)[0])
         g_ad = G.ad_wgrads(p, s_ad, Z, Ph, cad)
-        for hp in (1.0, 4.0, 16.0, 64.0):
+        # the reference belief s_ad is NOT settled at depth 10 (AD loss still falling at 25,600 steps, dbg c43fdb0b): the
+        # primary credit measure is therefore the fixed-s rows (PC vs AD weight gradient at the same s); free-s rows
+        # report belief distance to this reference only descriptively.
+        sz = jnp.zeros((Z.shape[0], G.M)); e0 = [jnp.zeros_like(v) for v in G.topdown(p, sz, Ph, cfg0.H)[0]]
+        gain = E_gain = gn_max(lambda e_: G.mu_bot(p, gen_states(p, sz, e_, Ph, cfg0.H)[0]), e0)
+        res["ckpts"].setdefault("gen_gain", {})[name] = {"median": float(jnp.median(gain)), "max": float(jnp.max(gain))}
+        for hp in (1.0, 4.0, 16.0, 64.0, 256.0, 4096.0):
             cfg = dc.replace(cfg0, hid_prec=hp, out_w=1.0, spike="none", rule="pc")
             for T in TS:
                 for meth in ("ePC", "sPC", "ePC_fixed_s", "sPC_fixed_s"):
+                    if meth.startswith("sPC") and hp not in (1.0, 16.0):
+                        continue
                     t0 = time.time()
                     if meth == "ePC":
                         s, xs, hist = gen_epc(p, Z, Ph, cfg, T)
