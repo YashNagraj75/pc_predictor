@@ -51,12 +51,15 @@ def feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid):
 
 
 # Local PC energy at given states hs (L2, N, w) and multipliers u: the only function weights and inputs are trained from.
-def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho):
+# If the node errors e are given, the residual is evaluated as e + u - (pred - stop_gradient(pred)): same value and
+# gradient, without recomputing e as the float32 difference hs - pred (cancellation at large rho).
+def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho, e=None):
     kv, row, tm = _masks(cvalid, tvalid)
     prev, E = p.embed_(ctx, cidx, tidx), 0.0
     for j in range(p.n_sub):
         pred = prev + p.scale * p.f(j, prev, kv)
-        E = E + 0.5 * rho * jnp.sum(((hs[j] - pred + u[j]) * row) ** 2)
+        r = (hs[j] - pred) if e is None else (e[j] - (pred - jax.lax.stop_gradient(pred)))
+        E = E + 0.5 * rho * jnp.sum(((r + u[j]) * row) ** 2)
         prev = hs[j]
     return E + 0.5 * jnp.sum(tm * (p.head(hs[-1], tidx.shape[0]) - y) ** 2)
 
@@ -79,7 +82,7 @@ def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iter
     u0 = jnp.zeros_like(e0)
     (e, u), H = jax.lax.scan(step, (e0, u0), jnp.arange(T))
     out = H if hist else jnp.stack([E(e0, u0), E(e, u)])
-    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, out
+    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, out, e * row
 
 
 def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iters=20, hist=False):
@@ -101,7 +104,7 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
         u = jnp.where(t < T - 1, u + alpha * resid(h), u)
         return (h, u), (E(h, u) if hist else None)
     (h, u), H = jax.lax.scan(step, (h0, u0), jnp.arange(T))
-    return h, u, (H if hist else jnp.stack([E(h0, u0), E(h, u)]))
+    return h, u, (H if hist else jnp.stack([E(h0, u0), E(h, u)])), resid(h)
 
 
 # Output gain of one (image, target block): lambda_max(J^T J) of the valid predictions with respect to all node errors at
@@ -139,12 +142,13 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
                 return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
             en = jnp.zeros((cx.shape[0], ti.shape[1], 2))
         else:
-            HS, U, en = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c))(cx, ci, cv, ti, tv, y)
-            HS, U = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U)
+            HS, U, en, EE = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c))(cx, ci, cv, ti, tv, y)
+            HS, U, EE = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U), jax.lax.stop_gradient(EE)
+            exact = method == "epc"
             def L(q, a):
-                per_img = lambda a1, c1, v1, t1, w1, h1, u1, y1: jnp.sum(jax.vmap(
-                    lambda tt, ww, hh, uu, yy: local_energy(q, a1, c1, v1, tt, ww, hh, uu, yy, rho))(t1, w1, h1, u1, y1))
-                return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y))
+                per_img = lambda a1, c1, v1, t1, w1, h1, u1, y1, e1: jnp.sum(jax.vmap(
+                    lambda tt, ww, hh, uu, yy, ee: local_energy(q, a1, c1, v1, tt, ww, hh, uu, yy, rho, ee if exact else None))(t1, w1, h1, u1, y1, e1))
+                return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y, EE))
         gp = eqx.filter_grad(L)(p, cx)
         gx = jax.grad(lambda a: L(p, a))(cx) if want_input else jnp.zeros((0,))
         return gp, gx, en

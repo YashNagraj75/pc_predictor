@@ -138,20 +138,24 @@ def epc_gates(cfg):
         lam = float(np.median(lams)); lam_max = max(lams)
         print(f"     report: [{tag}] output gain lambda_max(J^T J): median {lam:.3g}, max {lam_max:.3g} over {len(lams)} blocks", flush=True)
         hs = P.feedforward_states(*a1)
-        check(f"[{tag}] ePC: zero errors reproduce the predictor's forward pass", rel(pred.head(hs[-1], ti.shape[-1]), pred(*a1)) < 1e-5)
+        check(f"[{tag}] ePC: zero errors reproduce the predictor's forward pass", rel(pred.head(hs[-1], ti.shape[-1]), pred(*a1[1:])) < 1e-5)
         for al in (0.0, 1.0):
-            hs, u, h = P.epc_one(*a1, Y[0, 0], 4.0, al, 30, hist=True)
+            hs, u, h, ee = P.epc_one(*a1, Y[0, 0], 4.0, al, 30, hist=True)
             El = P.local_energy(*a1, hs, u, Y[0, 0], 4.0); hh = np.asarray(h)
+            Ex = P.local_energy(*a1, hs, u, Y[0, 0], 4.0, ee)
+            check(f"[{tag}] ePC alpha {al:g}: exact-error local energy == recomputed local energy", abs(float(Ex - El)) / float(El) < 1e-5)
             check(f"[{tag}] ePC alpha {al:g}: error energy == local (state) energy, multipliers included", abs(float(h[-1] - El)) / float(El) < 1e-5, f"{float(h[-1]):.5f} vs {float(El):.5f}")
             if al == 0.0:
                 check(f"[{tag}] ePC: energy non-increasing", np.all(np.diff(hh) <= 1e-5 * hh[0]), f"{hh[0]:.4f} -> {hh[-1]:.4f}")
         # Precisions are set relative to the measured gain (rev 3): the rev-1 gates at absolute rho failed by slow
         # convergence (rho << gain), not by a wrong fixed point.
         # same minimum as sPC at rho = gain (well conditioned for ePC), no multipliers
+        # near-quadratic regime (plan): targets close to the network's own prediction
         rs = max(1.0, lam_max)
-        he, _, _ = P.epc_one(*a1, Y[0, 0], rs, 0.0, 3000)
-        hp, _, _ = P.spc_one(*a1, Y[0, 0], rs, 0.0, 30000)
-        gE = jax.grad(lambda h_: P.local_energy(*a1, h_, jnp.zeros_like(h_), Y[0, 0], rs))
+        yn = pred(*a1[1:]) + 0.05 * jax.random.normal(jax.random.PRNGKey(4), Y[0, 0].shape)
+        he, _, _, _ = P.epc_one(*a1, yn, rs, 0.0, 3000)
+        hp, _, _, _ = P.spc_one(*a1, yn, rs, 0.0, 30000)
+        gE = jax.grad(lambda h_: P.local_energy(*a1, h_, jnp.zeros_like(h_), yn, rs))
         g_ff = float(jnp.linalg.norm(gE(P.feedforward_states(*a1))))
         st_e, st_p = float(jnp.linalg.norm(gE(he))) / g_ff, float(jnp.linalg.norm(gE(hp))) / g_ff
         check(f"[{tag}] ePC and sPC reach the same minimum (rho = gain {rs:.3g}), both stationary", rel(he, hp) < 1e-3 and st_e < 1e-3 and st_p < 1e-2,
@@ -170,6 +174,11 @@ def epc_gates(cfg):
         rA = float(jnp.linalg.norm(flat(gA)) / jnp.linalg.norm(flat(gb)))
         check(f"[{tag}] ePC-ALM rho gain/16 ({ra:.3g}), T 400: weight gradient == BP (cos > 0.99, ratio within 5%) and alpha 0 clearly worse",
               cos(gA, gb) > 0.99 and abs(rA - 1) < 0.05 and cos(g0, gb) < cos(gA, gb) - 0.01, f"ALM cos {cos(gA, gb):.4f} ratio {rA:.3f}; alpha 0 cos {cos(g0, gb):.4f}")
+        # ALM convergence diagnostic at the training precision: constraint violation and credit vs steps
+        for T in (20, 100, 400):
+            _, uu, _, ee = P.epc_one(*a1, Y[0, 0], 16.0, 1.0, T)
+            gT, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=16.0, alpha=1.0, T=T)
+            print(f"     report: [{tag}] ALM rho 16 T {T}: |e|/|u| {float(jnp.linalg.norm(ee) / (jnp.linalg.norm(uu) + 1e-30)):.3g}, cos to BP {cos(gT, gb):.4f}, ratio {float(jnp.linalg.norm(flat(gT)) / jnp.linalg.norm(flat(gb))):.3f}", flush=True)
         # the training settings (absolute rho, T 20): energy must fall without multipliers; credit is reported
         for rho, al in ((16.0, 1.0), (64.0, 1.0), (4.0, 0.0), (1.0, 0.0)):
             for T in (20, 100):
