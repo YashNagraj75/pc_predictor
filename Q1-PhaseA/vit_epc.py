@@ -12,14 +12,15 @@ import vit_ijepa as V
 
 
 def _gn_max(f, z0, iters):                       # lambda_max(J^T J) of f at z0, one sample, fixed start
+    _, jvp = jax.linearize(f, z0)                # primal computed once, outside the loop (review N3)
     _, vjp = jax.vjp(f, z0)
     v = jnp.broadcast_to(jnp.linspace(1.0, 2.0, z0[0].size).reshape(z0[0].shape), z0.shape)
     v = v / jnp.linalg.norm(v)
     def body(_, v):
-        w = vjp(jax.jvp(f, (z0,), (v,))[1])[0]
+        w = vjp(jvp(v))[0]
         return w / (jnp.linalg.norm(w) + 1e-12)
     v = jax.lax.fori_loop(0, iters, body, v)
-    return jnp.linalg.norm(vjp(jax.jvp(f, (z0,), (v,))[1])[0])
+    return jnp.linalg.norm(vjp(jvp(v))[0])
 
 
 def _hvp_max(E, z0, iters):                      # lambda_max of the Hessian of scalar E at z0 (power iteration on HVPs)
@@ -60,7 +61,8 @@ def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho):
     return E + 0.5 * jnp.sum(tm * (p.head(hs[-1], tidx.shape[0]) - y) ** 2)
 
 
-def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=20):
+# Returns states, multipliers and (energy at start, energy at end); the energy is not evaluated inside the loop (cost).
+def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=8, hist=False):
     kv, row, tm = _masks(cvalid, tvalid)
     nt = tidx.shape[0]
     yhat = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], nt)
@@ -73,12 +75,14 @@ def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iter
         e, u = cu
         e = e - eta * gE(e, u)
         u = jnp.where(t < T - 1, u + alpha * e * row, u)
-        return (e, u), E(e, u)
-    (e, u), hist = jax.lax.scan(step, (e0, jnp.zeros_like(e0)), jnp.arange(T))
-    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, hist
+        return (e, u), (E(e, u) if hist else None)
+    u0 = jnp.zeros_like(e0)
+    (e, u), H = jax.lax.scan(step, (e0, u0), jnp.arange(T))
+    out = H if hist else jnp.stack([E(e0, u0), E(e, u)])
+    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, out
 
 
-def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iters=20):
+def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iters=20, hist=False):
     kv, row, tm = _masks(cvalid, tvalid)
     h0 = feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid)
     u0 = jnp.zeros_like(h0)
@@ -95,9 +99,9 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
         h, u = cu
         h = h - eta * gE(h, u) * row
         u = jnp.where(t < T - 1, u + alpha * resid(h), u)
-        return (h, u), E(h, u)
-    (h, u), hist = jax.lax.scan(step, (h0, u0), jnp.arange(T))
-    return h, u, hist
+        return (h, u), (E(h, u) if hist else None)
+    (h, u), H = jax.lax.scan(step, (h0, u0), jnp.arange(T))
+    return h, u, (H if hist else jnp.stack([E(h0, u0), E(h, u)]))
 
 
 def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c):
@@ -106,24 +110,38 @@ def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c):
     return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image
 
 
-# Weight gradient (and, if want_input, the gradient with respect to the context embeddings) for a batch.
-# ctx (B, NC, dim) context-encoder output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.
-def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False):
+def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, ...)
+    return jax.tree_util.tree_map(lambda a: a.reshape((a.shape[0] // chunk, chunk) + a.shape[1:]), xs)
+
+
+# Weight gradient (and, if want_input, the gradient with respect to the context embeddings) for a batch, processed in
+# chunks of `chunk` images with lax.map so activation memory is bounded (review N4).  ctx (B, NC, dim) context-encoder
+# output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.  Returns (grad_params, grad_ctx | None,
+# energy (B, K, 2) at relaxation start/end | None).
+def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32):
+    B = ctx.shape[0]; chunk = min(chunk, B)
+    assert B % chunk == 0, (B, chunk)
     N = jnp.sum(tvalid) * Y.shape[-1]
-    if method == "bp":
-        def L(q, cx):
-            P = jax.vmap(lambda a, ci, cv, ti, tv: jax.vmap(lambda t1, t2: q(a, ci, cv, t1, t2))(ti, tv))(cx, cidx, cvalid, tidx, tvalid)
-            return 0.5 * jnp.sum(tvalid[..., None] * (P - Y) ** 2) / N
-        hist = None
-    else:
-        HS, U, hist = jax.vmap(lambda a, ci, cv, ti, tv, y: _relax(method, p, a, ci, cv, ti, tv, y, rho, alpha, T, c))(
-            ctx, cidx, cvalid, tidx, tvalid, Y)
-        HS, U = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U)
-        def L(q, cx):
-            one = lambda a, ci, cv, ti, tv, hs, u, y: local_energy(q, a, ci, cv, ti, tv, hs, u, y, rho)
-            per_img = lambda a, ci, cv, ti, tv, hs, u, y: jnp.sum(jax.vmap(lambda t1, t2, h1, u1, y1: one(a, ci, cv, t1, t2, h1, u1, y1))(ti, tv, hs, u, y))
-            return jnp.sum(jax.vmap(per_img)(cx, cidx, cvalid, tidx, tvalid, HS, U, Y)) / N
-    if want_input:
-        gp, gx = eqx.filter_grad(lambda q, cx: L(q, cx))(p, ctx), jax.grad(lambda cx: L(p, cx))(ctx)
-        return gp, gx, hist
-    return eqx.filter_grad(lambda q: L(q, ctx))(p), None, hist
+
+    def per_chunk(xs):
+        cx, ci, cv, ti, tv, y = xs
+        if method == "bp":
+            def L(q, a):
+                P = jax.vmap(lambda a1, c1, v1, t1, w1: jax.vmap(lambda tt, ww: q(a1, c1, v1, tt, ww))(t1, w1))(a, ci, cv, ti, tv)
+                return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
+            en = jnp.zeros((cx.shape[0], ti.shape[1], 2))
+        else:
+            HS, U, en = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c))(cx, ci, cv, ti, tv, y)
+            HS, U = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U)
+            def L(q, a):
+                per_img = lambda a1, c1, v1, t1, w1, h1, u1, y1: jnp.sum(jax.vmap(
+                    lambda tt, ww, hh, uu, yy: local_energy(q, a1, c1, v1, tt, ww, hh, uu, yy, rho))(t1, w1, h1, u1, y1))
+                return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y))
+        gp = eqx.filter_grad(L)(p, cx)
+        gx = jax.grad(lambda a: L(p, a))(cx) if want_input else jnp.zeros((0,))
+        return gp, gx, en
+
+    gps, gxs, ens = jax.lax.map(per_chunk, _chunked((ctx, cidx, cvalid, tidx, tvalid, Y), chunk))
+    gp = jax.tree_util.tree_map(lambda x: x.sum(0) / N, gps)
+    gx = gxs.reshape((B,) + gxs.shape[2:]) / N if want_input else None
+    return gp, gx, (None if method == "bp" else ens.reshape((B,) + ens.shape[2:]))

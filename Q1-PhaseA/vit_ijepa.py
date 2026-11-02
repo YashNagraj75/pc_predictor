@@ -27,10 +27,11 @@ class VCfg:
     t_scale: tuple = (0.15, 0.2)
     t_aspect: tuple = (0.75, 1.5)
     c_scale: tuple = (0.85, 1.0)
-    min_ctx: int = 4
+    min_ctx: int = 10            # official I-JEPA default (review F9)
     epochs: int = 300
     batch: int = 256
-    lr: float = 1e-3
+    lr: float = 5e-4             # I-JEPA uses 1e-3 at batch 2048; 5e-4 at batch 256 with clipping (review F5/N7)
+    clip: float = 1.0
     wd: float = 0.04
     warmup: int = 15            # epochs
     ema0: float = 0.996
@@ -51,7 +52,9 @@ class VCfg:
         return self.patch * self.patch * 3
 
 
-NT_MAX = 20                     # largest target block (0.2 x 64 tokens = 12.8, aspect <= 1.5 -> at most 4 x 5)
+NT_MAX = 16                     # largest target block the sampler can produce (4 x 4; review N11)
+CIFAR_MEAN = np.array([0.4914, 0.4822, 0.4465], np.float32)
+CIFAR_STD = np.array([0.2470, 0.2435, 0.2616], np.float32)
 
 
 # ------------------------------------------------------------------ layers
@@ -79,6 +82,15 @@ class LN(eqx.Module):
 
     def __call__(self, x):
         return _ln(x) * self.g + self.b
+
+
+def sincos_2d(g, d):                             # fixed 2D sin-cos table (I-JEPA / MAE), (1, g*g, d)
+    def one(pos, dd):
+        om = 1.0 / 10000 ** (np.arange(dd // 2) / (dd / 2.0))
+        o = np.outer(pos.ravel(), om)
+        return np.concatenate([np.sin(o), np.cos(o)], 1)
+    yy, xx = np.meshgrid(np.arange(g, dtype=np.float64), np.arange(g, dtype=np.float64), indexing="ij")
+    return jnp.asarray(np.concatenate([one(yy, d // 2), one(xx, d // 2)], 1)[None], jnp.float32)
 
 
 def _ln(x, eps=1e-6):
@@ -136,12 +148,12 @@ class Encoder(eqx.Module):
 
     def __init__(self, key, cfg):
         k = jax.random.split(key, cfg.depth + 2)
-        self.embed, self.pos = Lin(k[0], cfg.pin, cfg.dim), 0.02 * jax.random.truncated_normal(k[1], -2, 2, (cfg.ntok, cfg.dim))
+        self.embed, self.pos = Lin(k[0], cfg.pin, cfg.dim), sincos_2d(cfg.grid, cfg.dim)
         self.blocks = [Block(k[2 + i], cfg.dim, cfg.heads, cfg.mlp) for i in range(cfg.depth)]
         self.norm = LN(cfg.dim)
 
     def __call__(self, img, idx, valid, p):      # one image; tokens idx (N,), valid (N,) -> (N, dim)
-        x = (self.embed(patchify(img, p)) + self.pos)[idx]
+        x = (self.embed(patchify(img, p)) + jax.lax.stop_gradient(self.pos[0]))[idx]
         for b in self.blocks:
             x = x + b.attn(x, valid)
             x = x + b.mlp(x)
@@ -163,7 +175,7 @@ class Predictor(eqx.Module):
         scaled = cfg.pscale if scaled is None else scaled
         k = jax.random.split(key, depth + 4)
         self.inp, self.out = Lin(k[0], cfg.dim, width), Lin(k[1], width, cfg.dim)
-        self.pos = 0.02 * jax.random.truncated_normal(k[2], -2, 2, (cfg.ntok, width))
+        self.pos = sincos_2d(cfg.grid, width)
         self.mask_tok = 0.02 * jax.random.truncated_normal(k[3], -2, 2, (width,))
         self.blocks = [Block(k[4 + i], width, heads, mlp) for i in range(depth)]
         self.norm = LN(width)
@@ -175,8 +187,9 @@ class Predictor(eqx.Module):
 
     # The predictor as embed -> 2L residual sublayers -> head, for ePC: h_j = h_{j-1} + scale * f_j(h_{j-1}).
     def embed_(self, ctx, cidx, tidx):
-        xc = self.inp(ctx) + self.pos[cidx]
-        xt = self.mask_tok[None] + self.pos[tidx]
+        pos = jax.lax.stop_gradient(self.pos[0])
+        xc = self.inp(ctx) + pos[cidx]
+        xt = self.mask_tok[None] + pos[tidx]
         return jnp.concatenate([xc, xt], 0)
 
     def f(self, j, h, kvalid):
@@ -230,7 +243,7 @@ def sample_masks(rng, B, cfg):
 
 # ------------------------------------------------------------------ loss, EMA, training
 def targets_of(tenc, imgs, tidx, cfg):           # layer-normed target-encoder features at the target tokens (B, K, NT, dim)
-    allidx = jnp.arange(cfg.ntok); allv = jnp.ones(cfg.ntok, bool)
+    allidx = jnp.arange(cfg.ntok); allv = jnp.ones(cfg.ntok, bool)   # imgs are already standardised
     t = _ln(jax.vmap(lambda im: tenc(im, allidx, allv, cfg.patch))(imgs))
     return jax.vmap(lambda tb, ib: tb[ib])(t, tidx)
 
@@ -264,17 +277,21 @@ def wd_mask(tree):                               # weight decay on weight matric
 def optimiser(cfg, steps_per_epoch):
     total = cfg.epochs * steps_per_epoch
     sch = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, max(1, cfg.warmup * steps_per_epoch), total, cfg.lr * 1e-3)
-    return optax.adamw(sch, weight_decay=cfg.wd, mask=wd_mask), total
+    return optax.chain(optax.clip_by_global_norm(cfg.clip), optax.adamw(sch, weight_decay=cfg.wd, mask=wd_mask)), total
 
 
-def augment(rng, X):                             # random crop (pad 4, reflect) + horizontal flip, numpy
-    B, H, W, C = X.shape
-    Xp = np.pad(X, ((0, 0), (4, 4), (4, 4), (0, 0)), mode="reflect")
-    r, c = rng.integers(0, 9, B), rng.integers(0, 9, B)
-    out = np.stack([Xp[i, r[i]:r[i] + H, c[i]:c[i] + W] for i in range(B)])
-    flip = rng.random(B) < 0.5
-    out[flip] = out[flip, :, ::-1]
-    return out
+@jax.jit
+def _augment(key, X):                            # area crop 0.3-1 (square), flip, bilinear to 32 px (data._one_view)
+    ks = jax.random.split(key, X.shape[0])
+    return jax.vmap(lambda k, im: D._one_view(k, im, im.shape[0], 0.3, 1.0, 0.0, True, 0.0, 0.0)[0])(ks, X)
+
+
+def augment(rng, X):
+    return _augment(jax.random.PRNGKey(int(rng.integers(0, 2 ** 31 - 1))), jnp.asarray(X))
+
+
+def standardise(X):
+    return (X - CIFAR_MEAN) / CIFAR_STD
 
 
 def init(cfg):
@@ -300,88 +317,128 @@ def _feat(e, x, ntok, patch):
     return jax.vmap(lambda im: e(im, idx, v, patch).mean(0))(x)
 
 
-def features(enc, X, cfg, chunk=500):            # mean-pooled encoder features of whole images
-    return np.concatenate([np.asarray(_feat(enc, jnp.asarray(X[i:i + chunk]), cfg.ntok, cfg.patch)) for i in range(0, len(X), chunk)])
+def features(enc, X, cfg, chunk=500):            # mean-pooled encoder features of whole (standardised) images
+    return np.concatenate([np.asarray(_feat(enc, jnp.asarray(standardise(X[i:i + chunk])), cfg.ntok, cfg.patch))
+                           for i in range(0, len(X), chunk)])
 
 
-def gate_report(tenc, cfg, Xtr, ytr, Xte, yte, n_probe=10000, seed=0):
-    import metrics as MT, probes as PR
-    rng = np.random.default_rng(seed); it = rng.choice(len(Xtr), min(n_probe, len(Xtr)), replace=False)
-    rand = Encoder(jax.random.PRNGKey(cfg.seed + 1000), cfg)
-    out = {}
-    for name, e in (("trained", tenc), ("random_init", rand)):
-        Ftr, Fte = features(e, Xtr[it], cfg), features(e, Xte, cfg)
-        s = np.linalg.svd(Fte - Fte.mean(0), compute_uv=False); pr = s ** 2 / np.sum(s ** 2)
+def eff_rank(F):
+    s = np.linalg.svd(F - F.mean(0), compute_uv=False); pr = s ** 2 / np.sum(s ** 2)
+    return float(np.exp(-np.sum(pr * np.log(pr + 1e-12))))
+
+
+def knn_both(Ftr, ytr, Fte, yte):                # cosine kNN on raw and on train-mean-centred features (review F3)
+    import metrics as MT
+    mu = Ftr.mean(0)
+    return {"knn": MT.knn_accuracy(Ftr, ytr, Fte, yte, k=20), "knn_centred": MT.knn_accuracy(Ftr - mu, ytr, Fte - mu, yte, k=20)}
+
+
+# V0 gate, criteria fixed before the run (plan_vit_ijepa.md rev 2): on the full 10k test set, the trained target encoder
+# must beat the best of 3 random inits and raw pixels by >= 0.05 on centred kNN and on a linear probe, reach an absolute
+# linear-probe floor of 0.55, and show no collapse (effective rank >= 0.1 dim, min/median dimension std >= 0.05).
+def gate_report(tenc, cfg, Xtr, ytr, Xte, yte):
+    import probes as PR
+    out = {"n_train": int(len(Xtr)), "n_test": int(len(Xte))}
+    encs = [("trained", tenc)] + [(f"random_init_{r}", Encoder(jax.random.PRNGKey(cfg.seed + 1000 + r), cfg)) for r in range(3)]
+    for name, e in encs:
+        Ftr, Fte = features(e, Xtr, cfg), features(e, Xte, cfg)
         sd = Fte.std(0)
-        out[name] = {"knn": MT.knn_accuracy(Ftr, ytr[it], Fte, yte, k=20), "linear": PR.class_probe(Ftr, ytr[it], Fte, yte)["accuracy"],
-                     "eff_rank": float(np.exp(-np.sum(pr * np.log(pr + 1e-12)))), "min_over_median_std": float(sd.min() / np.median(sd)),
-                     "finite": bool(np.all(np.isfinite(Fte)))}
-    Ptr, Pte = Xtr[it].reshape(len(it), -1), Xte.reshape(len(Xte), -1)
-    out["raw_pixels"] = {"knn": MT.knn_accuracy(Ptr, ytr[it], Pte, yte, k=20), "linear": PR.class_probe(Ptr, ytr[it], Pte, yte)["accuracy"]}
-    t, r = out["trained"], out["random_init"]
-    out["pass"] = bool(t["finite"] and t["knn"] > max(r["knn"], out["raw_pixels"]["knn"]) + 0.05
-                       and t["linear"] > max(r["linear"], out["raw_pixels"]["linear"]) + 0.05
+        out[name] = {**knn_both(Ftr, ytr, Fte, yte), "linear": PR.class_probe(Ftr, ytr, Fte, yte)["accuracy"], "eff_rank": eff_rank(Fte),
+                     "min_over_median_std": float(sd.min() / np.median(sd)), "finite": bool(np.all(np.isfinite(Fte)))}
+        print("GATE", name, json.dumps(out[name]), flush=True)
+    Ptr, Pte = standardise(Xtr).reshape(len(Xtr), -1), standardise(Xte).reshape(len(Xte), -1)
+    out["raw_pixels"] = {**knn_both(Ptr, ytr, Pte, yte), "linear": PR.class_probe(Ptr, ytr, Pte, yte)["accuracy"]}
+    t = out["trained"]; ref = [out[f"random_init_{r}"] for r in range(3)] + [out["raw_pixels"]]
+    out["bar_knn_centred"] = max(r["knn_centred"] for r in ref) + 0.05
+    out["bar_linear"] = max(max(r["linear"] for r in ref) + 0.05, 0.55)
+    out["pass"] = bool(t["finite"] and t["knn_centred"] >= out["bar_knn_centred"] and t["linear"] >= out["bar_linear"]
                        and t["eff_rank"] >= 0.1 * cfg.dim and t["min_over_median_std"] >= 0.05)
     return out
 
 
 # ------------------------------------------------------------------ main
-def save(path, obj, meta):
-    tmp = path + ".tmp"; eqx.tree_serialise_leaves(tmp, obj); os.replace(tmp, path)
-    json.dump(meta, open(path.replace(".eqx", ".json") + ".tmp", "w"), indent=1); os.replace(path.replace(".eqx", ".json") + ".tmp", path.replace(".eqx", ".json"))
+def _fsync_replace(tmp, path):
+    with open(tmp, "rb") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
-def train(cfg, out_dir, log_every=200, ckpt_every_epochs=10):
+def save_ckpt(path, state, step):                # step lives inside the pytree; previous checkpoint kept (review N5)
+    leaves = [x for x in jax.tree_util.tree_leaves(eqx.filter(state, eqx.is_inexact_array))]
+    assert all(bool(jnp.all(jnp.isfinite(x))) for x in leaves), "refusing to checkpoint non-finite weights"
+    tmp = path + ".tmp"; eqx.tree_serialise_leaves(tmp, (state, jnp.int32(step))); 
+    if os.path.exists(path):
+        os.replace(path, path.replace(".eqx", "_prev.eqx"))
+    _fsync_replace(tmp, path)
+
+
+def save_json(path, obj):
+    tmp = path + ".tmp"; json.dump(obj, open(tmp, "w"), indent=1); _fsync_replace(tmp, path)
+
+
+def train(cfg, out_dir, log_every=200, ckpt_every_epochs=5, knn_every_epochs=25):
     os.makedirs(out_dir, exist_ok=True)
-    Xtr, ytr, Xte, yte = D.load_cifar10(n_train=cfg.n_train, n_test=2000, seed=0)
+    Xtr, ytr, Xte, yte = D.load_cifar10(n_train=cfg.n_train, n_test=-1, seed=0)
     spe = len(Xtr) // cfg.batch
     opt, total = optimiser(cfg, spe)
     enc, pred, tenc = init(cfg)
     ost = opt.init(eqx.filter((enc, pred), eqx.is_inexact_array))
-    step0, log = 0, []
-    ck = os.path.join(out_dir, "ckpt.eqx")
-    if os.path.exists(ck):                       # resume
-        meta = json.load(open(ck.replace(".eqx", ".json")))
-        enc, pred, tenc, ost = eqx.tree_deserialise_leaves(ck, (enc, pred, tenc, ost))
-        step0, log = meta["step"], meta["log"]
+    state, step0, log = (enc, pred, tenc, ost), 0, []
+    ck, logf = os.path.join(out_dir, "ckpt.eqx"), os.path.join(out_dir, "train_log.json")
+    if os.path.exists(ck):                       # resume: weights, optimiser and step from the same file
+        prev = json.load(open(logf))
+        same = lambda d: {k: v for k, v in d.items() if k != "max_steps"}
+        assert same(prev["cfg"]) == same(json.loads(json.dumps(dc.asdict(cfg)))), "config changed since the checkpoint"
+        state, st = eqx.tree_deserialise_leaves(ck, (state, jnp.int32(0)))
+        step0, log = int(st), [r for r in prev["log"] if r["step"] <= int(st)]
         print("RESUME at step", step0, flush=True)
     stepf = make_step(cfg, opt)
-    rng = np.random.default_rng(cfg.seed * 7919 + step0)
     stop = cfg.max_steps if cfg.max_steps > 0 else total
-    t0 = time.time(); perm = rng.permutation(len(Xtr)); pi = 0
     commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    t0, epoch, perm = time.time(), -1, None
+    yk = np.random.default_rng(1).choice(len(Xtr), 5000, replace=False)
     for it in range(step0, stop):
-        if pi + cfg.batch > len(perm):
-            perm, pi = rng.permutation(len(Xtr)), 0
-        bi = perm[pi:pi + cfg.batch]; pi += cfg.batch
-        imgs = jnp.asarray(augment(rng, Xtr[bi]))
+        if it // spe != epoch:                   # per-epoch permutation from (seed, epoch): resume is exact (review N6)
+            epoch = it // spe; perm = np.random.default_rng([cfg.seed, epoch]).permutation(len(Xtr))
+        rng = np.random.default_rng([cfg.seed, 1, it])
+        bi = perm[(it % spe) * cfg.batch:(it % spe + 1) * cfg.batch]
+        imgs = standardise(augment(rng, Xtr[bi]))
         cidx, cvalid, tidx, tvalid = (jnp.asarray(a) for a in sample_masks(rng, cfg.batch, cfg))
-        m = jnp.float32(cfg.ema0 + (1.0 - cfg.ema0) * it / total)      # array, not a Python float: no recompiles
-        (enc, pred), tenc, ost, loss = stepf((enc, pred), tenc, ost, imgs, cidx, cvalid, tidx, tvalid, m)
-        if (it + 1) % log_every == 0 or it == step0:
-            lv = float(loss)
-            if not np.isfinite(lv):
-                print("DIVERGED at", it + 1, flush=True); return None
-            fs = features(tenc, Xte[:256], cfg)
-            row = {"step": it + 1, "loss": lv, "ema": m, "feat_std": float(fs.std(0).mean()), "sec": round(time.time() - t0)}
+        m = cfg.ema0 + (1.0 - cfg.ema0) * it / total
+        enc, pred, tenc, ost = state
+        (enc, pred), tenc, ost, loss = stepf((enc, pred), tenc, ost, imgs, cidx, cvalid, tidx, tvalid, jnp.float32(m))
+        state = (enc, pred, tenc, ost)
+        if (it + 1) % log_every == 0 or it + 1 == stop:
+            lv = float(loss); fs = features(tenc, Xte[:512], cfg)
+            row = {"step": it + 1, "loss": lv, "ema": float(m), "feat_std": float(fs.std(0).mean()), "eff_rank": eff_rank(fs), "sec": round(time.time() - t0)}
+            if (it + 1) % (knn_every_epochs * spe) < log_every:
+                row.update(knn_both(features(tenc, Xtr[yk], cfg), ytr[yk], features(tenc, Xte[:2000], cfg), yte[:2000]))
             log.append(row); print(json.dumps(row), flush=True)
+            if not np.isfinite(lv) or row["eff_rank"] < 5:
+                print("ABORT: non-finite loss or collapsed features", flush=True)
+                save_json(logf, {"log": log, "cfg": dc.asdict(cfg), "commit": commit, "aborted": True}); return None
         if (it + 1) % (ckpt_every_epochs * spe) == 0 or it + 1 == stop:
-            save(ck, (enc, pred, tenc, ost), {"step": it + 1, "log": log, "cfg": dc.asdict(cfg), "commit": commit})
-    rep = gate_report(tenc, cfg, Xtr, ytr, Xte, yte)
-    save(os.path.join(out_dir, "target_encoder.eqx"), tenc, {"cfg": dc.asdict(cfg), "commit": commit, "gate": rep, "steps": stop})
-    save(os.path.join(out_dir, "context_encoder.eqx"), enc, {"cfg": dc.asdict(cfg), "commit": commit, "steps": stop})
-    json.dump({"gate": rep, "log": log, "cfg": dc.asdict(cfg), "commit": commit}, open(os.path.join(out_dir, "v0_report.json"), "w"), indent=1)
-    print("GATE", json.dumps(rep), flush=True)
+            save_ckpt(ck, state, it + 1); save_json(logf, {"log": log, "cfg": dc.asdict(cfg), "commit": commit})
+    rep = gate_report(state[2], cfg, Xtr, ytr, Xte, yte)
+    for name, obj in (("target_encoder", state[2]), ("context_encoder", state[0])):
+        eqx.tree_serialise_leaves(os.path.join(out_dir, name + ".eqx"), obj)
+    import hashlib
+    hashes = {n: hashlib.sha256(open(os.path.join(out_dir, n + ".eqx"), "rb").read()).hexdigest() for n in ("target_encoder", "context_encoder")}
+    save_json(os.path.join(out_dir, "v0_report.json"), {"gate": rep, "log": log, "cfg": dc.asdict(cfg), "commit": commit, "sha256": hashes, "steps": stop})
+    print("GATE", json.dumps({k: rep[k] for k in ("pass", "bar_knn_centred", "bar_linear")}), json.dumps(rep["trained"]), flush=True)
     return rep
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True); ap.add_argument("--epochs", type=int, default=300)
-    ap.add_argument("--depth", type=int, default=6); ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--n-train", type=int, default=-1)
-    ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--batch", type=int, default=256)
+    ap.add_argument("--warmup", type=int, default=15); ap.add_argument("--depth", type=int, default=6)
+    ap.add_argument("--seed", type=int, default=0); ap.add_argument("--max-steps", type=int, default=0)
+    ap.add_argument("--n-train", type=int, default=-1); ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--batch", type=int, default=256); ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
-    cfg = VCfg(epochs=a.epochs, depth=a.depth, seed=a.seed, max_steps=a.max_steps, n_train=a.n_train, lr=a.lr, batch=a.batch)
+    cfg = VCfg(epochs=a.epochs, warmup=a.warmup, depth=a.depth, seed=a.seed, max_steps=a.max_steps, n_train=a.n_train, lr=a.lr, batch=a.batch)
     rep = train(cfg, a.out)
-    sys.exit(0 if (rep is not None and (rep["pass"] or cfg.max_steps > 0)) else 3)
+    if a.smoke:                                  # smoke: training finite and features not collapsed; gate printed, not required
+        sys.exit(0 if rep is not None else 3)
+    sys.exit(0 if (rep is not None and rep["pass"]) else 3)

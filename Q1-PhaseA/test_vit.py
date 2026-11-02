@@ -103,60 +103,108 @@ def train_smoke(cfg):
     check("compiled == eager loss gradient (GPU audit)", rel(gj, ge) < 1e-4 and cos(gj, ge) > 0.99999, f"rel {rel(gj, ge):.1e}")
 
 
-def epc_gates(cfg):
-    pc = dc.replace(cfg, pdepth=2, pdim=64, pmlp=128, pheads=4, pscale=True)
-    enc, pred, _ = V.init(pc); X, (ci, cv, ti, tv) = batch(pc, 4, seed=7)
+def leafwise(g, gb):                             # per-leaf cosine and norm ratio over array leaves (review EPC F2)
+    out = []
+    for a, b in zip(jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array)), jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array))):
+        nb = float(jnp.linalg.norm(b))
+        if nb < 1e-12:
+            continue
+        out.append((float(jnp.sum(a * b) / (jnp.linalg.norm(a) * nb + 1e-30)), float(jnp.linalg.norm(a)) / nb))
+    return min(c for c, _ in out), max(abs(r - 1) for _, r in out)
+
+
+def setup(pc, B=4, seed=7, trained=0):
+    enc, pred, _ = V.init(pc); X, (ci, cv, ti, tv) = batch(pc, B, seed=seed)
     ctx = jax.vmap(lambda im, a, b: enc(im, a, b, pc.patch))(X, ci, cv)
-    Y = 0.5 * jax.random.normal(jax.random.PRNGKey(9), ti.shape + (pc.dim,))
-    # zero errors == forward pass
-    hs = P.feedforward_states(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0])
-    yf = pred.head(hs[-1], ti.shape[-1]); yp = pred(ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0])
-    check("ePC: zero errors reproduce the predictor's forward pass", rel(yf, yp) < 1e-6)
-    # error energy == local energy at the ePC state
-    hs, u, hist = P.epc_one(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0], Y[0, 0], 4.0, 0.0, 30)
-    El = P.local_energy(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0], hs, u, Y[0, 0], 4.0)
-    check("ePC: error energy == local (state) energy at the relaxed state", abs(float(hist[-1] - El)) / float(El) < 1e-5, f"{float(hist[-1]):.5f} vs {float(El):.5f}")
-    hh = np.asarray(hist); check("ePC: energy non-increasing (alpha 0, smooth GELU/softmax network)", np.all(np.diff(hh) <= 1e-6 * np.abs(hh[:-1])), f"{hh[0]:.4f} -> {hh[-1]:.4f}")
-    # same minimum as sPC (smooth energy; both from the feedforward state)
-    he, ue, _ = P.epc_one(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0], Y[0, 0], 1.0, 0.0, 3000)
-    hp, up, _ = P.spc_one(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0], Y[0, 0], 1.0, 0.0, 30000)
-    gE = jax.grad(lambda h: P.local_energy(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0], h, jnp.zeros_like(h), Y[0, 0], 1.0))
-    s0 = float(jnp.linalg.norm(gE(P.feedforward_states(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0]))))
-    st = float(jnp.linalg.norm(gE(he))) / s0
-    check("ePC and sPC reach the same minimum (rho 1), ePC stationary", rel(he, hp) < 1e-3 and st < 1e-3, f"state rel {rel(he, hp):.1e}, stationarity {st:.1e}")
-    # large-rho limit == BP, weights and context input
-    gb, xb, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "bp", want_input=True)
-    gL, xL, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=1e4, alpha=0.0, T=60, want_input=True)
-    check("ePC at rho 1e4: weight gradient == BP (cos > 0.999, ratio within 2%)", cos(gL, gb) > 0.999 and abs(float(jnp.linalg.norm(flat(gL)) / jnp.linalg.norm(flat(gb))) - 1) < 0.02,
-          f"cos {cos(gL, gb):.5f}")
-    cx = float(jnp.sum(xL * xb) / (jnp.linalg.norm(xL) * jnp.linalg.norm(xb)))
-    check("ePC at rho 1e4: context-input gradient == BP's (cos > 0.999)", cx > 0.999, f"cos {cx:.5f}")
-    for rho, al in ((16.0, 1.0), (64.0, 1.0), (4.0, 0.0), (1.0, 0.0)):
-        g, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=rho, alpha=al, T=20)
-        print(f"     report: ePC rho {rho:g} alpha {al:g} T 20 (random weights): cos to BP {cos(g, gb):.4f}, ratio {float(jnp.linalg.norm(flat(g)) / jnp.linalg.norm(flat(gb))):.3f}")
+    Y = V._ln(jax.random.normal(jax.random.PRNGKey(9), ti.shape + (pc.dim,)))
+    if trained:                                  # non-trivial weights: BP steps on (ctx, Y) so softmax/LN/head are active
+        import optax
+        opt = optax.adam(3e-3); st = opt.init(eqx.filter(pred, eqx.is_inexact_array))
+        @eqx.filter_jit
+        def stp(q, st):
+            g = P.grads(q, ctx, ci, cv, ti, tv, Y, "bp")[0]
+            u, st = opt.update(g, st, eqx.filter(q, eqx.is_inexact_array)); return eqx.apply_updates(q, u), st
+        for _ in range(trained):
+            pred, st = stp(pred, st)
+    return pred, ctx, ci, cv, ti, tv, Y
+
+
+def epc_gates(cfg):
+    for tag, pc, trained in (("depth 2, init", dc.replace(cfg, pdepth=2, pdim=64, pmlp=128, pheads=4, pscale=True), 0),
+                             ("depth 6, trained 150 BP steps", dc.replace(cfg, pdepth=6, pdim=64, pmlp=128, pheads=4, pscale=True), 150)):
+        pred, ctx, ci, cv, ti, tv, Y = setup(pc, trained=trained)
+        a1 = (pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0])
+        hs = P.feedforward_states(*a1)
+        check(f"[{tag}] ePC: zero errors reproduce the predictor's forward pass", rel(pred.head(hs[-1], ti.shape[-1]), pred(*a1)) < 1e-5)
+        for al in (0.0, 1.0):
+            hs, u, h = P.epc_one(*a1, Y[0, 0], 4.0, al, 30, hist=True)
+            El = P.local_energy(*a1, hs, u, Y[0, 0], 4.0); hh = np.asarray(h)
+            check(f"[{tag}] ePC alpha {al:g}: error energy == local (state) energy, multipliers included", abs(float(h[-1] - El)) / float(El) < 1e-5, f"{float(h[-1]):.5f} vs {float(El):.5f}")
+            if al == 0.0:
+                check(f"[{tag}] ePC: energy non-increasing", np.all(np.diff(hh) <= 1e-5 * hh[0]), f"{hh[0]:.4f} -> {hh[-1]:.4f}")
+        # same minimum as sPC (rho 1, no multipliers)
+        he, _, _ = P.epc_one(*a1, Y[0, 0], 1.0, 0.0, 3000)
+        hp, _, _ = P.spc_one(*a1, Y[0, 0], 1.0, 0.0, 30000)
+        gE = jax.grad(lambda h_: P.local_energy(*a1, h_, jnp.zeros_like(h_), Y[0, 0], 1.0))
+        st = float(jnp.linalg.norm(gE(he))) / float(jnp.linalg.norm(gE(P.feedforward_states(*a1))))
+        check(f"[{tag}] ePC and sPC reach the same minimum (rho 1), ePC stationary", rel(he, hp) < 1e-3 and st < 1e-3, f"state rel {rel(he, hp):.1e}, stationarity {st:.1e}")
+        gb, xb, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "bp", want_input=True)
+        gL, xL, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=1e4, alpha=0.0, T=60, want_input=True)
+        cmin, rmax = leafwise(gL, gb)
+        check(f"[{tag}] ePC at rho 1e4: every weight leaf == BP (cos > 0.999, ratio within 2%)", cmin > 0.999 and rmax < 0.02, f"min cos {cmin:.5f}, max |ratio-1| {rmax:.4f}")
+        cx = float(jnp.sum(xL * xb) / (jnp.linalg.norm(xL) * jnp.linalg.norm(xb))); rx = float(jnp.linalg.norm(xL) / jnp.linalg.norm(xb))
+        check(f"[{tag}] ePC at rho 1e4: context-input gradient == BP's", cx > 0.999 and abs(rx - 1) < 0.02, f"cos {cx:.5f} ratio {rx:.4f}")
+        # ALM gate (review EPC F1): multipliers must bring moderate-rho credit close to BP, and beat the alpha 0 control
+        gA, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=4.0, alpha=1.0, T=400)
+        g0, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=4.0, alpha=0.0, T=400)
+        rA = float(jnp.linalg.norm(flat(gA)) / jnp.linalg.norm(flat(gb)))
+        check(f"[{tag}] ePC-ALM rho 4, T 400: weight gradient == BP (cos > 0.99, ratio within 5%) and alpha 0 is clearly worse",
+              cos(gA, gb) > 0.99 and abs(rA - 1) < 0.05 and cos(g0, gb) < cos(gA, gb) - 0.01, f"ALM cos {cos(gA, gb):.4f} ratio {rA:.3f}; alpha 0 cos {cos(g0, gb):.4f}")
+        for rho, al in ((16.0, 1.0), (64.0, 1.0), (4.0, 0.0), (1.0, 0.0)):
+            g, _, en = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=rho, alpha=al, T=20)
+            fin = all(bool(jnp.all(jnp.isfinite(x))) for x in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array)))
+            check(f"[{tag}] ePC rho {rho:g} alpha {al:g} T 20: finite, energy lower at the end for every block", fin and bool(jnp.all(en[..., 1] <= en[..., 0] * (1 + 1e-5))),
+                  f"cos to BP {cos(g, gb):.4f}, ratio {float(jnp.linalg.norm(flat(g)) / jnp.linalg.norm(flat(gb))):.3f}")
+    # padding invariance of the PC gradients (review EPC F4)
+    pc = dc.replace(cfg, pdepth=2, pdim=64, pmlp=128, pheads=4, pscale=True)
+    pred, ctx, ci, cv, ti, tv, Y = setup(pc)
+    ci2 = jnp.where(cv, ci, (ci + 5) % pc.ntok); ti2 = jnp.where(tv, ti, (ti + 3) % pc.ntok)
+    ctx2 = jnp.where(cv[..., None], ctx, 100.0); Y2 = jnp.where(tv[..., None], Y, 100.0)
+    for meth in ("epc", "spc"):
+        g1, x1, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, meth, rho=4.0, alpha=1.0, T=20, want_input=True)
+        g2, x2, _ = P.grads(pred, ctx2, ci2, cv, ti2, tv, Y2, meth, rho=4.0, alpha=1.0, T=20, want_input=True)
+        pad0 = float(jnp.max(jnp.abs(jnp.where(cv[..., None], 0.0, x2))))
+        check(f"{meth}: padded indices, contexts and targets cannot change the gradients; padded context rows get zero gradient",
+              rel(g2, g1) < 1e-5 and float(jnp.max(jnp.abs(jnp.where(cv[..., None], x2 - x1, 0.0)))) < 1e-5 * float(jnp.max(jnp.abs(x1))) and pad0 == 0.0,
+              f"rel {rel(g2, g1):.1e}")
     with jax.disable_jit():
         ge = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=64.0, alpha=1.0, T=5)[0]
-    gj5 = eqx.filter_jit(lambda q: P.grads(q, ctx, ci, cv, ti, tv, Y, "epc", rho=64.0, alpha=1.0, T=5)[0])(pred)
-    check("ePC gradient: compiled == eager (GPU audit, T 5)", rel(gj5, ge) < 1e-4, f"rel {rel(gj5, ge):.1e}")
+    gj = eqx.filter_jit(lambda q, r, a: P.grads(q, ctx, ci, cv, ti, tv, Y, "epc", rho=r, alpha=a, T=5)[0])(pred, jnp.float32(64.0), jnp.float32(1.0))
+    check("ePC gradient: compiled (traced rho, alpha) == eager (GPU audit, T 5)", rel(gj, ge) < 1e-4, f"rel {rel(gj, ge):.1e}")
 
 
-def timing(cfg):
+def scale(cfg):                                  # real batch: memory and time per step (review N3/N4)
+    cap = jax.devices()[0].memory_stats().get("bytes_limit", 0) if jax.devices()[0].platform == "gpu" else 0
     for depth in (6, 10):
         pc = dc.replace(cfg, pdepth=depth, pdim=192, pmlp=768, pheads=3, pscale=True)
-        enc, pred, _ = V.init(pc); X, (ci, cv, ti, tv) = batch(pc, 64, seed=11)
+        enc, pred, _ = V.init(pc); X, (ci, cv, ti, tv) = batch(pc, 256, seed=11)
         ctx = jax.vmap(lambda im, a, b: enc(im, a, b, pc.patch))(X, ci, cv)
-        Y = jax.random.normal(jax.random.PRNGKey(3), ti.shape + (pc.dim,))
+        Y = V._ln(jax.random.normal(jax.random.PRNGKey(3), ti.shape + (pc.dim,)))
         for meth in ("bp", "epc"):
-            f = eqx.filter_jit(lambda q: P.grads(q, ctx, ci, cv, ti, tv, Y, meth, rho=64.0, alpha=1.0, T=20)[0])
-            jax.block_until_ready(f(pred)); t0 = time.time()
-            for _ in range(3):
-                jax.block_until_ready(f(pred))
-            print(f"     report: predictor depth {depth} width 192, batch 64 x 4 blocks, {meth}: {(time.time() - t0) / 3:.3f} s/step", flush=True)
+            f = eqx.filter_jit(lambda q, r, a: P.grads(q, ctx, ci, cv, ti, tv, Y, meth, rho=r, alpha=a, T=20, want_input=True)[:2])
+            jax.block_until_ready(f(pred, jnp.float32(64.0), jnp.float32(1.0))); t0 = time.time()
+            for _ in range(2):
+                jax.block_until_ready(f(pred, jnp.float32(64.0), jnp.float32(1.0)))
+            dt = (time.time() - t0) / 2
+            peak = jax.devices()[0].memory_stats().get("peak_bytes_in_use", 0) if cap else 0
+            print(f"     report: predictor depth {depth} width 192, batch 256 x 4 blocks, {meth}: {dt:.3f} s/step, peak {peak / 2**30:.2f} GiB", flush=True)
+            if cap:
+                check(f"depth {depth} {meth}: real batch fits in memory (peak < 85% of {cap / 2**30:.1f} GiB)", peak < 0.85 * cap, f"{peak / 2**30:.2f} GiB")
 
 
 def main():
     cfg = V.VCfg()
-    masks(cfg); attention(cfg); patches(cfg); padding_and_ema(cfg); train_smoke(cfg); epc_gates(cfg); timing(cfg)
+    masks(cfg); attention(cfg); patches(cfg); padding_and_ema(cfg); train_smoke(cfg); epc_gates(cfg); scale(cfg)
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
 
