@@ -148,7 +148,9 @@ class Encoder(eqx.Module):
 
     def __init__(self, key, cfg):
         k = jax.random.split(key, cfg.depth + 2)
-        self.embed, self.pos = Lin(k[0], cfg.pin, cfg.dim), sincos_2d(cfg.grid, cfg.dim)
+        lim = math.sqrt(6.0 / (cfg.pin + cfg.dim))   # xavier-uniform patch embedding, as MAE / I-JEPA (rev 7)
+        self.embed = eqx.tree_at(lambda l: l.W, Lin(k[0], cfg.pin, cfg.dim), jax.random.uniform(k[0], (cfg.dim, cfg.pin), minval=-lim, maxval=lim))
+        self.pos = sincos_2d(cfg.grid, cfg.dim)
         self.blocks = [Block(k[2 + i], cfg.dim, cfg.heads, cfg.mlp) for i in range(cfg.depth)]
         self.norm = LN(cfg.dim)
 
@@ -322,6 +324,17 @@ def features(enc, X, cfg, chunk=500):            # mean-pooled encoder features 
                            for i in range(0, len(X), chunk)])
 
 
+@eqx.filter_jit
+def _tokfeat(e, x, ntok, patch):
+    idx, v = jnp.arange(ntok), jnp.ones(ntok, bool)
+    return jax.vmap(lambda im: _ln(e(im, idx, v, patch)))(x)
+
+
+def pos_share(enc, X, cfg):                      # share of (layer-normed) token-feature variance explained by position alone
+    T = np.asarray(_tokfeat(enc, jnp.asarray(standardise(X)), cfg.ntok, cfg.patch))      # (B, ntok, dim)
+    return float(np.var(T.mean(0), axis=0).sum() / np.var(T.reshape(-1, T.shape[-1]), axis=0).sum())
+
+
 def eff_rank(F):
     s = np.linalg.svd(F - F.mean(0), compute_uv=False); pr = s ** 2 / np.sum(s ** 2)
     return float(np.exp(-np.sum(pr * np.log(pr + 1e-12))))
@@ -408,13 +421,15 @@ def train(cfg, out_dir, log_every=200, ckpt_every_epochs=5, knn_every_epochs=25)
         enc, pred, tenc, ost = state
         (enc, pred), tenc, ost, loss = stepf((enc, pred), tenc, ost, imgs, cidx, cvalid, tidx, tvalid, jnp.float32(m))
         state = (enc, pred, tenc, ost)
-        if (it + 1) % log_every == 0 or it + 1 == stop:
+        if (it + 1) % log_every == 0 or it + 1 == stop or it == step0:
             lv = float(loss); fs = features(tenc, Xte[:512], cfg)
-            row = {"step": it + 1, "loss": lv, "ema": float(m), "feat_std": float(fs.std(0).mean()), "eff_rank": eff_rank(fs), "sec": round(time.time() - t0)}
+            row = {"step": it + 1, "loss": lv, "ema": float(m), "feat_std": float(fs.std(0).mean()), "eff_rank": eff_rank(fs),
+                   "pos_share": pos_share(tenc, Xte[:256], cfg), "sec": round(time.time() - t0)}
             if (it + 1) % (knn_every_epochs * spe) < log_every:
                 row.update(knn_both(features(tenc, Xtr[yk], cfg), ytr[yk], features(tenc, Xte[:2000], cfg), yte[:2000]))
             log.append(row); print(json.dumps(row), flush=True)
-            if not np.isfinite(lv) or row["eff_rank"] < 5:
+            r0 = log[0]["eff_rank"] if log else row["eff_rank"]
+            if not np.isfinite(lv) or (it + 1 > 1000 and row["eff_rank"] < max(2.0, 0.2 * r0)):   # relative, after 1000 steps
                 print("ABORT: non-finite loss or collapsed features", flush=True)
                 save_json(logf, {"log": log, "cfg": dc.asdict(cfg), "commit": commit, "aborted": True}); return None
         if (it + 1) % (ckpt_every_epochs * spe) == 0 or it + 1 == stop:

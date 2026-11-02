@@ -88,6 +88,16 @@ def padding_and_ema(cfg):
     check("masked_mse == manual mean over valid tokens", abs(float(V.masked_mse(P_, Y_, tv[:2])) - manual) < 1e-6)
 
 
+def init_scale(cfg):                             # rev 7: content, not position, must dominate the target features at init
+    rng = np.random.default_rng(0)
+    X = rng.random((256, cfg.img, cfg.img, 3), dtype=np.float32)
+    enc, _, _ = V.init(cfg)
+    ps = V.pos_share(enc, X, cfg)
+    w = float(jnp.std(enc.embed.W))
+    check("init: patch embedding at Xavier scale; position explains < 50% of target-feature variance on random images",
+          abs(w - math.sqrt(2.0 / (cfg.pin + cfg.dim))) < 0.01 and ps < 0.5, f"embed std {w:.4f}, position share {ps:.3f}")
+
+
 def train_smoke(cfg):
     enc, pred, tenc = V.init(cfg); X, (ci, cv, ti, tv) = batch(cfg, 32, seed=5)
     opt, _ = V.optimiser(dc.replace(cfg, warmup=0, epochs=1), 100)
@@ -239,7 +249,7 @@ def scale(cfg):                                  # real batch: memory and time p
 
 def main():
     cfg = V.VCfg()
-    masks(cfg); attention(cfg); patches(cfg); padding_and_ema(cfg); train_smoke(cfg); epc_gates(cfg); scale(cfg)
+    masks(cfg); attention(cfg); patches(cfg); padding_and_ema(cfg); init_scale(cfg); train_smoke(cfg); epc_gates(cfg); scale(cfg)
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]
 
