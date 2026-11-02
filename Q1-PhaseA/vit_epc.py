@@ -62,7 +62,7 @@ def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho):
 
 
 # Returns states, multipliers and (energy at start, energy at end); the energy is not evaluated inside the loop (cost).
-def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=8, hist=False):
+def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=12, hist=False):
     kv, row, tm = _masks(cvalid, tvalid)
     nt = tidx.shape[0]
     yhat = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], nt)
@@ -102,6 +102,14 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
         return (h, u), (E(h, u) if hist else None)
     (h, u), H = jax.lax.scan(step, (h0, u0), jnp.arange(T))
     return h, u, (H if hist else jnp.stack([E(h0, u0), E(h, u)]))
+
+
+# Output gain of one (image, target block): lambda_max(J^T J) of the valid predictions with respect to all node errors at
+# zero error.  ePC behaves like BP only when rho >> gain; reported by the gates and logged in training.
+def gain(p, ctx, cidx, cvalid, tidx, tvalid, gn_iters=50):
+    kv, row, tm = _masks(cvalid, tvalid)
+    f = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], tidx.shape[0]) * tm
+    return _gn_max(f, jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1])), gn_iters)
 
 
 def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c):

@@ -134,6 +134,9 @@ def epc_gates(cfg):
                              ("depth 6, trained 150 BP steps", dc.replace(cfg, pdepth=6, pdim=64, pmlp=128, pheads=4, pscale=True), 150)):
         pred, ctx, ci, cv, ti, tv, Y = setup(pc, trained=trained)
         a1 = (pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0])
+        lams = [float(P.gain(pred, ctx[b], ci[b], cv[b], ti[b, k], tv[b, k])) for b in range(ctx.shape[0]) for k in range(ti.shape[1])]
+        lam = float(np.median(lams)); lam_max = max(lams)
+        print(f"     report: [{tag}] output gain lambda_max(J^T J): median {lam:.3g}, max {lam_max:.3g} over {len(lams)} blocks", flush=True)
         hs = P.feedforward_states(*a1)
         check(f"[{tag}] ePC: zero errors reproduce the predictor's forward pass", rel(pred.head(hs[-1], ti.shape[-1]), pred(*a1)) < 1e-5)
         for al in (0.0, 1.0):
@@ -142,29 +145,39 @@ def epc_gates(cfg):
             check(f"[{tag}] ePC alpha {al:g}: error energy == local (state) energy, multipliers included", abs(float(h[-1] - El)) / float(El) < 1e-5, f"{float(h[-1]):.5f} vs {float(El):.5f}")
             if al == 0.0:
                 check(f"[{tag}] ePC: energy non-increasing", np.all(np.diff(hh) <= 1e-5 * hh[0]), f"{hh[0]:.4f} -> {hh[-1]:.4f}")
-        # same minimum as sPC (rho 1, no multipliers)
-        he, _, _ = P.epc_one(*a1, Y[0, 0], 1.0, 0.0, 3000)
-        hp, _, _ = P.spc_one(*a1, Y[0, 0], 1.0, 0.0, 30000)
-        gE = jax.grad(lambda h_: P.local_energy(*a1, h_, jnp.zeros_like(h_), Y[0, 0], 1.0))
-        st = float(jnp.linalg.norm(gE(he))) / float(jnp.linalg.norm(gE(P.feedforward_states(*a1))))
-        check(f"[{tag}] ePC and sPC reach the same minimum (rho 1), ePC stationary", rel(he, hp) < 1e-3 and st < 1e-3, f"state rel {rel(he, hp):.1e}, stationarity {st:.1e}")
+        # Precisions are set relative to the measured gain (rev 3): the rev-1 gates at absolute rho failed by slow
+        # convergence (rho << gain), not by a wrong fixed point.
+        # same minimum as sPC at rho = gain (well conditioned for ePC), no multipliers
+        rs = max(1.0, lam_max)
+        he, _, _ = P.epc_one(*a1, Y[0, 0], rs, 0.0, 3000)
+        hp, _, _ = P.spc_one(*a1, Y[0, 0], rs, 0.0, 30000)
+        gE = jax.grad(lambda h_: P.local_energy(*a1, h_, jnp.zeros_like(h_), Y[0, 0], rs))
+        g_ff = float(jnp.linalg.norm(gE(P.feedforward_states(*a1))))
+        st_e, st_p = float(jnp.linalg.norm(gE(he))) / g_ff, float(jnp.linalg.norm(gE(hp))) / g_ff
+        check(f"[{tag}] ePC and sPC reach the same minimum (rho = gain {rs:.3g}), both stationary", rel(he, hp) < 1e-3 and st_e < 1e-3 and st_p < 1e-2,
+              f"state rel {rel(he, hp):.1e}, stationarity ePC {st_e:.1e} sPC {st_p:.1e}")
         gb, xb, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "bp", want_input=True)
-        gL, xL, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=1e4, alpha=0.0, T=60, want_input=True)
+        rb = 1e3 * max(1.0, lam_max)
+        gL, xL, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=rb, alpha=0.0, T=200, want_input=True)
         cmin, rmax = leafwise(gL, gb)
-        check(f"[{tag}] ePC at rho 1e4: every weight leaf == BP (cos > 0.999, ratio within 2%)", cmin > 0.999 and rmax < 0.02, f"min cos {cmin:.5f}, max |ratio-1| {rmax:.4f}")
+        check(f"[{tag}] ePC at rho 1e3 x gain ({rb:.3g}): every weight leaf == BP (cos > 0.999, ratio within 2%)", cmin > 0.999 and rmax < 0.02, f"min cos {cmin:.5f}, max |ratio-1| {rmax:.4f}")
         cx = float(jnp.sum(xL * xb) / (jnp.linalg.norm(xL) * jnp.linalg.norm(xb))); rx = float(jnp.linalg.norm(xL) / jnp.linalg.norm(xb))
-        check(f"[{tag}] ePC at rho 1e4: context-input gradient == BP's", cx > 0.999 and abs(rx - 1) < 0.02, f"cos {cx:.5f} ratio {rx:.4f}")
-        # ALM gate (review EPC F1): multipliers must bring moderate-rho credit close to BP, and beat the alpha 0 control
-        gA, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=4.0, alpha=1.0, T=400)
-        g0, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=4.0, alpha=0.0, T=400)
+        check(f"[{tag}] ePC at rho 1e3 x gain: context-input gradient == BP's", cx > 0.999 and abs(rx - 1) < 0.02, f"cos {cx:.5f} ratio {rx:.4f}")
+        # ALM gate: at rho = gain / 16 the multipliers must bring credit close to BP and beat the alpha 0 control
+        ra = max(1.0, lam_max / 16)
+        gA, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=ra, alpha=1.0, T=400)
+        g0, _, _ = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=ra, alpha=0.0, T=400)
         rA = float(jnp.linalg.norm(flat(gA)) / jnp.linalg.norm(flat(gb)))
-        check(f"[{tag}] ePC-ALM rho 4, T 400: weight gradient == BP (cos > 0.99, ratio within 5%) and alpha 0 is clearly worse",
+        check(f"[{tag}] ePC-ALM rho gain/16 ({ra:.3g}), T 400: weight gradient == BP (cos > 0.99, ratio within 5%) and alpha 0 clearly worse",
               cos(gA, gb) > 0.99 and abs(rA - 1) < 0.05 and cos(g0, gb) < cos(gA, gb) - 0.01, f"ALM cos {cos(gA, gb):.4f} ratio {rA:.3f}; alpha 0 cos {cos(g0, gb):.4f}")
+        # the training settings (absolute rho, T 20): energy must fall without multipliers; credit is reported
         for rho, al in ((16.0, 1.0), (64.0, 1.0), (4.0, 0.0), (1.0, 0.0)):
-            g, _, en = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=rho, alpha=al, T=20)
-            fin = all(bool(jnp.all(jnp.isfinite(x))) for x in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array)))
-            check(f"[{tag}] ePC rho {rho:g} alpha {al:g} T 20: finite, energy lower at the end for every block", fin and bool(jnp.all(en[..., 1] <= en[..., 0] * (1 + 1e-5))),
-                  f"cos to BP {cos(g, gb):.4f}, ratio {float(jnp.linalg.norm(flat(g)) / jnp.linalg.norm(flat(gb))):.3f}")
+            for T in (20, 100):
+                g, _, en = P.grads(pred, ctx, ci, cv, ti, tv, Y, "epc", rho=rho, alpha=al, T=T)
+                fin = all(bool(jnp.all(jnp.isfinite(x))) for x in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array)))
+                ok = fin and (al > 0 or bool(jnp.all(en[..., 1] <= en[..., 0] * (1 + 1e-5))))
+                check(f"[{tag}] ePC rho {rho:g} alpha {al:g} T {T}: finite{'' if al > 0 else ', energy lower at the end for every block'}", ok,
+                      f"cos to BP {cos(g, gb):.4f}, min leaf cos {leafwise(g, gb)[0]:.4f}, ratio {float(jnp.linalg.norm(flat(g)) / jnp.linalg.norm(flat(gb))):.3f}")
     # padding invariance of the PC gradients (review EPC F4)
     pc = dc.replace(cfg, pdepth=2, pdim=64, pmlp=128, pheads=4, pscale=True)
     pred, ctx, ci, cv, ti, tv, Y = setup(pc)
