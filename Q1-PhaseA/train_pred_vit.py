@@ -140,9 +140,9 @@ def eval_masks(n, vc, bs=200, per=50):           # one mask shape per 50 images 
 def evaluate(pred, enc, tenc, vc, Xev, yev, Xknn, yknn, bs=200):
     masks = eval_masks(len(Xev), vc, bs)
     conds = {"clean": ("none", 0.0), "ctx_drop25": ("none", 0.25), "ctx_drop50": ("none", 0.5), "square": ("square", 0.0), "noise": ("noise", 0.0)}
-    out, per = {}, {}
+    out, per, Fp, Fy = {}, {}, [], []           # Fp / Fy: clean-condition pooled predictions and targets (kNN)
     for name, (kind, frac) in conds.items():
-        r2 = np.random.default_rng(EVAL_SEED + 1); rows, Fp, Fy = [], [], []
+        r2 = np.random.default_rng(EVAL_SEED + 1); rows = []
         for i, (ci, cv, ti, tv) in enumerate(masks):
             Xb = Xev[i * bs:(i + 1) * bs]
             if frac > 0:
