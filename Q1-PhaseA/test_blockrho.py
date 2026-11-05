@@ -29,7 +29,9 @@ def batch(B, seed, X0=45000):
     ci, cv, ti, tv = (jnp.asarray(x) for x in V.sample_masks(rng, B, vc))
     im = jnp.asarray(V.standardise(X)); ctx, Y = A.encode(enc, tenc, im, im, ci, cv, ti, vc)
     return ctx, ci, cv, ti, tv, Y
-gains = lambda p, b, it: jax.vmap(lambda a, c1, v1, t1, w1: jax.vmap(lambda t2, w2: P.gain(p, a, c1, v1, t2, w2, gn_iters=it))(t1, w1))(*b[:5])
+def gains(p, b, it, chunk=8):                    # chunked over images (the GPU is shared with a training job)
+    f = eqx.filter_jit(lambda q, *x: jax.vmap(lambda a, c1, v1, t1, w1: jax.vmap(lambda t2, w2: P.gain(q, a, c1, v1, t2, w2, gn_iters=it))(t1, w1))(*x))
+    n = b[0].shape[0]; return jnp.concatenate([f(p, *(x[i:i + chunk] for x in b[:5])) for i in range(0, n, chunk)])
 
 # G0 regression against the pre-change code (commit 421f84f): the running arms' path must be unchanged
 spec = importlib.util.spec_from_file_location("vit_epc_old", os.path.join(OLD, "Q1-PhaseA/vit_epc.py")); PO = importlib.util.module_from_spec(spec)
