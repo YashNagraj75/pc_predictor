@@ -9,7 +9,9 @@ import data as D, vit_ijepa as V, vit_epc as P
 #   bp | epc_alm_k4 (ePC + multipliers, rho = gain/4) | epc_k4 / epc_k16 (no multipliers, rho = gain/4, gain/16).
 # rho tracks the output gain, re-measured every GAIN_EVERY steps (median over 16 blocks of the current batch).
 # rev 2 (3 reviewers): gain re-measured every 10 steps for the first 500 (it grows ~1e4x in warmup), then every 50.
-ARMS = {"bp": (None, 0.0), "epc_alm_k4": (4.0, 1.0), "epc_k4": (4.0, 0.0), "epc_k16": (16.0, 0.0)}
+ARMS = {"bp": (None, 0.0), "epc_alm_k4": (4.0, 1.0), "epc_k4": (4.0, 0.0), "epc_k16": (16.0, 0.0), "epc_alm_blk4": (4.0, 1.0)}
+# epc_alm_blk4 (user-approved follow-up to findings/40): ePC-ALM with a per-block rho = max(1, own gain / 4).
+BLOCK = {"epc_alm_blk4"}
 LOG_EVERY, EVAL_SEED = 200, 12345
 gain_due = lambda it: it % 10 == 0 if it < 500 else it % 50 == 0
 V0_DIR = "runs_vit/v0_d6_s0"
@@ -72,19 +74,21 @@ def gain_stats(pred, ctx, cidx, cvalid, tidx, tvalid):         # 8 images x 4 bl
 def make_step(a, opt):
     k, alpha = ARMS[a.arm]
     meth = "bp" if k is None else "epc"
+    rr = float(k) if a.arm in BLOCK else 0.0
 
     @eqx.filter_jit
     def step(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, rho):
-        g, _, en = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters)
+        g, _, en = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters,
+                           rho_rel=rr)
         upd, ost = opt.update(g, ost, eqx.filter(pred, eqx.is_inexact_array))
         return eqx.apply_updates(pred, upd), ost, en
     return step
 
 
 @eqx.filter_jit
-def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters):  # cos / ratio to BP, per leaf
+def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0):  # cos / ratio to BP, per leaf
     gb = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "bp", chunk=chunk)[0]
-    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "epc", rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters)[0]
+    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "epc", rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel)[0]
     lb = jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array)); le = jax.tree_util.tree_leaves(eqx.filter(ge, eqx.is_inexact_array))
     fb, fe = jnp.concatenate([x.ravel() for x in lb]), jnp.concatenate([x.ravel() for x in le])
     cl = jnp.stack([jnp.sum(x * y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y) + 1e-30) for x, y in zip(le, lb)])
@@ -231,9 +235,11 @@ def run(a, out_dir):
                    "peak_gib": round(jax.devices()[0].memory_stats().get("peak_bytes_in_use", 0) / 2 ** 30, 2)}
             if k is not None:
                 row.update({"gain_min": gs[0], "gain_med": gs[1], "gain_max": gs[2]})
+                if a.arm in BLOCK:                   # "rho" above is then only the median-rule reference; each block uses its own
+                    row.update({"rho_mode": "per-block", "rho_blk_min": max(1.0, gs[0] / k), "rho_blk_max": max(1.0, gs[2] / k)})
                 cx, cy = encode(enc, tenc, jnp.asarray(V.standardise(Xcr)), jnp.asarray(V.standardise(Xcr)), jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), vc)
                 c1, rr, cmin, cl = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
-                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters)
+                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0)
                 row.update({"cos_bp": float(c1), "ratio_bp": float(rr), "min_leaf_cos": float(cmin), "leaf_cos": [round(float(x), 4) for x in cl]})
             log.append(row); print(json.dumps(row), flush=True)
             if not np.isfinite(loss):

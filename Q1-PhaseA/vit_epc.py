@@ -64,13 +64,17 @@ def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho, e=None):
     return E + 0.5 * jnp.sum(tm * (p.head(hs[-1], tidx.shape[0]) - y) ** 2)
 
 
-# Returns states, multipliers and (energy at start, energy at end); the energy is not evaluated inside the loop (cost).
-def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=12, hist=False):
+# Returns states, multipliers, (energy at start, energy at end) and this block's rho.  rho_rel > 0 (per-block precision,
+# findings/40): rho = max(1, gain / rho_rel) from this block's own gain lam, which the step size already measures.
+def epc_core(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=12, hist=False, rho_rel=0.0):
     kv, row, tm = _masks(cvalid, tvalid)
     nt = tidx.shape[0]
     yhat = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], nt)
     e0 = jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1]))
     lam = _gn_max(lambda e: yhat(e) * tm, e0, gn_iters)
+    if rho_rel > 0:
+        rho = jax.lax.stop_gradient(jnp.maximum(1.0, lam / rho_rel))
+    rho = jnp.asarray(rho, jnp.float32)
     eta = c * 0.9 / (rho + lam)
     E = lambda e, u: 0.5 * rho * jnp.sum(((e + u) * row) ** 2) + 0.5 * jnp.sum(tm * (yhat(e) - y) ** 2)
     gE = jax.grad(E)
@@ -82,7 +86,11 @@ def epc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iter
     u0 = jnp.zeros_like(e0)
     (e, u), H = jax.lax.scan(step, (e0, u0), jnp.arange(T))
     out = H if hist else jnp.stack([E(e0, u0), E(e, u)])
-    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, out, e * row
+    return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e), u, out, e * row, rho
+
+
+def epc_one(*a, **k):                            # the original 4-tuple interface
+    return epc_core(*a, **k)[:4]
 
 
 def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iters=20, hist=False):
@@ -115,10 +123,13 @@ def gain(p, ctx, cidx, cvalid, tidx, tvalid, gn_iters=50):
     return _gn_max(f, jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1])), gn_iters)
 
 
-def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_iters=12):
-    one = (lambda *a: epc_one(*a, gn_iters=gn_iters)) if method == "epc" else spc_one
+def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_iters=12, rho_rel=0.0):
+    if method == "epc":
+        one = lambda *a: epc_core(*a, gn_iters=gn_iters, rho_rel=rho_rel)
+    else:
+        one = lambda *a: spc_one(*a) + (jnp.asarray(rho, jnp.float32),)
     inner = lambda ti, tv, y: one(p, ctx, cidx, cvalid, ti, tv, y, rho, alpha, T, c)
-    return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image
+    return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image; rho per block last
 
 
 def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, ...)
@@ -129,7 +140,8 @@ def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, 
 # chunks of `chunk` images with lax.map so activation memory is bounded (review N4).  ctx (B, NC, dim) context-encoder
 # output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.  Returns (grad_params, grad_ctx | None,
 # energy (B, K, 2) at relaxation start/end | None).
-def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32, gn_iters=12):
+def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32, gn_iters=12,
+          rho_rel=0.0):
     B = ctx.shape[0]; chunk = min(chunk, B)
     assert B % chunk == 0, (B, chunk)
     N = jnp.sum(tvalid) * Y.shape[-1]
@@ -142,13 +154,13 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
                 return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
             en = jnp.zeros((cx.shape[0], ti.shape[1], 2))
         else:
-            HS, U, en, EE = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters))(cx, ci, cv, ti, tv, y)
-            HS, U, EE = jax.lax.stop_gradient(HS), jax.lax.stop_gradient(U), jax.lax.stop_gradient(EE)
+            HS, U, en, EE, RB = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters, rho_rel))(cx, ci, cv, ti, tv, y)
+            HS, U, EE, RB = (jax.lax.stop_gradient(x) for x in (HS, U, EE, RB))
             exact = method == "epc"
-            def L(q, a):
-                per_img = lambda a1, c1, v1, t1, w1, h1, u1, y1, e1: jnp.sum(jax.vmap(
-                    lambda tt, ww, hh, uu, yy, ee: local_energy(q, a1, c1, v1, tt, ww, hh, uu, yy, rho, ee if exact else None))(t1, w1, h1, u1, y1, e1))
-                return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y, EE))
+            def L(q, a):                         # each block's weight gradient uses that block's rho (RB, (chunk, K))
+                per_img = lambda a1, c1, v1, t1, w1, h1, u1, y1, e1, r1: jnp.sum(jax.vmap(
+                    lambda tt, ww, hh, uu, yy, ee, rr: local_energy(q, a1, c1, v1, tt, ww, hh, uu, yy, rr, ee if exact else None))(t1, w1, h1, u1, y1, e1, r1))
+                return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y, EE, RB))
         gp = eqx.filter_grad(L)(p, cx)
         gx = jax.grad(lambda a: L(p, a))(cx) if want_input else jnp.zeros((0,))
         return gp, gx, en
