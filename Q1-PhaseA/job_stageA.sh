@@ -62,7 +62,10 @@ case "$MODE" in
     $PY -W ignore a0_vit.py $B/a0 > "$JOBDIR/a0.log" 2>&1; rc=$?; note "a0 rc=$rc"; cp $B/a0/a0_choice.json "$JOBDIR/" 2>/dev/null; exit $rc ;;
   depth)
     [ -f $B/a0/a0_choice.json ] || { note "run a0 first"; exit 7; }
-    for arm in ${STAGEA_ARMS:-bp epc_alm_k4 epc_k4 epc_k16 epc_alm_blk4}; do   # epc_alm_blk4: per-block rho (after findings/40)
+    for arm in ${STAGEA_ARMS:-bp epc_alm_k4 epc_k4 epc_k16}; do   # epc_alm_blk4 only explicitly, and only after its screen passed
+      if [[ $arm == epc_alm_blk* ]]; then
+        $PY -c "import json,sys; d=json.load(open('$B/blockrho_decision.json')); sys.exit(0 if d['train'] and d['arm'] == '$arm' else 1)" 2>/dev/null || { note "epc_alm_blk4: no passing screen decision ($B/blockrho_decision.json); skipped"; touch $FAIL; continue; }
+      fi
       for lr in 3e-4 1e-3 3e-3; do run1 $arm $DEPTH $lr 5 val 0 > /dev/null; [ $? -eq 75 ] && exit 75; done
       lr=$(best_lr $arm $DEPTH); note "$arm d$DEPTH selected lr: $lr"
       case "$lr" in incomplete|none) touch $FAIL; continue ;; esac

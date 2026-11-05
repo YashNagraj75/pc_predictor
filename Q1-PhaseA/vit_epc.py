@@ -127,6 +127,7 @@ def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_i
     if method == "epc":
         one = lambda *a: epc_core(*a, gn_iters=gn_iters, rho_rel=rho_rel)
     else:
+        assert rho_rel == 0.0, "per-block rho is implemented for ePC only"
         one = lambda *a: spc_one(*a) + (jnp.asarray(rho, jnp.float32),)
     inner = lambda ti, tv, y: one(p, ctx, cidx, cvalid, ti, tv, y, rho, alpha, T, c)
     return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image; rho per block last
@@ -141,7 +142,7 @@ def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, 
 # output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.  Returns (grad_params, grad_ctx | None,
 # energy (B, K, 2) at relaxation start/end | None).
 def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32, gn_iters=12,
-          rho_rel=0.0):
+          rho_rel=0.0, return_rho=False):
     B = ctx.shape[0]; chunk = min(chunk, B)
     assert B % chunk == 0, (B, chunk)
     N = jnp.sum(tvalid) * Y.shape[-1]
@@ -152,7 +153,7 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
             def L(q, a):
                 P = jax.vmap(lambda a1, c1, v1, t1, w1: jax.vmap(lambda tt, ww: q(a1, c1, v1, tt, ww))(t1, w1))(a, ci, cv, ti, tv)
                 return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
-            en = jnp.zeros((cx.shape[0], ti.shape[1], 2))
+            en = jnp.zeros((cx.shape[0], ti.shape[1], 2)); RB = jnp.zeros((cx.shape[0], ti.shape[1]))
         else:
             HS, U, en, EE, RB = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters, rho_rel))(cx, ci, cv, ti, tv, y)
             HS, U, EE, RB = (jax.lax.stop_gradient(x) for x in (HS, U, EE, RB))
@@ -163,9 +164,12 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
                 return jnp.sum(jax.vmap(per_img)(a, ci, cv, ti, tv, HS, U, y, EE, RB))
         gp = eqx.filter_grad(L)(p, cx)
         gx = jax.grad(lambda a: L(p, a))(cx) if want_input else jnp.zeros((0,))
-        return gp, gx, en
+        return gp, gx, en, RB
 
-    gps, gxs, ens = jax.lax.map(per_chunk, _chunked((ctx, cidx, cvalid, tidx, tvalid, Y), chunk))
+    gps, gxs, ens, rbs = jax.lax.map(per_chunk, _chunked((ctx, cidx, cvalid, tidx, tvalid, Y), chunk))
     gp = jax.tree_util.tree_map(lambda x: x.sum(0) / N, gps)
     gx = gxs.reshape((B,) + gxs.shape[2:]) / N if want_input else None
-    return gp, gx, (None if method == "bp" else ens.reshape((B,) + ens.shape[2:]))
+    en = None if method == "bp" else ens.reshape((B,) + ens.shape[2:])
+    if return_rho:                               # the rho each (image, block) actually used, (B, K)
+        return gp, gx, en, rbs.reshape((B,) + rbs.shape[2:])
+    return gp, gx, en

@@ -9,9 +9,11 @@ import data as D, vit_ijepa as V, vit_epc as P
 #   bp | epc_alm_k4 (ePC + multipliers, rho = gain/4) | epc_k4 / epc_k16 (no multipliers, rho = gain/4, gain/16).
 # rho tracks the output gain, re-measured every GAIN_EVERY steps (median over 16 blocks of the current batch).
 # rev 2 (3 reviewers): gain re-measured every 10 steps for the first 500 (it grows ~1e4x in warmup), then every 50.
-ARMS = {"bp": (None, 0.0), "epc_alm_k4": (4.0, 1.0), "epc_k4": (4.0, 0.0), "epc_k16": (16.0, 0.0), "epc_alm_blk4": (4.0, 1.0)}
-# epc_alm_blk4 (user-approved follow-up to findings/40): ePC-ALM with a per-block rho = max(1, own gain / 4).
-BLOCK = {"epc_alm_blk4"}
+ARMS = {"bp": (None, 0.0), "epc_alm_k4": (4.0, 1.0), "epc_k4": (4.0, 0.0), "epc_k16": (16.0, 0.0),
+        "epc_alm_blk4": (4.0, 1.0), "epc_alm_blk2": (2.0, 1.0), "epc_alm_blk1": (1.0, 1.0)}
+# epc_alm_blk<k> (user-approved follow-up to findings/40): ePC-ALM with a per-block rho = max(1, own gain / k); k is fixed
+# by the pre-set screen in test_blockrho.py before any training.
+BLOCK = {"epc_alm_blk4", "epc_alm_blk2", "epc_alm_blk1"}
 LOG_EVERY, EVAL_SEED = 200, 12345
 gain_due = lambda it: it % 10 == 0 if it < 500 else it % 50 == 0
 V0_DIR = "runs_vit/v0_d6_s0"
@@ -78,8 +80,9 @@ def make_step(a, opt):
 
     @eqx.filter_jit
     def step(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, rho):
-        g, _, en = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters,
-                           rho_rel=rr)
+        out = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters,
+                      rho_rel=rr, return_rho=rr > 0)
+        g, en = out[0], (out[2], out[3]) if rr > 0 else out[2]
         upd, ost = opt.update(g, ost, eqx.filter(pred, eqx.is_inexact_array))
         return eqx.apply_updates(pred, upd), ost, en
     return step
@@ -235,8 +238,11 @@ def run(a, out_dir):
                    "peak_gib": round(jax.devices()[0].memory_stats().get("peak_bytes_in_use", 0) / 2 ** 30, 2)}
             if k is not None:
                 row.update({"gain_min": gs[0], "gain_med": gs[1], "gain_max": gs[2]})
-                if a.arm in BLOCK:                   # "rho" above is then only the median-rule reference; each block uses its own
-                    row.update({"rho_mode": "per-block", "rho_blk_min": max(1.0, gs[0] / k), "rho_blk_max": max(1.0, gs[2] / k)})
+                if a.arm in BLOCK:                   # "rho" above is only the median-rule reference; these are the rho the step used
+                    E2, RBs = (np.asarray(x) for x in en)
+                    row.update({"rho_mode": "per-block", "rho_used_min": float(RBs.min()), "rho_used_med": float(np.median(RBs)),
+                                "rho_used_max": float(RBs.max()), "frac_rho_floor": float(np.mean(RBs <= 1.0)),
+                                "frac_energy_rise": float(np.mean(E2[..., 1] > E2[..., 0]))})
                 cx, cy = encode(enc, tenc, jnp.asarray(V.standardise(Xcr)), jnp.asarray(V.standardise(Xcr)), jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), vc)
                 c1, rr, cmin, cl = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
                                           jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0)
