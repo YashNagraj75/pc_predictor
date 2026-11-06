@@ -20,7 +20,7 @@ import data as D, vit_ijepa as V, vit_epc as P, train_pred_vit as A
 ROOT, TAG, OUTD = sys.argv[2:5]; depth = int(sys.argv[5]) if len(sys.argv) > 5 else 10; os.makedirs(OUTD, exist_ok=True)
 V0 = os.path.join(ROOT, "Q1-PhaseA/runs_vit/v0_d6_s0"); vc, enc, tenc, _ = A.load_encoders(V0)
 SA = os.path.join(ROOT, "Q1-PhaseA/runs_vit/stageA"); a = A.ACfg(arm="epc_alm_k4", depth=depth)
-ck = sorted(glob.glob(f"{SA}/*_d{depth}_*_e25_full_s0*/predictor.eqx"))
+ck = sorted(glob.glob(f"{SA}/*_d{depth}_*_e25_full_s0*/predictor.eqx")) + sorted(glob.glob(f"{SA}_invalid_f41/epc_alm_k4_d{depth}_*_e25_full_s0*/predictor.eqx"))
 pred = eqx.tree_deserialise_leaves(ck[0], A.make_predictor(vc, a)) if ck else A.make_predictor(vc, a)
 Xtr, _, _, _ = D.load_cifar10(root=os.path.join(ROOT, "data"), n_train=-1, n_test=2000, seed=0)
 flat = lambda t: np.concatenate([np.asarray(v).ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
