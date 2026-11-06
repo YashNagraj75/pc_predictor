@@ -32,3 +32,12 @@ Real training shapes (batch 64; trained d10 predictor; ePC chunk 32, T 10, 4 its
   gate job re-checks it at batch 256 with the trained encoders.
 - Fix (commit 504e742): ViT jobs use XLA_FLAGS=--xla_gpu_enable_triton_gemm=false; gpu_gate.py compares GPU and CPU
   gradients at the run's shapes and trained weights before every depth/noise/a0 job (rel < 1e-4 or the job stops).
+
+## The fault is intermittent (job 610dccdd, 2026-11-06)
+Under the DEFAULT flags, a fresh process at batch 64 (BP checkpoint bp_d10_lr1e-3) gave CORRECT gradients for BP, ePC and
+per-block ePC (rel <= 2e-6 vs CPU), while the sweep (ALM checkpoint, same shapes) and job 23b9a59a (both checkpoints,
+batch 4) gave 46-93% errors. Autotuning picks kernels by timing at compile time, so whether a faulty Triton GEMM is chosen
+can vary between processes. Consequences: a gate run under the default flags can pass by luck, so the gate is only
+meaningful together with Triton off (cuBLAS path); and the V0 encoder, whose loss gradient was correct in every one of
+9 default/variant compilations at batch 64 and 256, is probably but not provably unaffected.
+The full ViT gate suite passes under Triton off (54/54).
