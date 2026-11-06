@@ -6,7 +6,8 @@
 set -uo pipefail
 P="$1"; JOBDIR=$(readlink -f "$2"); MODE="$3"; DEPTH="${4:-10}"; cd "$P/Q1-PhaseA" || exit 2
 PY="$(cd ../.venv/bin && pwd)/python"
-export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false NVIDIA_TF32_OVERRIDE=0; unset XLA_FLAGS
+# Triton GEMMs give WRONG batched training gradients on this host (findings/41); cuBLAS with autotuning is correct and as fast
+export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_enable_triton_gemm=false
 ST=stageA_status.txt; note() { echo "$(date +%m-%d_%H:%M) [stageA/$MODE$DEPTH] $*" | tee -a $ST >&2; }   # stderr: run1 returns its dir on stdout
 B=runs_vit/stageA; mkdir -p $B; FAIL=$B/.fail_$MODE$DEPTH; rm -f $FAIL
 exec 9>"$B/.gpu.lock"; flock -n 9 || { note "another stage-A job holds the GPU lock"; exit 9; }
@@ -47,6 +48,18 @@ else:
     lr = min(tab, key=tab.get); print(f"   selected {lr}" + ("  EDGE" if lr in ("3e-4", "3e-3") else "")); print(lr)
 PYX
 }
+# GPU-vs-CPU gradient gate before any training (findings/41); skipped only for the gate mode itself
+gpu_gate() {
+  G=$B/gpu_gate_$$; rm -rf $G
+  $PY -W ignore gpu_gate.py run "$P" gpu $G $DEPTH > "$JOBDIR/gpu_gate.log" 2>&1 || { note "gpu gate: GPU run failed"; return 1; }
+  ( JAX_PLATFORMS=cpu XLA_FLAGS= $PY -W ignore gpu_gate.py run "$P" cpu $G $DEPTH ) >> "$JOBDIR/gpu_gate.log" 2>&1 || { note "gpu gate: CPU run failed"; return 1; }
+  $PY gpu_gate.py compare $G >> "$JOBDIR/gpu_gate.log" 2>&1; rc=$?; rm -rf $G
+  note "gpu gate rc=$rc"; return $rc
+}
+case "$MODE" in
+  gpugate) gpu_gate; exit $? ;;
+  depth|noise|a0) gpu_gate || exit 4 ;;
+esac
 case "$MODE" in
   smoke)   # every arm at depth 6 for 12 steps (via run1, with resume at step 6), and the depth-10 ePC memory/time case
     mkdir -p $B/a0; [ -f $B/a0/a0_choice.json ] || { echo '{"T": 20, "gn_iters": 12}' > $B/a0/a0_choice.json; touch $B/a0/.provisional; }

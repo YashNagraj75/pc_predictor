@@ -6,7 +6,8 @@ set -uo pipefail
 P="$1"; JOBDIR=$(readlink -f "$2"); MODE="$3"; cd "$P/Q1-PhaseA" || exit 2
 PY="$(cd ../.venv/bin && pwd)/python"
 # XLA GEMM autotuning ON for the ViT (3-4x faster; compiled == eager audits pass under it, run 4d5d69e2); TF32 stays off
-export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false NVIDIA_TF32_OVERRIDE=0; unset XLA_FLAGS
+# Triton GEMMs give WRONG batched training gradients on this host (findings/41); cuBLAS with autotuning is correct and as fast
+export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_enable_triton_gemm=false
 ST=vit_status.txt; note() { echo "$(date +%m-%d_%H:%M) [vit/$MODE] $*" | tee -a $ST; }
 mkdir -p runs_vit
 note "start at $(git rev-parse --short HEAD)"
