@@ -1,0 +1,95 @@
+  [PASS] rho_rel 0 == commit 421f84f: weight grads and energies, alpha 0  rel 0.0e+00, bitwise True
+  [PASS] rho_rel 0 == commit 421f84f: weight grads and energies, alpha 1  rel 0.0e+00, bitwise True
+  [PASS] epc_one == commit 421f84f (states, multipliers, energies, errors)  
+  [PASS] per-block rho == max(1, own gain/4)  spread 59-5.66e+03
+  [PASS] per-block grads == sum of single-block grads at their own scalar rho (non-degenerate: rho spread > 3x)  rel 1.0e-06, spread 96.0x
+  [FAIL] untrained predictor: rho == max(1, gain/4), floor active  fraction at floor 0.00
+  [PASS] per-block rho -> BP limit: error falls with rho, cos > 0.9999 at 1e4 x gain  rel err 3.1e-03, 3.1e-04, 3.0e-05
+KAPPA {"ckpt": "alm_final", "gn_iters": 4, "kappa_q": [0.441, 0.847, 0.99], "frac_kappa_lt_0.4": 0.0, "frac_unstable_k1": 0.0, "frac_unstable_k2": 0.0, "frac_unstable_k4": 0.0}
+KAPPA {"ckpt": "alm_final", "gn_iters": 12, "kappa_q": [0.91, 0.981, 1.0], "frac_kappa_lt_0.4": 0.0, "frac_unstable_k1": 0.0, "frac_unstable_k2": 0.0, "frac_unstable_k4": 0.0}
+KAPPA {"ckpt": "bp_final", "gn_iters": 4, "kappa_q": [0.612, 0.758, 0.945], "frac_kappa_lt_0.4": 0.0, "frac_unstable_k1": 0.0, "frac_unstable_k2": 0.0, "frac_unstable_k4": 0.0}
+KAPPA {"ckpt": "bp_final", "gn_iters": 12, "kappa_q": [0.862, 0.935, 0.998], "frac_kappa_lt_0.4": 0.0, "frac_unstable_k1": 0.0, "frac_unstable_k2": 0.0, "frac_unstable_k4": 0.0}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "median", "cos": 0.913, "ratio": 0.6878, "min_leaf": 0.841, "median_leaf": 0.9428, "frac_energy_rise": 1.0, "rho_med": 612.1549}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "maxrule", "cos": 0.9998, "ratio": 0.977, "min_leaf": 0.9992, "median_leaf": 0.9998, "frac_energy_rise": 1.0, "rho_med": 10232.2695}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk4_g4", "cos": 0.9987, "ratio": 1.0221, "min_leaf": 0.993, "median_leaf": 0.9983, "frac_energy_rise": 1.0, "rho_med": 516.3898}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk4_g12", "cos": 0.9988, "ratio": 1.022, "min_leaf": 0.9928, "median_leaf": 0.9984, "frac_energy_rise": 1.0, "rho_med": 525.4744}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk2_g4", "cos": 0.9988, "ratio": 0.9382, "min_leaf": 0.9779, "median_leaf": 0.999, "frac_energy_rise": 1.0, "rho_med": 1032.7795}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk2_g12", "cos": 0.9988, "ratio": 0.9399, "min_leaf": 0.9794, "median_leaf": 0.9989, "frac_energy_rise": 1.0, "rho_med": 1050.9487}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk1_g4", "cos": 0.9999, "ratio": 0.9801, "min_leaf": 0.999, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 2065.5591}
+SCREEN {"ckpt": "alm_final", "draw": 0, "mode": "blk1_g12", "cos": 0.9999, "ratio": 0.979, "min_leaf": 0.9995, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 2101.8975}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "median", "cos": 0.8723, "ratio": 0.6576, "min_leaf": 0.7948, "median_leaf": 0.9125, "frac_energy_rise": 0.9844, "rho_med": 443.8251}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "maxrule", "cos": 0.9995, "ratio": 0.958, "min_leaf": 0.9984, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 10369.2188}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk4_g4", "cos": 0.9984, "ratio": 1.0444, "min_leaf": 0.9911, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 727.2502}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk4_g12", "cos": 0.9985, "ratio": 1.0467, "min_leaf": 0.9917, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 737.6122}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk2_g4", "cos": 0.9985, "ratio": 0.9369, "min_leaf": 0.9791, "median_leaf": 0.9986, "frac_energy_rise": 1.0, "rho_med": 1454.5004}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk2_g12", "cos": 0.9984, "ratio": 0.9351, "min_leaf": 0.9799, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 1475.2244}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk1_g4", "cos": 0.9997, "ratio": 0.9659, "min_leaf": 0.9984, "median_leaf": 0.9998, "frac_energy_rise": 1.0, "rho_med": 2909.0007}
+SCREEN {"ckpt": "alm_final", "draw": 1, "mode": "blk1_g12", "cos": 0.9997, "ratio": 0.9665, "min_leaf": 0.9984, "median_leaf": 0.9998, "frac_energy_rise": 1.0, "rho_med": 2950.4487}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "median", "cos": 0.9614, "ratio": 0.8416, "min_leaf": 0.8507, "median_leaf": 0.9689, "frac_energy_rise": 1.0, "rho_med": 1198.017}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "maxrule", "cos": 0.9996, "ratio": 0.9738, "min_leaf": 0.9984, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 6632.5942}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk4_g4", "cos": 0.9987, "ratio": 1.0328, "min_leaf": 0.9887, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 486.7015}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk4_g12", "cos": 0.9987, "ratio": 1.0351, "min_leaf": 0.989, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 489.8257}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk2_g4", "cos": 0.9987, "ratio": 0.9432, "min_leaf": 0.9635, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 973.4031}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk2_g12", "cos": 0.9987, "ratio": 0.9429, "min_leaf": 0.965, "median_leaf": 0.9986, "frac_energy_rise": 1.0, "rho_med": 979.6514}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk1_g4", "cos": 0.9998, "ratio": 0.9654, "min_leaf": 0.9994, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 1946.8062}
+SCREEN {"ckpt": "alm_final", "draw": 2, "mode": "blk1_g12", "cos": 0.9998, "ratio": 0.9666, "min_leaf": 0.9993, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 1959.3027}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "median", "cos": 0.9428, "ratio": 0.7569, "min_leaf": 0.8692, "median_leaf": 0.9567, "frac_energy_rise": 1.0, "rho_med": 727.8171}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "maxrule", "cos": 0.9996, "ratio": 0.979, "min_leaf": 0.9984, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 6144.875}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk4_g4", "cos": 0.9986, "ratio": 1.0333, "min_leaf": 0.9872, "median_leaf": 0.9981, "frac_energy_rise": 1.0, "rho_med": 459.6299}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk4_g12", "cos": 0.9987, "ratio": 1.0359, "min_leaf": 0.9878, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 460.5118}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk2_g4", "cos": 0.9986, "ratio": 0.9403, "min_leaf": 0.9767, "median_leaf": 0.9984, "frac_energy_rise": 1.0, "rho_med": 919.2598}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk2_g12", "cos": 0.9986, "ratio": 0.9398, "min_leaf": 0.9779, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 921.0237}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk1_g4", "cos": 0.9999, "ratio": 0.9724, "min_leaf": 0.999, "median_leaf": 0.9999, "frac_energy_rise": 0.9961, "rho_med": 1838.5195}
+SCREEN {"ckpt": "alm_final", "draw": 3, "mode": "blk1_g12", "cos": 0.9999, "ratio": 0.9728, "min_leaf": 0.999, "median_leaf": 0.9999, "frac_energy_rise": 0.9961, "rho_med": 1842.0474}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "median", "cos": 0.8858, "ratio": 0.6846, "min_leaf": 0.7841, "median_leaf": 0.9217, "frac_energy_rise": 1.0, "rho_med": 386.6678}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "maxrule", "cos": 0.9994, "ratio": 0.9603, "min_leaf": 0.9975, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 9509.1826}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk4_g4", "cos": 0.9981, "ratio": 1.0689, "min_leaf": 0.9926, "median_leaf": 0.998, "frac_energy_rise": 1.0, "rho_med": 527.3054}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk4_g12", "cos": 0.9981, "ratio": 1.0743, "min_leaf": 0.9932, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 529.0732}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk2_g4", "cos": 0.998, "ratio": 0.9291, "min_leaf": 0.963, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 1054.6108}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk2_g12", "cos": 0.998, "ratio": 0.9279, "min_leaf": 0.9637, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 1058.1465}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk1_g4", "cos": 0.9996, "ratio": 0.9638, "min_leaf": 0.999, "median_leaf": 0.9997, "frac_energy_rise": 1.0, "rho_med": 2109.2217}
+SCREEN {"ckpt": "alm_final", "draw": 4, "mode": "blk1_g12", "cos": 0.9996, "ratio": 0.9643, "min_leaf": 0.999, "median_leaf": 0.9997, "frac_energy_rise": 1.0, "rho_med": 2116.293}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "median", "cos": 0.9984, "ratio": 1.0364, "min_leaf": 0.9962, "median_leaf": 0.999, "frac_energy_rise": 1.0, "rho_med": 118.1556}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "maxrule", "cos": 0.9998, "ratio": 0.9842, "min_leaf": 0.9983, "median_leaf": 0.9998, "frac_energy_rise": 1.0, "rho_med": 362.4832}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk4_g4", "cos": 0.9989, "ratio": 1.0641, "min_leaf": 0.9817, "median_leaf": 0.9989, "frac_energy_rise": 1.0, "rho_med": 95.3063}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk4_g12", "cos": 0.999, "ratio": 1.0656, "min_leaf": 0.9826, "median_leaf": 0.999, "frac_energy_rise": 1.0, "rho_med": 104.4012}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk2_g4", "cos": 0.9979, "ratio": 0.9569, "min_leaf": 0.9837, "median_leaf": 0.998, "frac_energy_rise": 1.0, "rho_med": 190.6125}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk2_g12", "cos": 0.9979, "ratio": 0.9549, "min_leaf": 0.983, "median_leaf": 0.9981, "frac_energy_rise": 1.0, "rho_med": 208.8023}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk1_g4", "cos": 0.9999, "ratio": 0.9899, "min_leaf": 0.9986, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 381.2251}
+SCREEN {"ckpt": "bp_final", "draw": 0, "mode": "blk1_g12", "cos": 0.9999, "ratio": 0.9898, "min_leaf": 0.9988, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 417.6047}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "median", "cos": 0.9978, "ratio": 1.0521, "min_leaf": 0.9872, "median_leaf": 0.9983, "frac_energy_rise": 1.0, "rho_med": 108.2771}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "maxrule", "cos": 1.0, "ratio": 1.0007, "min_leaf": 0.9997, "median_leaf": 1.0, "frac_energy_rise": 1.0, "rho_med": 964.5916}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk4_g4", "cos": 0.9989, "ratio": 1.065, "min_leaf": 0.9861, "median_leaf": 0.9987, "frac_energy_rise": 1.0, "rho_med": 93.7075}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk4_g12", "cos": 0.999, "ratio": 1.0664, "min_leaf": 0.9871, "median_leaf": 0.9989, "frac_energy_rise": 1.0, "rho_med": 102.2043}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk2_g4", "cos": 0.9977, "ratio": 0.9592, "min_leaf": 0.9776, "median_leaf": 0.9976, "frac_energy_rise": 1.0, "rho_med": 187.415}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk2_g12", "cos": 0.9977, "ratio": 0.9567, "min_leaf": 0.9785, "median_leaf": 0.9978, "frac_energy_rise": 1.0, "rho_med": 204.4086}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk1_g4", "cos": 0.9993, "ratio": 0.9911, "min_leaf": 0.9869, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 374.8301}
+SCREEN {"ckpt": "bp_final", "draw": 1, "mode": "blk1_g12", "cos": 0.9993, "ratio": 0.9908, "min_leaf": 0.987, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 408.8173}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "median", "cos": 0.9954, "ratio": 1.0368, "min_leaf": 0.98, "median_leaf": 0.9957, "frac_energy_rise": 1.0, "rho_med": 102.8167}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "maxrule", "cos": 0.9998, "ratio": 0.9998, "min_leaf": 0.9993, "median_leaf": 0.9999, "frac_energy_rise": 1.0, "rho_med": 648.9648}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk4_g4", "cos": 0.9983, "ratio": 1.0555, "min_leaf": 0.9871, "median_leaf": 0.9986, "frac_energy_rise": 1.0, "rho_med": 86.7877}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk4_g12", "cos": 0.9985, "ratio": 1.0572, "min_leaf": 0.9884, "median_leaf": 0.9987, "frac_energy_rise": 1.0, "rho_med": 93.6459}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk2_g4", "cos": 0.9981, "ratio": 0.9563, "min_leaf": 0.9888, "median_leaf": 0.9984, "frac_energy_rise": 1.0, "rho_med": 173.5755}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk2_g12", "cos": 0.9981, "ratio": 0.955, "min_leaf": 0.989, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 187.2917}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk1_g4", "cos": 1.0, "ratio": 0.9902, "min_leaf": 0.9996, "median_leaf": 1.0, "frac_energy_rise": 1.0, "rho_med": 347.1509}
+SCREEN {"ckpt": "bp_final", "draw": 2, "mode": "blk1_g12", "cos": 1.0, "ratio": 0.99, "min_leaf": 0.9996, "median_leaf": 1.0, "frac_energy_rise": 1.0, "rho_med": 374.5834}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "median", "cos": 0.9972, "ratio": 1.0362, "min_leaf": 0.9804, "median_leaf": 0.9978, "frac_energy_rise": 1.0, "rho_med": 99.5843}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "maxrule", "cos": 0.9995, "ratio": 1.0001, "min_leaf": 0.9901, "median_leaf": 0.9998, "frac_energy_rise": 1.0, "rho_med": 2337.7573}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk4_g4", "cos": 0.9987, "ratio": 1.0615, "min_leaf": 0.9864, "median_leaf": 0.9985, "frac_energy_rise": 1.0, "rho_med": 86.6806}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk4_g12", "cos": 0.9988, "ratio": 1.0633, "min_leaf": 0.9876, "median_leaf": 0.9987, "frac_energy_rise": 1.0, "rho_med": 92.4488}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk2_g4", "cos": 0.9972, "ratio": 0.9619, "min_leaf": 0.9807, "median_leaf": 0.997, "frac_energy_rise": 1.0, "rho_med": 173.3611}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk2_g12", "cos": 0.9973, "ratio": 0.9598, "min_leaf": 0.9814, "median_leaf": 0.9973, "frac_energy_rise": 1.0, "rho_med": 184.8976}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk1_g4", "cos": 0.9991, "ratio": 0.992, "min_leaf": 0.9853, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 346.7222}
+SCREEN {"ckpt": "bp_final", "draw": 3, "mode": "blk1_g12", "cos": 0.9991, "ratio": 0.9918, "min_leaf": 0.9853, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 369.7953}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "median", "cos": 0.9974, "ratio": 1.0553, "min_leaf": 0.9822, "median_leaf": 0.9978, "frac_energy_rise": 1.0, "rho_med": 97.3917}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "maxrule", "cos": 0.9995, "ratio": 0.9922, "min_leaf": 0.9962, "median_leaf": 0.9996, "frac_energy_rise": 1.0, "rho_med": 376.4147}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk4_g4", "cos": 0.9988, "ratio": 1.0614, "min_leaf": 0.9854, "median_leaf": 0.9987, "frac_energy_rise": 1.0, "rho_med": 89.8433}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk4_g12", "cos": 0.9989, "ratio": 1.0632, "min_leaf": 0.987, "median_leaf": 0.9989, "frac_energy_rise": 1.0, "rho_med": 98.1098}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk2_g4", "cos": 0.998, "ratio": 0.959, "min_leaf": 0.9838, "median_leaf": 0.998, "frac_energy_rise": 1.0, "rho_med": 179.6866}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk2_g12", "cos": 0.998, "ratio": 0.9566, "min_leaf": 0.9842, "median_leaf": 0.9982, "frac_energy_rise": 1.0, "rho_med": 196.2196}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk1_g4", "cos": 1.0, "ratio": 0.9905, "min_leaf": 0.9993, "median_leaf": 1.0, "frac_energy_rise": 1.0, "rho_med": 359.3732}
+SCREEN {"ckpt": "bp_final", "draw": 4, "mode": "blk1_g12", "cos": 1.0, "ratio": 0.9902, "min_leaf": 0.9994, "median_leaf": 1.0, "frac_energy_rise": 1.0, "rho_med": 392.4391}
+Traceback (most recent call last):
+  File "/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/test_blockrho.py", line 96, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
