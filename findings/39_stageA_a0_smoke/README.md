@@ -1,5 +1,8 @@
 # 39 — Stage A smoke test and A0 (cost/credit choice of T and power iterations)
 
+> **INVALIDATED 2026-11-06 (findings/41):** trained and/or credit-measured with XLA GPU autotuning ON, which gives wrong
+> batched gradients (rel error 0.46-0.61 vs CPU). Evaluation is correct, the training gradients were not. Rerun pending.
+
 Host job 93ef0bdf (commit e4813d8), 2026-11-03. Smoke: every arm at depth 6 (6 steps, exact resume to 12) and ePC
 depth 10 ran with rc 0; peak GPU memory 2.4 GiB (depth 6 ePC), 4.1 GiB (depth 10 ePC).
 

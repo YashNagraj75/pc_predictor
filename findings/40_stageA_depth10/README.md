@@ -1,5 +1,8 @@
 # 40 — Stage A, depth 10 (in progress): ePC-ALM vs BP I-JEPA predictor on the frozen V0 encoder
 
+> **INVALIDATED 2026-11-06 (findings/41):** trained and/or credit-measured with XLA GPU autotuning ON, which gives wrong
+> batched gradients (rel error 0.46-0.61 vs CPU). Evaluation is correct, the training gradients were not. Rerun pending.
+
 Host jobs 936a85c5 + deeccfb8 (commit 421f84f), seed 0, 25 epochs, test = 2000 CIFAR-10 test images x 40 mask shapes.
 Both arms selected lr 3e-3 (grid EDGE) on the 90/10 split (5-epoch val: BP 0.1982, ePC-ALM 0.2013).
 
