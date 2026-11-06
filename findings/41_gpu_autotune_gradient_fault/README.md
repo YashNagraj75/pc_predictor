@@ -17,4 +17,18 @@ gradients, and batched gradients against a CPU reference.
   findings/39-40), and every in-training or A0 credit number (cos to BP) was measured under the fault.
   findings/38-40 are therefore INVALID as learning-rule comparisons until rerun; the V0 gate numbers are correct
   measurements of an encoder trained with corrupted gradients.
-- Next: flag sweep at real training shapes vs CPU (job 49083aaf) to find a setting that is correct and fast.
+## Cause and fix: Triton GEMMs (flag sweep, job 49083aaf; flag_sweep_vs_cpu.txt)
+Real training shapes (batch 64; trained d10 predictor; ePC chunk 32, T 10, 4 its), each GPU setting vs a CPU reference:
+
+| setting | pred BP rel / time | pred ePC rel / time | V0 loss (fresh init) rel |
+|---|---|---|---|
+| default (autotune on, what we trained with) | 0.93 (cos 0.37) / 0.157 s | 0.88 (cos 0.48) / 2.37 s | 2e-7 |
+| autotune off | 8e-7 / 0.678 s | 3e-6 / 8.63 s | 2e-7 |
+| **Triton GEMM off (autotune on)** | **1e-6 / 0.164 s** | **3e-6 / 2.24 s** | 2e-7 |
+| cuBLASLt off, level 2, deterministic ops | 0.88-0.93 wrong | wrong | 2e-7 |
+
+- Triton GEMM kernels are the cause; disabling only them is correct and as fast as the faulty default.
+- The V0 loss gradient was correct under every setting at its init weights, so V0 (findings/38) may be valid; the
+  gate job re-checks it at batch 256 with the trained encoders.
+- Fix (commit 504e742): ViT jobs use XLA_FLAGS=--xla_gpu_enable_triton_gemm=false; gpu_gate.py compares GPU and CPU
+  gradients at the run's shapes and trained weights before every depth/noise/a0 job (rel < 1e-4 or the job stops).
