@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One host job for ALL remaining stage-A work, in order: depth 10, depth 6, BP noise floor.  Each stage is re-run after a
+# One host job for ALL remaining stage-A work, in order: depth 10, depth 6, BP noise floor (STAGES overrides, e.g.
+# STAGES="gpugate:10 depth:6" on a second GPU).  Each stage is re-run after a
 # clean time-limit stop (rc 75) and resumes from its checkpoints; rc 1 (stage finished, some arms recorded as failed)
 # moves on; any other rc (GPU gate, lock, sync, crash) stops for a decision.  The host runs job commands with -e, so
 # this script turns it off and never depends on a line running after a non-zero command.  Log: sequence.txt.
@@ -27,10 +28,16 @@ run_stage() {  # label, then the job_stageA.sh arguments
   log "$label: 40 passes without finishing"; return 70
 }
 
-log "sequence start at $(git rev-parse --short HEAD)"
-export STAGEA_ARMS="bp epc_k4 epc_k16 epc_alm_blk4 epc_alm_k4"   # depth 10: the paused ALM final run resumes last
-run_stage "depth 10" depth 10; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in depth 10, rc=$rc"; exit $rc; }
-unset STAGEA_ARMS                                                    # depth 6: default order, all five arms
-run_stage "depth 6" depth 6; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in depth 6, rc=$rc"; exit $rc; }
-run_stage "noise" noise; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in noise, rc=$rc"; exit $rc; }
+log "sequence start at $(git rev-parse --short HEAD), stages: ${STAGES:-depth:10 depth:6 noise}"
+for st in ${STAGES:-depth:10 depth:6 noise}; do
+  mode=${st%%:*}; depth=${st#*:}; [ "$depth" = "$st" ] && depth=""
+  case $mode in
+    gpugate) log "gpu gate d$depth"; bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" gpugate $depth; rc=$?
+             log "gpu gate d$depth rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: GPU gate failed"; exit 4; } ;;
+    depth)   if [ "$depth" = 10 ]; then export STAGEA_ARMS="${STAGEA_ARMS:-bp epc_k4 epc_k16 epc_alm_blk4 epc_alm_k4}"; else unset STAGEA_ARMS; fi
+             run_stage "depth $depth" depth $depth; rc=$?; unset STAGEA_ARMS; [ $rc -eq 0 ] || { log "STOPPED in depth $depth, rc=$rc"; exit $rc; } ;;
+    noise)   run_stage "noise" noise; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in noise, rc=$rc"; exit $rc; } ;;
+    *)       log "unknown stage $st"; exit 64 ;;
+  esac
+done
 log "ALL STAGES DONE"
