@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Second-GPU stage-A job: fetch CIFAR-10 (checksum-verified, identical to the A4000 copy), unpack the V0 encoders and
-# A0/per-block decision files from the A4000, then run the given STAGES with run_stageA_all.sh.  Logs are mirrored into
-# runs_vit/<name>_logs every 2 min so the A4000's backup loop (backup_pull.sh) copies them with the results.
+# Rented-GPU stage-A job.  On a fresh instance: clone the code at 8ee37d9, install the A4000's exact package versions,
+# fetch CIFAR-10 and the stage-A inputs from branch data-cifar10 of the public backup repo (seconds), check every md5
+# against the A4000 copy, then run the given STAGES with run_stageA_all.sh.  Logs are mirrored into runs_vit/<name>_logs.
 set +e; set -u
 JOBDIR=$(pwd); S=$HOME/pc_predictor; Q=$S/Q1-PhaseA; NAME=${NAME:-l40}
 log() { echo "$(date '+%m-%d %H:%M') $*" >> "$JOBDIR/sequence.txt"; }
-cd $S && [ "$(git rev-parse --short HEAD)" = 8ee37d9 ] || { log "repo not at 8ee37d9"; exit 9; }
-C=$S/data/cifar10
-if [ ! -f $C/cifar-10-batches-py/data_batch_1 ]; then
-  mkdir -p $C && curl -sL -o $C/c.tgz https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-  [ "$(md5sum $C/c.tgz | cut -c1-32)" = c58f30108f718f92721af3b95e74349a ] || { log "CIFAR-10 checksum mismatch"; exit 2; }
-  tar xzf $C/c.tgz -C $C && rm $C/c.tgz
+MD5S="$JOBDIR/cifar10_a4000.md5"; [ -f "$MD5S" ] || { log "missing cifar10_a4000.md5 input"; exit 2; }
+[ -d $S/.git ] || git clone -q https://github.com/YashNagraj75/pc_predictor.git $S || { log "code clone failed"; exit 2; }
+cd $S && git checkout -q 8ee37d9 2>/dev/null || { git fetch -q origin && git checkout -q 8ee37d9; }
+[ "$(git rev-parse --short HEAD)" = 8ee37d9 ] || { log "repo not at 8ee37d9"; exit 9; }
+if [ ! -x $S/.venv/bin/python ]; then
+  uv venv -q --python 3.13 $S/.venv && UV_LINK_MODE=copy uv pip install -q --python $S/.venv/bin/python "jax==0.11.0" "jaxlib==0.11.0" \
+    "jax-cuda12-plugin[with-cuda]==0.11.0" "jax-cuda12-pjrt==0.11.0" "equinox==0.13.8" "optax==0.2.8" "numpy==2.5.3" "jaxtyping==0.3.11" \
+    "scipy==1.18.1" "h5py==3.16.0" "ml-dtypes==0.6.0" > "$JOBDIR/pip.log" 2>&1 || { log "package install failed"; exit 3; }
 fi
-[ "$(md5sum $C/cifar-10-batches-py/data_batch_1 | cut -c1-32)" = c99cafc152244af753f735de768cd75f ] || { log "CIFAR-10 differs from the A4000 copy"; exit 2; }
-tar xzf "$JOBDIR/l40_inputs.tar.gz" -C $Q || { log "inputs unpack failed"; exit 2; }
+DB=$HOME/data_cifar10; C=$S/data/cifar10; IN="$JOBDIR/l40_inputs.tar.gz"
+if [ ! -f $C/cifar-10-batches-py/data_batch_1 ] || [ ! -f "$IN" ]; then
+  [ -d $DB/.git ] || git clone -q --depth 1 -b data-cifar10 https://github.com/YashNagraj75/pc_predictor-runs.git $DB || { log "data branch clone failed"; exit 2; }
+  [ -f $C/cifar-10-batches-py/data_batch_1 ] || { mkdir -p $C && cp -a $DB/cifar10/cifar-10-batches-py $C/; }
+  [ -f "$IN" ] || cp $DB/inputs/l40_inputs.tar.gz "$IN"
+  [ "$(md5sum "$IN" | cut -c1-32)" = "$(cut -c1-32 $DB/inputs/MD5SUMS)" ] || { log "inputs checksum mismatch"; exit 2; }
+fi
+( cd $C/cifar-10-batches-py && md5sum -c --quiet "$MD5S" ) || { log "CIFAR-10 differs from the A4000 copy"; exit 2; }
+tar xzf "$IN" -C $Q || { log "inputs unpack failed"; exit 2; }
 log "data and inputs ready"
 mkdir -p $Q/runs_vit/${NAME}_logs
 ( while :; do cp "$JOBDIR/sequence.txt" $Q/stageA_status.txt $Q/runs_vit/${NAME}_logs/ 2>/dev/null; sleep 120; done ) &
