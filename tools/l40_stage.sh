@@ -27,6 +27,6 @@ log "data and inputs ready"
 mkdir -p $Q/runs_vit/${NAME}_logs
 ( while :; do cp "$JOBDIR/sequence.txt" $Q/stageA_status.txt $Q/runs_vit/${NAME}_logs/ 2>/dev/null; sleep 120; done ) &
 MIRROR=$!
-cp "$JOBDIR/run_stageA_all.sh" . && R=$S bash run_stageA_all.sh; rc=$?
+( cd "$JOBDIR" && R=$S bash run_stageA_all.sh ); rc=$?          # run from the job dir: sequence.txt and gpu_gate.log land there
 cp "$JOBDIR/sequence.txt" $Q/stageA_status.txt $Q/runs_vit/${NAME}_logs/ 2>/dev/null; kill $MIRROR 2>/dev/null
 exit $rc
