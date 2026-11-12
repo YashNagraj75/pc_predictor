@@ -3,7 +3,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 X64 = "--x64" in sys.argv
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
 jax.config.update("jax_default_matmul_precision", "highest")
-if X64: jax.config.update("jax_enable_x64", True)
 import data as D, vit_ijepa as V, vit_epc as P, train_pred_vit as A
 # Inference-only check of the standard-PC baseline (spc_u1) before training (3 reviewers, 2026-11-12): how far the error
 # reaches down the predictor in T steps (per-node |eps|), per-leaf credit vs BP, float32 vs float64, and rho = 1 vs gain/4.
@@ -17,6 +16,8 @@ rng = np.random.default_rng(5); X = Xtr[40000:40000 + NB]
 ci, cv, ti, tv = (jnp.asarray(x) for x in V.sample_masks(rng, NB, vc))
 im = jnp.asarray(V.standardise(X)); ctx, Y = A.encode(enc, tenc, im, im, ci, cv, ti, vc)
 cast = lambda t: jax.tree_util.tree_map(lambda x: x.astype(dt) if eqx.is_inexact_array(x) else x, t)
+if X64:                                          # load everything in float32 (as trained), then switch to float64 and cast
+    jax.config.update("jax_enable_x64", True)
 ctx, Y = cast(ctx), cast(Y)
 leaves = lambda g: [np.asarray(x, np.float64).ravel() for x in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array))]
 
@@ -42,11 +43,12 @@ def node_profile(pred, rho, T, n=8):             # per-node |eps_j| / |eps_top| 
     return {"eps_rel_by_node": [float(x) for x in p], "nodes_eps_rel_gt_1e-3": int(np.sum(p > 1e-3)), "E_end_over_E_start_med": float(np.median(er))}
 
 
-CK = [("init_d10", 10, None)] + [(f"bp_d{d}", d, f"{SA}/bp_d{d}_lr3e-3_e25_full_s0/predictor.eqx") for d in (6, 10)]
+CK = ([] if X64 else [("init_d10", 10, None)]) + [(f"bp_d{d}", d, f"{SA}/bp_d{d}_lr3e-3_e25_full_s0/predictor.eqx") for d in (6, 10)]
 res = {"x64": X64, "n_images": NB, "rows": []}
 for name, depth, path in CK:
     a = A.ACfg(arm="spc_u1", depth=depth); pred = A.make_predictor(vc, a)
-    if path: pred = eqx.tree_deserialise_leaves(path, pred)
+    if path:
+        pred = eqx.tree_deserialise_leaves(path, jax.tree_util.tree_map(lambda x: x.astype(jnp.float32) if eqx.is_inexact_array(x) else x, pred))
     pred = cast(pred)
     gb = eqx.filter_jit(lambda q: P.grads(q, ctx, ci, cv, ti, tv, Y, "bp", chunk=16)[0])(pred)
     gm = float(np.median(np.asarray(jax.vmap(lambda a1, c1, v1, t1, w1: P.gain(pred, a1, c1, v1, t1[0], w1[0]))(ctx[:8], ci[:8], cv[:8], ti[:8], tv[:8]))))
