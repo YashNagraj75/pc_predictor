@@ -34,6 +34,7 @@ class ACfg:
     seed: int = 0
     T: int = 20
     gn_iters: int = 12
+    hv_iters: int = 8            # spc only: power iterations for the step size (user 2026-11-12; 20 was ~8x ePC's cost, diag_spc: 8 is within 4%)
     chunk: int = 32
     batch: int = 256
     wd: float = 0.04
@@ -86,7 +87,7 @@ def make_step(a, opt):
     @eqx.filter_jit
     def step(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, rho):
         out = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters,
-                      rho_rel=rr, return_rho=rr > 0)
+                      rho_rel=rr, return_rho=rr > 0, hv_iters=a.hv_iters)
         g, en = out[0], (out[2], out[3]) if rr > 0 else out[2]
         upd, ost = opt.update(g, ost, eqx.filter(pred, eqx.is_inexact_array))
         return eqx.apply_updates(pred, upd), ost, en
@@ -94,9 +95,9 @@ def make_step(a, opt):
 
 
 @eqx.filter_jit
-def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0, meth="epc"):  # cos / ratio to BP, per leaf
+def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0, meth="epc", hv_iters=20):  # cos / ratio to BP, per leaf
     gb = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "bp", chunk=chunk)[0]
-    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel)[0]
+    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel, hv_iters=hv_iters)[0]
     lb = jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array)); le = jax.tree_util.tree_leaves(eqx.filter(ge, eqx.is_inexact_array))
     fb, fe = jnp.concatenate([x.ravel() for x in lb]), jnp.concatenate([x.ravel() for x in le])
     cl = jnp.stack([jnp.sum(x * y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y) + 1e-30) for x, y in zip(le, lb)])
@@ -255,7 +256,7 @@ def run(a, out_dir):
                                 "frac_energy_rise": float(np.mean(E2[..., 1] > E2[..., 0]))})
                 cx, cy = encode(enc, tenc, jnp.asarray(V.standardise(Xcr)), jnp.asarray(V.standardise(Xcr)), jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), vc)
                 c1, rr, cmin, cl, lrat = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
-                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0, method_of(a.arm))
+                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0, method_of(a.arm), a.hv_iters)
                 row.update({"cos_bp": float(c1), "ratio_bp": float(rr), "min_leaf_cos": float(cmin), "leaf_cos": [round(float(x), 4) for x in cl],
                             "leaf_ratio": [float(f"{float(x):.3g}") for x in lrat]})
             log.append(row); print(json.dumps(row), flush=True)

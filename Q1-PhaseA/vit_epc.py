@@ -124,12 +124,12 @@ def gain(p, ctx, cidx, cvalid, tidx, tvalid, gn_iters=50):
     return _gn_max(f, jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1])), gn_iters)
 
 
-def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_iters=12, rho_rel=0.0):
+def _relax(method, p, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, c, gn_iters=12, rho_rel=0.0, hv_iters=20):
     if method == "epc":
         one = lambda *a: epc_core(*a, gn_iters=gn_iters, rho_rel=rho_rel)
     else:
         assert rho_rel == 0.0, "per-block rho is implemented for ePC only"
-        one = lambda *a: spc_one(*a) + (jnp.asarray(rho, jnp.float32),)
+        one = lambda *a: spc_one(*a, hv_iters=hv_iters) + (jnp.asarray(rho, jnp.float32),)
     inner = lambda ti, tv, y: one(p, ctx, cidx, cvalid, ti, tv, y, rho, alpha, T, c)
     return jax.vmap(inner)(tidx, tvalid, Y)       # over the K target blocks of one image; rho per block last
 
@@ -143,7 +143,7 @@ def _chunked(xs, chunk):                         # (B, ...) -> (B/chunk, chunk, 
 # output; Y (B, K, NT, dim) layer-normed targets.  method: bp | epc | spc.  Returns (grad_params, grad_ctx | None,
 # energy (B, K, 2) at relaxation start/end | None).
 def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=20, c=1.0, want_input=False, chunk=32, gn_iters=12,
-          rho_rel=0.0, return_rho=False):
+          rho_rel=0.0, return_rho=False, hv_iters=20):
     B = ctx.shape[0]; chunk = min(chunk, B)
     assert B % chunk == 0, (B, chunk)
     N = jnp.sum(tvalid) * Y.shape[-1]
@@ -156,7 +156,7 @@ def grads(p, ctx, cidx, cvalid, tidx, tvalid, Y, method, rho=64.0, alpha=1.0, T=
                 return 0.5 * jnp.sum(tv[..., None] * (P - y) ** 2)
             en = jnp.zeros((cx.shape[0], ti.shape[1], 2)); RB = jnp.zeros((cx.shape[0], ti.shape[1]))
         else:
-            HS, U, en, EE, RB = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters, rho_rel))(cx, ci, cv, ti, tv, y)
+            HS, U, en, EE, RB = jax.vmap(lambda a, c1, v1, t1, w1, y1: _relax(method, p, a, c1, v1, t1, w1, y1, rho, alpha, T, c, gn_iters, rho_rel, hv_iters))(cx, ci, cv, ti, tv, y)
             HS, U, EE, RB = (jax.lax.stop_gradient(x) for x in (HS, U, EE, RB))
             exact = method == "epc"
             def L(q, a):                         # each block's weight gradient uses that block's rho (RB, (chunk, K))
