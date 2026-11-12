@@ -97,17 +97,18 @@ def ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g):   # (B, NC) distance of 
 
 
 def intervention_masks(rng, cidx, cvalid, tidx, tvalid, g, keep_min=4):
-    # Encoder held fixed; remove (a) every visible ctx patch within 1.5 of a target patch, (b) the same number of patches
-    # farther than 3.1, (c) the same number at random.  Count capped so that >= keep_min context patches remain.
+    # Encoder held fixed; remove (a) every visible ctx patch within 1.5 of a target patch (capped so >= keep_min remain),
+    # (b) the same number at random (matched control), (c) up to the same number farther than 2.1 (fewer if not available).
     dct = ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g); out = {k: cvalid.copy() for k in ("near", "far", "random")}; n_rm = []
     for b in range(len(cidx)):
-        val = np.where(cvalid[b])[0]; near = val[dct[b, val] <= 1.5]; far = val[dct[b, val] > 3.1]
-        n = min(len(near), len(val) - keep_min, len(far)); n_rm.append(n)
-        if n <= 0: continue
-        out["near"][b, rng.choice(near, n, replace=False)] = False
-        out["far"][b, rng.choice(far, n, replace=False)] = False
-        out["random"][b, rng.choice(val, n, replace=False)] = False
-    return out, np.array(n_rm)
+        val = np.where(cvalid[b])[0]; near = val[dct[b, val] <= 1.5]; far = val[dct[b, val] > 2.1]
+        n = max(min(len(near), len(val) - keep_min), 0); nf = min(n, len(far)); n_rm.append((n, nf))
+        if n > 0:
+            out["near"][b, rng.choice(near, n, replace=False)] = False
+            out["random"][b, rng.choice(val, n, replace=False)] = False
+        if nf > 0:
+            out["far"][b, rng.choice(far, nf, replace=False)] = False
+    return out, np.array(n_rm).reshape(-1, 2)
 
 
 def residualise(S):                              # S (n_img, K, nodes, w): remove the per-(mask shape, block) mean over images
@@ -256,7 +257,9 @@ def analyse(run, pred, enc, tenc, vc, Xev, Xknn, U, bands, states_path, bs=200):
             iv[k].append(A.per_image(Pr, Yn, tv))
     yc = per["clean"]["y2"].sum(); ec = per["clean"]["err"].sum()
     res["interventions"] = {k: {"nmse": float(np.concatenate(v)[:, 0].sum() / yc), "delta": float((np.concatenate(v)[:, 0].sum() - ec) / yc)} for k, v in iv.items()}
-    res["interventions"]["mean_removed"] = float(np.concatenate(nrm).mean()); res["interventions"]["frac_images_removed0"] = float(np.mean(np.concatenate(nrm) == 0))
+    NRM = np.concatenate(nrm); n_ctx = np.concatenate([m_[1].sum(1) for m_ in masks])
+    res["interventions"].update(mean_removed_near_random=float(NRM[:, 0].mean()), mean_removed_far=float(NRM[:, 1].mean()),
+                                mean_visible_ctx=float(n_ctx.mean()), frac_images_removed0=float(np.mean(NRM[:, 0] == 0)))
     for k, v in iv.items(): per[f"iv_{k}"] = np.concatenate(v)[:, 0]
     # sensitivity on all images and blocks (clean), scale-normalised by the clean calibration and by the prediction norm
     ac = res["conds"]["clean"]["alpha_star"]; SJ = []

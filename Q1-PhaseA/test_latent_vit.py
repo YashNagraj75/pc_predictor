@@ -49,10 +49,12 @@ for b in range(8):
 check("context-to-target distance == brute force", ok)
 cvs, nrm = LV.intervention_masks(np.random.default_rng(2), ci, cv, ti, tv, g); ok = True
 for b in range(8):
-    rm = {k: np.where(cv[b] & ~cvs[k][b])[0] for k in cvs}
-    ok &= all(len(rm[k]) == nrm[b] for k in rm) and np.all(dc[b, rm["near"]] <= 1.5) and np.all(dc[b, rm["far"]] > 3.1) and cvs["near"][b].sum() >= 4
-    ok &= not np.any(cvs["near"][b] & ~cv[b])
-check("interventions: near <= 1.5, far > 3.1, equal counts, >= 4 kept", ok, f"removed {nrm.tolist()}")
+    rm = {k: np.where(cv[b] & ~cvs[k][b])[0] for k in cvs}; near_all = np.where(cv[b] & (dc[b] <= 1.5))[0]
+    ok &= len(rm["near"]) == len(rm["random"]) == nrm[b, 0] and len(rm["far"]) == nrm[b, 1] <= nrm[b, 0]
+    ok &= np.all(dc[b, rm["near"]] <= 1.5) and np.all(dc[b, rm["far"]] > 2.1) and cvs["near"][b].sum() >= 4
+    ok &= (len(rm["near"]) == len(near_all)) or cvs["near"][b].sum() == 4          # all near removed unless capped
+    ok &= not any(np.any(cvs[k][b] & ~cv[b]) for k in cvs)
+check("interventions: all near removed (cap 4 kept), random matched, far > 2.1", ok, f"removed (near, far) {nrm.tolist()}")
 # instrumented forward vs model with non-trivial weights (2-D leaves x10)
 scale = lambda p: jax.tree_util.tree_map(lambda x: x * 10.0 if eqx.is_inexact_array(x) and x.ndim == 2 else x, p)
 for depth in (2, 6):
