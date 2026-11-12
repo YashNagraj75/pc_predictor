@@ -50,6 +50,15 @@ for name, depth, path in CK:
     pred = cast(pred)
     gb = eqx.filter_jit(lambda q: P.grads(q, ctx, ci, cv, ti, tv, Y, "bp", chunk=16)[0])(pred)
     gm = float(np.median(np.asarray(jax.vmap(lambda a1, c1, v1, t1, w1: P.gain(pred, a1, c1, v1, t1[0], w1[0]))(ctx[:8], ci[:8], cv[:8], ti[:8], tv[:8]))))
+    # accuracy of the step-size estimate vs power iterations (cost: each iteration is one Hessian-vector product)
+    for rho in (1.0, max(1.0, gm / 4)):
+        lam = {}
+        for it in (4, 8, 20, 100):
+            E = lambda h, b=0: P.local_energy(pred, ctx[b], ci[b], cv[b], ti[b, 0], tv[b, 0], h, jnp.zeros_like(h), Y[b, 0], jnp.asarray(rho, dt))
+            h0 = P.feedforward_states(pred, ctx[0], ci[0], cv[0], ti[0, 0], tv[0, 0])
+            lam[it] = float(P._hvp_max(E, h0, it))
+        res.setdefault("lam_vs_iters", []).append({"ckpt": name, "rho": rho, **{str(k): v for k, v in lam.items()}})
+        print("LAM", name, rho, {k: round(v, 3) for k, v in lam.items()}, flush=True)
     for rule, rho in (("rho1", 1.0), ("gain/4", max(1.0, gm / 4))):
         for T in ((20, 80) if X64 else (20, 80, 320)):
             t0 = time.time()
