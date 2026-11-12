@@ -51,9 +51,9 @@ PYX
 # GPU-vs-CPU gradient gate before any training (findings/41); skipped only for the gate mode itself
 gpu_gate() {
   G=$B/gpu_gate_$$; rm -rf $G
-  $PY -W ignore gpu_gate.py run "$P" gpu $G $DEPTH > "$JOBDIR/gpu_gate.log" 2>&1 || { note "gpu gate: GPU run failed"; return 1; }
-  ( JAX_PLATFORMS=cpu XLA_FLAGS= $PY -W ignore gpu_gate.py run "$P" cpu $G $DEPTH ) >> "$JOBDIR/gpu_gate.log" 2>&1 || { note "gpu gate: CPU run failed"; return 1; }
-  $PY gpu_gate.py compare $G >> "$JOBDIR/gpu_gate.log" 2>&1; rc=$?; rm -rf $G
+  $PY -W ignore gpu_gate.py run "$P" gpu $G $DEPTH > "$JOBDIR/gpu_gate_${MODE}${DEPTH}.log" 2>&1 || { note "gpu gate: GPU run failed"; return 1; }
+  ( JAX_PLATFORMS=cpu XLA_FLAGS= $PY -W ignore gpu_gate.py run "$P" cpu $G $DEPTH ) >> "$JOBDIR/gpu_gate_${MODE}${DEPTH}.log" 2>&1 || { note "gpu gate: CPU run failed"; return 1; }
+  $PY gpu_gate.py compare $G >> "$JOBDIR/gpu_gate_${MODE}${DEPTH}.log" 2>&1; rc=$?; rm -rf $G
   note "gpu gate rc=$rc"; return $rc
 }
 case "$MODE" in
@@ -72,13 +72,14 @@ case "$MODE" in
     d=$(run1 epc_k16 10 1e-3 2 val 91 --max-steps 3); rc=$?; [ $rc -eq 0 ] || exit 5; cp "$d/report.json" "$JOBDIR/smoke_epc_k16_d10.json"
     rm -rf $B/*_s90* $B/*_s91*; [ -f $B/a0/.provisional ] && rm -f $B/a0/a0_choice.json $B/a0/.provisional; note "smoke ok" ;;
   smoke_spc)  # spc_u1: 6 + 6 steps at depth 6 with a resume check, then 3 steps at depth 10 (memory, s/step)
+    rm -rf "$B"/spc_u1_d6_lr1e-3_e2_val_s90_* "$B"/spc_u1_d10_lr1e-3_e2_val_s91_*     # only this smoke's own runs
     d=$(run1 spc_u1 6 1e-3 2 val 90 --max-steps 6); [ $? -eq 0 ] || exit 5
     rm -f "$d/report.json"; d=$(run1 spc_u1 6 1e-3 2 val 90 --max-steps 12); [ $? -eq 0 ] || exit 5
     grep -q "RESUME at step 6" "$d.log" || { note "smoke spc_u1: resume did not start from step 6"; exit 6; }
     cp "$d/report.json" "$JOBDIR/smoke_spc_u1_d6.json"; cp "$d.log" "$JOBDIR/smoke_spc_u1_d6.log"
     d=$(run1 spc_u1 10 1e-3 2 val 91 --max-steps 3); [ $? -eq 0 ] || exit 5
     cp "$d/report.json" "$JOBDIR/smoke_spc_u1_d10.json"; cp "$d.log" "$JOBDIR/smoke_spc_u1_d10.log"
-    rm -rf $B/*_s90* $B/*_s91*; note "smoke_spc ok" ;;
+    rm -rf "$B"/spc_u1_d6_lr1e-3_e2_val_s90_* "$B"/spc_u1_d10_lr1e-3_e2_val_s91_*; note "smoke_spc ok" ;;
   a0)
     $PY -W ignore a0_vit.py $B/a0 > "$JOBDIR/a0.log" 2>&1; rc=$?; note "a0 rc=$rc"; cp $B/a0/a0_choice.json "$JOBDIR/" 2>/dev/null; exit $rc ;;
   depth)

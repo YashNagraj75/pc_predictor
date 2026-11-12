@@ -102,7 +102,8 @@ def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_it
     cl = jnp.stack([jnp.sum(x * y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y) + 1e-30) for x, y in zip(le, lb)])
     nb = jnp.stack([jnp.linalg.norm(y) for y in lb])
     cl = jnp.where(nb > 1e-12, cl, 1.0)                     # per parameter leaf, in tree order (per sublayer weights)
-    return fe @ fb / (jnp.linalg.norm(fe) * jnp.linalg.norm(fb)), jnp.linalg.norm(fe) / jnp.linalg.norm(fb), jnp.min(cl), cl
+    lr_ = jnp.where(nb > 1e-12, jnp.stack([jnp.linalg.norm(x) for x in le]) / jnp.maximum(nb, 1e-30), 1.0)   # per-leaf |g|/|g_bp|
+    return fe @ fb / (jnp.linalg.norm(fe) * jnp.linalg.norm(fb)), jnp.linalg.norm(fe) / jnp.linalg.norm(fb), jnp.min(cl), cl, lr_
 
 
 def optimiser(a, spe):
@@ -232,7 +233,7 @@ def run(a, out_dir):
         ctx, Y = encode(enc, tenc, imgs, imgs, cidx, cvalid, tidx, vc)
         if k is not None and gain_due(it):
             gs = tuple(float(x) for x in gain_stats(pred, ctx, cidx, cvalid, tidx, tvalid))
-            if not np.all(np.isfinite(gs)):
+            if not np.all(np.isfinite(gs)) and a.arm not in SPC:   # spc never uses the gain (review ORCH F5)
                 return diverged(it, "non-finite gain")
             rho = 1.0 if a.arm in SPC else max(1.0, gs[1] / k)
         pred, ost, en = stepf(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, jnp.float32(rho))
@@ -248,10 +249,15 @@ def run(a, out_dir):
                     row.update({"rho_mode": "per-block", "rho_used_min": float(RBs.min()), "rho_used_med": float(np.median(RBs)),
                                 "rho_used_max": float(RBs.max()), "frac_rho_floor": float(np.mean(RBs <= 1.0)),
                                 "frac_energy_rise": float(np.mean(E2[..., 1] > E2[..., 0]))})
+                elif a.arm in SPC:                   # relaxation diagnostics for the standard-PC baseline (review DES F5)
+                    E2 = np.asarray(en)
+                    row.update({"E_end_over_E_start_med": float(np.median(E2[..., 1] / np.maximum(E2[..., 0], 1e-30))),
+                                "frac_energy_rise": float(np.mean(E2[..., 1] > E2[..., 0]))})
                 cx, cy = encode(enc, tenc, jnp.asarray(V.standardise(Xcr)), jnp.asarray(V.standardise(Xcr)), jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), vc)
-                c1, rr, cmin, cl = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
+                c1, rr, cmin, cl, lrat = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
                                           jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0, method_of(a.arm))
-                row.update({"cos_bp": float(c1), "ratio_bp": float(rr), "min_leaf_cos": float(cmin), "leaf_cos": [round(float(x), 4) for x in cl]})
+                row.update({"cos_bp": float(c1), "ratio_bp": float(rr), "min_leaf_cos": float(cmin), "leaf_cos": [round(float(x), 4) for x in cl],
+                            "leaf_ratio": [float(f"{float(x):.3g}") for x in lrat]})
             log.append(row); print(json.dumps(row), flush=True)
             if not np.isfinite(loss):
                 return diverged(it + 1, "non-finite loss")

@@ -109,7 +109,8 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
     def step(cu, t):
         h, u = cu
         h = h - eta * gE(h, u) * row
-        u = jnp.where(t < T - 1, u + alpha * resid(h), u)
+        if not (isinstance(alpha, (int, float)) and alpha == 0):   # static alpha 0: no multipliers, skip the extra pass
+            u = jnp.where(t < T - 1, u + alpha * resid(h), u)
         return (h, u), (E(h, u) if hist else None)
     (h, u), H = jax.lax.scan(step, (h0, u0), jnp.arange(T))
     return h, u, (H if hist else jnp.stack([E(h0, u0), E(h, u)])), resid(h)
