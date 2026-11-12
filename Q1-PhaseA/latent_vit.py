@@ -1,26 +1,42 @@
-import glob, json, math, os, sys, time
+import glob, json, math, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
 jax.config.update("jax_default_matmul_precision", "highest")
 import data as D, vit_ijepa as V, vit_epc as P, train_pred_vit as A
-# Latent analysis of the stage-A ViT predictors (plan_latent_analysis.md, user-approved 2026-11-12).  Inference only, on the
-# saved predictor.eqx of each 25-epoch run; the fixed stage-A test suite (same masks, corruptions, rng streams as evaluate).
-# python latent_vit.py <root> <outdir> [depth ...]   -> <outdir>/latent_<run>.json, cka_d<D>.json, states in <outdir>/states/
-BANDS = ((0, 8), (8, 32), (32, 192))             # principal-component bands of the target embeddings (dim 192)
-DBINS = (1.01, 1.5, 2.1, 3.1, 99.0)              # distance (patch units) of a target patch to the nearest visible context patch
+# Latent analysis of the stage-A ViT predictors (plan_latent_analysis.md; rev 2 after 3 reviewers).  Inference only, on the
+# saved predictor.eqx of each 25-epoch run plus the untrained seed-0 init, on the fixed stage-A test suite (same masks,
+# corruptions and rng streams as train_pred_vit.evaluate).  python latent_vit.py <root> <outdir> [depth ...]
+GROUP = 50                                       # eval_masks: one mask shape per 50 consecutive images
 CONDS = {"clean": ("none", 0.0), "ctx_drop25": ("none", 0.25), "ctx_drop50": ("none", 0.5), "noise": ("noise", 0.0), "square": ("square", 0.0)}
-ARMS_LA = ("bp", "epc_alm_k4", "epc_alm_blk4", "epc_k4", "spc_u1")
+DBINS = (1.01, 1.5, 2.1, 3.1, 99.0)              # distance (patch units) of a target patch to the nearest visible context patch
+CUTS = (0.5, 0.8, 0.95, 1.0)                     # PC bands: cumulative share of centred target variance
+PC_ARMS = ("epc_alm_k4", "epc_alm_blk4", "epc_k4", "spc_u1")
+SHA = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__))).stdout.strip()
 
 
-# Instrumented forward pass, identical to Predictor.__call__: node states h_0 (embedding) .. h_2L, the prediction, and per
-# attention layer the attention of the valid target queries: mass on context keys, mean grid distance to context keys
-# (attention renormalised over context), entropy over all valid keys.  One image, one target block.
+def dump(obj, path):                             # atomic json write
+    tmp = path + ".tmp"; json.dump(obj, open(tmp, "w")); os.replace(tmp, path)
+
+
+def readable(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return None
+
+
+# Instrumented forward pass, identical to Predictor.__call__.  Returns the prediction, the per-node states pooled over the
+# valid target tokens, per attention layer and head [mass on context keys, mass-weighted distance to context keys,
+# distance under uniform attention over context, entropy over valid keys] (valid target queries), and per layer the norm of
+# the context keys' value contribution to the target rows relative to the residual stream.  One image, one target block.
 def forward_instr(p, ctx, cidx, cvalid, tidx, tvalid, g):
     kvalid = jnp.concatenate([cvalid, tvalid]); NC, nt = cidx.shape[0], tidx.shape[0]
     pos = jnp.concatenate([cidx, tidx]); rc = jnp.stack([pos // g, pos % g], -1).astype(jnp.float32)
-    dist = jnp.sqrt(jnp.sum((rc[:, None] - rc[None]) ** 2, -1))                        # (N, N) grid distance
-    ctxkey = jnp.concatenate([cvalid, jnp.zeros(nt, bool)])
-    h = p.embed_(ctx, cidx, tidx); hs, att = [h], []
+    dist = jnp.sqrt(jnp.sum((rc[:, None] - rc[None]) ** 2, -1))[NC:]                    # (nt, N) from target queries
+    ck = jnp.concatenate([cvalid, jnp.zeros(nt, bool)]).astype(jnp.float32)
+    w = tvalid.astype(jnp.float32); nw = jnp.maximum(jnp.sum(w), 1.0)
+    unif = jnp.sum(dist * ck, -1) / jnp.maximum(jnp.sum(ck), 1.0)                        # (nt,)
+    h = p.embed_(ctx, cidx, tidx); hs, att, con = [h], [], []
     for j in range(p.n_sub):
         b = p.blocks[j // 2]
         if j % 2 == 0:
@@ -32,192 +48,323 @@ def forward_instr(p, ctx, cidx, cvalid, tidx, tvalid, g):
             s = jnp.where(kvalid[None, None, :], s, -1e30)
             Aw = jax.nn.softmax(s, -1)
             out = b.proj(jnp.einsum("hnm,mhe->nhe", Aw, v).reshape(N, d))
-            At = Aw[:, NC:]                                                             # target queries (H, nt, N)
-            mc = jnp.sum(At * ctxkey[None, None], -1)
-            dc = jnp.sum(At * ctxkey[None, None] * dist[NC:][None], -1) / jnp.maximum(mc, 1e-12)
+            At = Aw[:, NC:]                                                             # (H, nt, N)
+            mc = jnp.sum(At * ck, -1)
+            dcw = jnp.sum(w * jnp.sum(At * ck * dist[None], -1), -1) / jnp.maximum(jnp.sum(w * mc, -1), 1e-12)
             en = -jnp.sum(jnp.where(kvalid[None, None], At * jnp.log(jnp.maximum(At, 1e-30)), 0.0), -1)
-            w = tvalid[None].astype(jnp.float32); nw = jnp.maximum(jnp.sum(w), 1.0)
-            att.append(jnp.stack([jnp.sum(mc * w, -1) / nw, jnp.sum(dc * w, -1) / nw, jnp.sum(en * w, -1) / nw], -1))   # (H, 3)
+            att.append(jnp.stack([jnp.sum(mc * w, -1) / nw, dcw, jnp.full((H,), jnp.sum(unif * w) / nw), jnp.sum(en * w, -1) / nw], -1))
+            cc = jnp.einsum("hnm,mhe->nhe", At * ck[None, None], v).reshape(nt, d) @ b.proj.W.T * p.scale
+            con.append(jnp.sum(w * jnp.linalg.norm(cc, axis=-1) / jnp.maximum(jnp.linalg.norm(h[NC:], axis=-1), 1e-12)) / nw)
         else:
             out = b.mlp(h)
         h = h + p.scale * out; hs.append(h)
-    Pr = p.head(h, nt)
-    tw = tvalid.astype(jnp.float32)[:, None]; nv = jnp.maximum(jnp.sum(tw), 1.0)
-    pooled = jnp.stack([jnp.sum(x[NC:] * tw, 0) / nv for x in hs])                     # (n_nodes, w) over valid targets
-    return Pr, pooled, jnp.stack(att)                                                   # att (L, H, 3)
+    pooled = jnp.stack([jnp.sum(x[NC:] * w[:, None], 0) / nw for x in hs])
+    return p.head(h, nt), pooled, jnp.stack(att), jnp.stack(con)
 
 
 def make_fns(pred, g):
     one = lambda c, ci, cv, ti, tv: forward_instr(pred, c, ci, cv, ti, tv, g)
     batch = eqx.filter_jit(jax.vmap(lambda c, ci, cv, ti, tv: jax.vmap(lambda t1, t2: one(c, ci, cv, t1, t2))(ti, tv)))
 
-    def jac_top(c, ci, cv, ti, tv, iters=20):    # top singular value of d(valid predictions)/d(valid context rows)
+    def jac_top(c, ci, cv, ti, tv, key):         # top singular value of d(valid predictions)/d(valid context): iters 20 and 40
         f = lambda z: pred(z, ci, cv, ti, tv) * tv[:, None]
         cm = cv[:, None].astype(c.dtype)
-        v = jnp.broadcast_to(jnp.linspace(1.0, 2.0, c.shape[-1]), c.shape) * cm; v = v / jnp.linalg.norm(v)
+        v = jax.random.normal(key, c.shape) * cm; v = v / jnp.linalg.norm(v)
         def it(_, v):
             _, Jv = jax.jvp(f, (c,), (v,)); w = jax.vjp(f, c)[1](Jv)[0] * cm
             return w / (jnp.linalg.norm(w) + 1e-30)
-        v = jax.lax.fori_loop(0, iters, it, v)
-        return jnp.linalg.norm(jax.jvp(f, (c,), (v,))[1])
-
-    def rand_sens(c, ci, cv, ti, tv, key):       # ||P(c + d) - P(c)|| / ||d||, d = 1% of the rms context entry, valid rows
-        f = lambda z: pred(z, ci, cv, ti, tv) * tv[:, None]
-        cm = cv[:, None].astype(c.dtype); rms = jnp.sqrt(jnp.sum((c * cm) ** 2) / jnp.maximum(jnp.sum(cm) * c.shape[-1], 1.0))
-        d = 0.01 * rms * jax.random.normal(key, c.shape) * cm
-        return jnp.linalg.norm(f(c + d) - f(c)) / jnp.linalg.norm(d)
-    jt = eqx.filter_jit(jax.vmap(jac_top)); rs = eqx.filter_jit(jax.vmap(rand_sens))
+        v20 = jax.lax.fori_loop(0, 20, it, v); v40 = jax.lax.fori_loop(0, 20, it, v20)
+        s = lambda u: jnp.linalg.norm(jax.jvp(f, (c,), (u,))[1])
+        return jnp.stack([s(v20), s(v40), jnp.linalg.norm(f(c)), jnp.linalg.norm(c * cm)])
+    jt = eqx.filter_jit(jax.vmap(jac_top))
     gn = eqx.filter_jit(jax.vmap(lambda c, ci, cv, ti, tv: P.gain(pred, c, ci, cv, ti, tv)))
-    return batch, jt, rs, gn
+    pr = eqx.filter_jit(lambda c, ci, cv, ti, tv: A.predict(pred, c, ci, cv, ti, tv))
+    return batch, jt, gn, pr
 
 
-def nearest_ctx_dist(cidx, cvalid, tidx, tvalid, g):   # numpy: (B, K, NT) distance of each target patch to nearest valid ctx
+def nearest_ctx_dist(cidx, cvalid, tidx, tvalid, g):   # (B, K, NT) distance of each target patch to the nearest valid ctx patch
     cr, cc = cidx // g, cidx % g; tr, tc = tidx // g, tidx % g
     d = np.sqrt((tr[..., None] - cr[:, None, None, :]) ** 2 + (tc[..., None] - cc[:, None, None, :]) ** 2)
     d = np.where(cvalid[:, None, None, :], d, np.inf).min(-1)
     return np.where(tvalid, d, np.nan)
 
 
-def linear_cka(X, Y):                            # rows = samples; centred linear CKA
-    X = X - X.mean(0); Y = Y - Y.mean(0)
-    return float(np.linalg.norm(Y.T @ X) ** 2 / (np.linalg.norm(X.T @ X) * np.linalg.norm(Y.T @ Y)))
+def ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g):   # (B, NC) distance of each valid ctx patch to the nearest valid target
+    cr, cc = cidx // g, cidx % g; T = tidx.reshape(len(tidx), -1); Tv = tvalid.reshape(len(tidx), -1)
+    d = np.sqrt((cr[:, :, None] - (T // g)[:, None]) ** 2 + (cc[:, :, None] - (T % g)[:, None]) ** 2)
+    d = np.where(Tv[:, None], d, np.inf).min(-1)
+    return np.where(cvalid, d, np.nan)
 
 
-def spectrum(C):                                 # eigenvalues (desc) of a covariance, effective rank exp(H), participation ratio
+def intervention_masks(rng, cidx, cvalid, tidx, tvalid, g, keep_min=4):
+    # Encoder held fixed; remove (a) every visible ctx patch within 1.5 of a target patch, (b) the same number of patches
+    # farther than 3.1, (c) the same number at random.  Count capped so that >= keep_min context patches remain.
+    dct = ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g); out = {k: cvalid.copy() for k in ("near", "far", "random")}; n_rm = []
+    for b in range(len(cidx)):
+        val = np.where(cvalid[b])[0]; near = val[dct[b, val] <= 1.5]; far = val[dct[b, val] > 3.1]
+        n = min(len(near), len(val) - keep_min, len(far)); n_rm.append(n)
+        if n <= 0: continue
+        out["near"][b, rng.choice(near, n, replace=False)] = False
+        out["far"][b, rng.choice(far, n, replace=False)] = False
+        out["random"][b, rng.choice(val, n, replace=False)] = False
+    return out, np.array(n_rm)
+
+
+def residualise(S):                              # S (n_img, K, nodes, w): remove the per-(mask shape, block) mean over images
+    n = S.shape[0] // GROUP * GROUP; X = S[:n].reshape(n // GROUP, GROUP, *S.shape[1:]).astype(np.float64)
+    return (X - X.mean(1, keepdims=True)).reshape(n, *S.shape[1:])
+
+
+def linear_cka(X, Y):
+    X = np.asarray(X, np.float64); Y = np.asarray(Y, np.float64); X = X - X.mean(0); Y = Y - Y.mean(0)
+    den = np.linalg.norm(X.T @ X) * np.linalg.norm(Y.T @ Y)
+    return float(np.linalg.norm(Y.T @ X) ** 2 / den) if den > 0 else float("nan")
+
+
+def spectrum(C):
     e = np.clip(np.linalg.eigvalsh(C)[::-1], 0, None); p = e / e.sum()
     return {"eff_rank": float(np.exp(-np.sum(p[p > 0] * np.log(p[p > 0])))), "part_ratio": float(e.sum() ** 2 / np.sum(e ** 2)),
             "top10_frac": [float(x) for x in p[:10]]}
 
 
-def target_basis(tenc, vc, Xev, masks, bs):      # PCA basis of the (uncentred) second moment of the clean targets
-    M, n = np.zeros((vc.dim, vc.dim)), 0
+def ridge_probe(Ftr, ytr, Fte, yte, lam=10.0):
+    mu, sd = Ftr.mean(0), Ftr.std(0) + 1e-8; Xtr = np.c_[(Ftr - mu) / sd, np.ones(len(Ftr))]; Xte = np.c_[(Fte - mu) / sd, np.ones(len(Fte))]
+    Y = np.eye(int(ytr.max()) + 1)[ytr]; W = np.linalg.solve(Xtr.T @ Xtr + lam * np.eye(Xtr.shape[1]), Xtr.T @ Y)
+    return float(np.mean((Xte @ W).argmax(1) == yte))
+
+
+def node_probes(Ste, Str, yte, ytr):             # per node: kNN (raw/centred) and ridge probe on position-residualised states
+    Rte, Rtr = residualise(Ste), residualise(Str); out = []
+    for j in range(Ste.shape[2]):
+        mu, sd = Rtr[:, :, j].reshape(-1, Rtr.shape[-1]).mean(0), Rtr[:, :, j].reshape(-1, Rtr.shape[-1]).std(0) + 1e-8
+        Fte = ((Rte[:, :, j] - mu) / sd).mean(1); Ftr = ((Rtr[:, :, j] - mu) / sd).mean(1)
+        r = V.knn_both(Ftr, ytr[:len(Ftr)], Fte, yte[:len(Fte)]); r["ridge"] = ridge_probe(Ftr, ytr[:len(Ftr)], Fte, yte[:len(Fte)]); out.append(r)
+    return out
+
+
+def target_basis(enc, tenc, vc, Xev, masks, bs):
+    # Centred covariance of the clean targets.  Targets are layer-normed (zero feature mean), so they live in the 191-d
+    # complement of the all-ones direction; U = its 191 eigenvectors (desc) + the all-ones direction last ("off-manifold").
+    S1, S2, n = np.zeros(vc.dim), np.zeros((vc.dim, vc.dim)), 0
     for i, (ci, cv, ti, tv) in enumerate(masks):
-        Xb = jnp.asarray(V.standardise(Xev[i * bs:(i + 1) * bs]))
-        Y = np.asarray(V.targets_of(tenc, Xb, jnp.asarray(ti), vc), np.float64)[tv]
-        M += Y.T @ Y; n += len(Y)
-    e, U = np.linalg.eigh(M / n); return U[:, ::-1], e[::-1]
+        Y = np.asarray(V.targets_of(tenc, jnp.asarray(V.standardise(Xev[i * bs:(i + 1) * bs])), jnp.asarray(ti), vc), np.float64)[tv]
+        S1 += Y.sum(0); S2 += Y.T @ Y; n += len(Y)
+    return basis_from_moments(S1, S2, n, vc.dim)
 
 
-def analyse(run, pred, enc, tenc, vc, Xev, yev, Xknn, yknn, U, out_states, bs=200, n_jac=200):
-    g = vc.grid; masks = A.eval_masks(len(Xev), vc, bs); batch, jt, rs, gn = make_fns(pred, g)
-    res = {"run": run, "conds": {}}; per_img = {}
+def basis_from_moments(S1, S2, n, dim):
+    mu = S1 / n; C = S2 / n - np.outer(mu, mu); one = np.ones(dim) / math.sqrt(dim); Pi = np.eye(dim) - np.outer(one, one)
+    e, U = np.linalg.eigh(Pi @ C @ Pi); U = U[:, ::-1][:, :dim - 1]; e = e[::-1][:dim - 1]
+    U = np.linalg.qr(U - np.outer(one, one @ U))[0]; U = np.c_[U, one]
+    cum = np.cumsum(e) / e.sum(); ends = [min(int(np.searchsorted(cum, c - 1e-12)) + 1, dim - 1) for c in CUTS]
+    bands = [(0 if k == 0 else ends[k - 1], ends[k]) for k in range(len(ends))] + [(dim - 1, dim)]
+    return U, e, mu, bands
+
+
+def noise_split(ac, NR):                         # NR columns ||dP||^2, ||Pc||^2, dP.Pc, dP.(Pc - Y): (var term, cross term)
+    return ac ** 2 * NR[:, 0], 2 * ac * (ac * NR[:, 2] - (NR[:, 2] - NR[:, 3]))
+
+
+def analyse(run, pred, enc, tenc, vc, Xev, Xknn, U, bands, states_path, bs=200):
+    g = vc.grid; masks = A.eval_masks(len(Xev), vc, bs); batch, jt, gn, pr = make_fns(pred, g)
+    res = {"run": run, "conds": {}}; per = {}; nb_ = len(bands)
+    Sclean, Pclean, ctx_clean = [], [], []
     for name, (kind, frac) in CONDS.items():
         r2 = np.random.default_rng(A.EVAL_SEED + 1)
-        rows, bandE, bandY, binE, binY, attS, Pl, Pc = [], [], [], [], [], [], [], []
-        CP, CY, sP, sY, nn = np.zeros((vc.dim, vc.dim)), np.zeros((vc.dim, vc.dim)), np.zeros(vc.dim), np.zeros(vc.dim), 0
-        for i, (ci, cv, ti, tv) in enumerate(masks):
-            Xb = Xev[i * bs:(i + 1) * bs]
+        rows, bandE, binE, binY, binN, binE0, binY0, attS, conS = [], [], [], [], [], [], [], [], []
+        comp = np.zeros((7, vc.dim)); CP = np.zeros((vc.dim, vc.dim)); sP = np.zeros(vc.dim); nn = 0
+        noise_rows = []
+        for i, (ci0, cv0, ti, tv) in enumerate(masks):
+            Xb = Xev[i * bs:(i + 1) * bs]; ci, cv = ci0, cv0
             if frac > 0:
-                ci, cv = A.drop_context(r2, ci, cv, frac)
+                ci, cv = A.drop_context(r2, ci0, cv0, frac)
             Xc = A.corrupt(r2, Xb, kind)
-            ctx, Y = A.encode(enc, tenc, jnp.asarray(V.standardise(Xc)), jnp.asarray(V.standardise(Xb)), jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), vc)
-            Pr, pooled, att = batch(ctx, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), jnp.asarray(tv))
-            if i == 0 and name == "clean":       # the instrumented pass must equal the model's own forward pass
-                ref = A.predict(pred, ctx, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), jnp.asarray(tv))
-                res["instr_vs_model_maxabs"] = float(jnp.max(jnp.abs((ref - Pr) * jnp.asarray(tv)[..., None])))
+            J = lambda x: jnp.asarray(x)
+            ctx, Y = A.encode(enc, tenc, J(V.standardise(Xc)), J(V.standardise(Xb)), J(ci), J(cv), J(ti), vc)
+            Pr, pooled, att, con = batch(ctx, J(ci), J(cv), J(ti), J(tv))
+            if i == 0:
+                ref = pr(ctx, J(ci), J(cv), J(ti), J(tv)); m_ = J(tv)[..., None]
+                res.setdefault("instr_vs_model_rel", {})[name] = float(jnp.max(jnp.abs((ref - Pr) * m_)) / jnp.max(jnp.abs(ref * m_)))
             Pr, Yn = np.asarray(Pr, np.float64), np.asarray(Y, np.float64); m = tv[..., None].astype(np.float64)
             rows.append(A.per_image(Pr, Y, tv))
-            Ep, Yp = ((Pr - Yn) * m) @ U, (Yn * m) @ U                                  # (B, K, NT, 192) in the PC basis
-            bandE.append(np.stack([(Ep[..., a:b] ** 2).sum((1, 2, 3)) for a, b in BANDS], 1))
-            bandY.append(np.stack([(Yp[..., a:b] ** 2).sum((1, 2, 3)) for a, b in BANDS], 1))
-            dd = nearest_ctx_dist(ci, cv, ti, tv, g); e2 = ((Pr - Yn) ** 2).sum(-1); y2 = (Yn ** 2).sum(-1)
-            lo = 0.0; be, by = [], []
-            for hi in DBINS:
-                sel = (dd > lo) & (dd <= hi); be.append(np.where(sel, e2, 0).sum((1, 2))); by.append(np.where(sel, y2, 0).sum((1, 2))); lo = hi
-            binE.append(np.stack(be, 1)); binY.append(np.stack(by, 1))
-            attS.append(np.asarray(att, np.float64).mean(1))                           # (B, L, H, 3), mean over blocks
-            Pv, Yv = Pr[tv], Yn[tv]; CP += Pv.T @ Pv; CY += Yv.T @ Yv; sP += Pv.sum(0); sY += Yv.sum(0); nn += len(Pv)
-            if name in ("clean", "noise"):
-                Pl.append((Pr * m).astype(np.float32))
+            Pp, Yp = (Pr * m) @ U, (Yn * m) @ U; Ep = Pp - Yp; vm = tv.astype(np.float64)
+            comp += np.stack([vm.sum() * np.ones(vc.dim), Pp.sum((0, 1, 2)), Yp.sum((0, 1, 2)), (Pp ** 2).sum((0, 1, 2)), (Yp ** 2).sum((0, 1, 2)),
+                              (Pp * Yp).sum((0, 1, 2)), (Ep ** 2).sum((0, 1, 2))])
+            bandE.append(np.stack([(Ep[..., a:b] ** 2).sum((1, 2, 3)) for a, b in bands], 1))
+            e2 = ((Pr - Yn) ** 2).sum(-1); y2 = (Yn ** 2).sum(-1)
+            for dd, E_, Y_, N_ in ((nearest_ctx_dist(ci, cv, ti, tv, g), binE, binY, binN), (nearest_ctx_dist(ci0, cv0, ti, tv, g), binE0, binY0, None)):
+                lo = 0.0; be, by, bn = [], [], []
+                for hi in DBINS:
+                    sel = (dd > lo) & (dd <= hi); be.append(np.where(sel, e2, 0).sum((1, 2))); by.append(np.where(sel, y2, 0).sum((1, 2))); bn.append(sel.sum((1, 2))); lo = hi
+                E_.append(np.stack(be, 1)); Y_.append(np.stack(by, 1))
+                if N_ is not None: N_.append(np.stack(bn, 1))
+            attS.append(np.asarray(att, np.float64).mean(1)); conS.append(np.asarray(con, np.float64).mean(1))
+            Pf = Pr[tv] - Pr[tv].mean(-1, keepdims=True); CP += Pf.T @ Pf; sP += Pf.sum(0); nn += len(Pf)
             if name == "clean":
-                tw = tv.sum(-1).astype(np.float64); pz = np.asarray(pooled, np.float64)          # (B, K, nodes, w)
-                Pc.append((pz * tw[..., None, None]).sum(1) / np.maximum(tw.sum(1), 1)[:, None, None])  # per image (B, nodes, w)
-                np.save(os.path.join(out_states, f"{run}_b{i:02d}.npy"), pz.reshape(-1, pz.shape[2], pz.shape[3]).astype(np.float32))
-        A_ = np.concatenate(rows); S = A_.sum(0)
-        bE, bY, dE, dY = (np.concatenate(x) for x in (bandE, bandY, binE, binY))
-        CPc, CYc = CP / nn - np.outer(sP / nn, sP / nn), CY / nn - np.outer(sY / nn, sY / nn)
-        res["conds"][name] = {"nmse": float(S[0] / S[1]), "band_nmse": [float(x) for x in bE.sum(0) / bY.sum(0)],
-                              "band_err_share": [float(x) for x in bE.sum(0) / bE.sum()],
-                              "band_sum_check": float(bE.sum() / S[0]), "dist_nmse": [float(x) for x in dE.sum(0) / np.maximum(dY.sum(0), 1e-30)],
-                              "dist_count_share": [float(x) for x in dY.sum(0) / dY.sum()], "dist_sum_check": float(dE.sum() / S[0]),
-                              "attn": np.concatenate(attS).mean(0).tolist(), "spec_pred": spectrum(CPc), "spec_target": spectrum(CYc),
-                              "pred_var_by_band": [float(np.trace(U[:, a:b].T @ CPc @ U[:, a:b]) / np.trace(U[:, a:b].T @ CYc @ U[:, a:b])) for a, b in BANDS]}
-        per_img[name] = {"err": A_[:, 0], "y2": A_[:, 1], "band_err": bE, "band_y2": bY, "dist_err": dE, "dist_y2": dY}
-        if name == "clean":
-            Pclean, PCpool = np.concatenate(Pl), np.concatenate(Pc)
+                Sclean.append(np.asarray(pooled, np.float32)); Pclean.append((Pr * m).astype(np.float32)); ctx_clean.append(np.asarray(ctx))
+            if name == "noise":                   # change of the prediction under noise; context shift in embedding space
+                Pc = Pclean[i].astype(np.float64); dP = Pr * m - Pc
+                cm = cv[..., None]; dc = np.sqrt((((np.asarray(ctx, np.float64) - ctx_clean[i]) * cm) ** 2).sum((1, 2)))
+                noise_rows.append(np.stack([(dP ** 2).sum((1, 2, 3)), (Pc ** 2).sum((1, 2, 3)), (dP * Pc).sum((1, 2, 3)),
+                                            (dP * (Pc - Yn * m)).sum((1, 2, 3)), dc], 1))
+                res.setdefault("_dPband", []).append(np.stack([((dP @ U)[..., a:b] ** 2).sum((1, 2, 3)) for a, b in bands], 1))
+        A_ = np.concatenate(rows); S = A_.sum(0); a_ = S[2] / S[3]
+        bE = np.concatenate(bandE); dE, dY, dN, dE0, dY0 = (np.concatenate(x) for x in (binE, binY, binN, binE0, binY0))
+        n_, sp, sy, spp, syy, spy, see = comp
+        vy = syy / n_ - (sy / n_) ** 2; vp = spp / n_ - (sp / n_) ** 2; cpy = spy / n_ - sp * sy / n_ ** 2
+        corr = cpy / np.sqrt(np.maximum(vp * vy, 1e-300)); slope = cpy / np.maximum(vy, 1e-300)
+        bstat = []
+        for a, b in bands:
+            vyb, vpb, cb = vy[a:b].sum(), vp[a:b].sum(), cpy[a:b].sum()
+            bstat.append({"comps": [a, b], "err_share": float(see[a:b].sum() / see.sum()), "err_over_target_var": float(see[a:b].sum() / n_[0] / max(vyb, 1e-300)),
+                          "pred_var_over_target_var": float(vpb / max(vyb, 1e-300)), "corr": float(cb / math.sqrt(max(vpb * vyb, 1e-300))),
+                          "slope": float(cb / max(vyb, 1e-300)), "target_var_share": float(vyb / vy.sum())})
+        safe = lambda num, den: [float(x) if d > 0 else float("nan") for x, d in zip(num, den)]
+        C = res["conds"][name] = {
+            "nmse": float(S[0] / S[1]), "nmse_cal": float((S[3] * a_ ** 2 - 2 * a_ * S[2] + S[1]) / S[1]), "alpha_star": float(a_),
+            "bands": bstat, "band_sum_check": float(bE.sum() / S[0]),
+            "per_comp": {"err": (see / see.sum()).tolist(), "corr": corr.tolist(), "slope": slope.tolist()},
+            "dist_nmse": safe(dE.sum(0) / np.maximum(dY.sum(0), 1e-300), dY.sum(0)), "dist_token_share": (dN.sum(0) / dN.sum()).tolist(),
+            "dist_sum_check": float(dE.sum() / S[0]),
+            "dist_nmse_by_clean_dist": safe(dE0.sum(0) / np.maximum(dY0.sum(0), 1e-300), dY0.sum(0)),
+            "attn_layer_mean": np.concatenate(attS).mean((0, 2)).tolist(), "attn_heads_sorted_by_dist": np.sort(np.concatenate(attS).mean(0)[:, :, 1], -1).tolist(),
+            "ctx_contribution": np.concatenate(conS).mean(0).tolist(),
+            "spec_pred": spectrum(CP / nn - np.outer(sP / nn, sP / nn))}
+        per[name] = {"err": A_[:, 0], "y2": A_[:, 1], "py": A_[:, 2], "p2": A_[:, 3], "band_err": bE, "dist_err": dE, "dist_y2": dY}
         if name == "noise":
-            Pn = np.concatenate(Pl); dot = (Pn * Pclean).sum((1, 2, 3)); pc2 = (Pclean ** 2).sum((1, 2, 3))
-            a = dot / pc2; orth = ((Pn - a[:, None, None, None] * Pclean) ** 2).sum((1, 2, 3))
-            res["noise_response"] = {"rel_change": float(((Pn - Pclean) ** 2).sum() / pc2.sum()), "scale_med": float(np.median(a)),
-                                     "orth_share": float(orth.sum() / ((Pn - Pclean) ** 2).sum()), "norm_ratio": float(np.sqrt((Pn ** 2).sum() / pc2.sum()))}
-            per_img["noise_resp"] = ((Pn - Pclean) ** 2).sum((1, 2, 3)) / pc2
-    # sensitivity on the first n_jac clean test images (target block 0)
-    ci, cv, ti, tv = masks[0]; Xb = Xev[:n_jac]
-    ctx, Y = A.encode(enc, tenc, jnp.asarray(V.standardise(Xb)), jnp.asarray(V.standardise(Xb)), jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), vc)
-    a4 = (ctx, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti[:, 0]), jnp.asarray(tv[:, 0]))
-    sj = np.asarray(jt(*a4)); sr = np.asarray(rs(*a4, jax.random.split(jax.random.PRNGKey(3), n_jac))); ga = np.asarray(gn(*a4))
-    res["sensitivity"] = {"jac_top_med": float(np.median(sj)), "rand_sens_med": float(np.median(sr)), "gain_med": float(np.median(ga)),
-                          "gain_max": float(np.max(ga)), "n_images": n_jac}
-    per_img["jac_top"] = sj; per_img["rand_sens"] = sr
-    # per-layer kNN of image-pooled target-position states; reference set from training images with the same mask sequence
-    Fk = []
+            NR = np.concatenate(noise_rows); ac = res["conds"]["clean"]["alpha_star"]; Sc = per["clean"]
+            Ecal_c = Sc["y2"] - 2 * ac * Sc["py"] + ac ** 2 * Sc["p2"]; Ecal_n = A_[:, 1] - 2 * ac * A_[:, 2] + ac ** 2 * A_[:, 3]
+            # exact split: Ecal_n - Ecal_c = ac^2 ||dP||^2 + 2 ac dP.(ac Pc - Y), dP = Pn - Pc (both masked to valid targets)
+            var_term, cross = noise_split(ac, NR)
+            res.setdefault("_split_check", float(np.max(np.abs((Ecal_n - Ecal_c) - var_term - cross)) / max(float(np.max(np.abs(Ecal_n - Ecal_c))), 1e-30)))
+            dPb = np.concatenate(res.pop("_dPband"))
+            C["noise"] = {"nmse_cal_cleanalpha": float(Ecal_n.sum() / A_[:, 1].sum()), "clean_alpha": float(ac),
+                          "delta_cal_nmse": float((Ecal_n - Ecal_c).sum() / A_[:, 1].sum()),
+                          "delta_from_prediction_change": float(var_term.sum() / A_[:, 1].sum()), "delta_from_cross_term": float(cross.sum() / A_[:, 1].sum()),
+                          "split_check_rel": res.pop("_split_check"),
+                          "rel_change": float(NR[:, 0].sum() / NR[:, 1].sum()), "scale_med": float(np.median(NR[:, 2] / NR[:, 1] + 1)),
+                          "change_band_share": (dPb.sum(0) / dPb.sum()).tolist(),
+                          "noise_gain_med": float(np.median(np.sqrt(NR[:, 0]) / NR[:, 4])), "noise_gain_x_alpha_med": float(ac * np.median(np.sqrt(NR[:, 0]) / NR[:, 4]))}
+            per["noise_cal"] = np.stack([Ecal_c, Ecal_n, var_term], 1); per["noise_dP2_P2_dc"] = NR[:, [0, 1, 4]]
+    # encoder-fixed context interventions on the clean images
+    r3 = np.random.default_rng(A.EVAL_SEED + 7); iv = {k: [] for k in ("near", "far", "random")}; nrm = []
+    for i, (ci, cv, ti, tv) in enumerate(masks):
+        cvs, n_rm = intervention_masks(r3, ci, cv, ti, tv, g); nrm.append(n_rm); c_ = jnp.asarray(ctx_clean[i])
+        Yn = np.asarray(V.targets_of(tenc, jnp.asarray(V.standardise(Xev[i * bs:(i + 1) * bs])), jnp.asarray(ti), vc), np.float64)
+        for k in iv:
+            Pr = np.asarray(pr(c_, jnp.asarray(ci), jnp.asarray(cvs[k]), jnp.asarray(ti), jnp.asarray(tv)), np.float64)
+            iv[k].append(A.per_image(Pr, Yn, tv))
+    yc = per["clean"]["y2"].sum(); ec = per["clean"]["err"].sum()
+    res["interventions"] = {k: {"nmse": float(np.concatenate(v)[:, 0].sum() / yc), "delta": float((np.concatenate(v)[:, 0].sum() - ec) / yc)} for k, v in iv.items()}
+    res["interventions"]["mean_removed"] = float(np.concatenate(nrm).mean()); res["interventions"]["frac_images_removed0"] = float(np.mean(np.concatenate(nrm) == 0))
+    for k, v in iv.items(): per[f"iv_{k}"] = np.concatenate(v)[:, 0]
+    # sensitivity on all images and blocks (clean), scale-normalised by the clean calibration and by the prediction norm
+    ac = res["conds"]["clean"]["alpha_star"]; SJ = []
+    for i, (ci, cv, ti, tv) in enumerate(masks):
+        c_ = jnp.asarray(ctx_clean[i]); keys = jax.random.split(jax.random.PRNGKey(100 + i), len(c_))
+        SJ.append(np.stack([np.asarray(jt(c_, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti[:, k]), jnp.asarray(tv[:, k]), keys)) for k in range(ti.shape[1])], 1))
+    SJ = np.concatenate(SJ)                       # (n, K, 4): sigma@20, sigma@40, ||P||, ||c||
+    sig = SJ[..., 1]; el = sig * SJ[..., 3] / np.maximum(SJ[..., 2], 1e-30)
+    ci, cv, ti, tv = masks[0]; c_ = jnp.asarray(ctx_clean[0]); ga = np.asarray(gn(c_, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti[:, 0]), jnp.asarray(tv[:, 0])))
+    res["sensitivity"] = {"jac_top_med": float(np.median(sig)), "jac_top_x_alpha_med": float(ac * np.median(sig)), "elasticity_med": float(np.median(el)),
+                          "power_iter_rel_gap_med": float(np.median(np.abs(SJ[..., 1] - SJ[..., 0]) / np.maximum(SJ[..., 1], 1e-30))),
+                          "power_iter_rel_gap_p95": float(np.percentile(np.abs(SJ[..., 1] - SJ[..., 0]) / np.maximum(SJ[..., 1], 1e-30), 95)),
+                          "gain_med": float(np.median(ga)), "gain_max": float(np.max(ga))}
+    per["jac_top"] = sig; per["elasticity"] = el
+    # hidden states: test set (clean) to disk for CKA; reference set (training images, same mask sequence) for probes
+    Ste = np.concatenate(Sclean); np.save(states_path + ".tmp.npy", Ste); os.replace(states_path + ".tmp.npy", states_path)
+    Str, Fk, Fev = [], [], np.concatenate([A.pooled(Pc_, tv_) for Pc_, (_, _, _, tv_) in zip([p.astype(np.float64) for p in Pclean], masks)])
     for i in range(0, len(Xknn), bs):
-        ci, cv, ti, tv = masks[(i // bs) % len(masks)]; Xb = Xknn[i:i + bs]; nb = len(Xb)
-        ci, cv, ti, tv = ci[:nb], cv[:nb], ti[:nb], tv[:nb]
+        ci, cv, ti, tv = masks[(i // bs) % len(masks)]; Xb = Xknn[i:i + bs]
         ctx, _ = A.encode(enc, tenc, jnp.asarray(V.standardise(Xb)), jnp.asarray(V.standardise(Xb)), jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), vc)
-        _, pooled, _ = batch(ctx, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), jnp.asarray(tv))
-        tw = tv.sum(-1).astype(np.float64); pz = np.asarray(pooled, np.float64)
-        Fk.append((pz * tw[..., None, None]).sum(1) / np.maximum(tw.sum(1), 1)[:, None, None])
-    Fk = np.concatenate(Fk)
-    res["knn_by_node"] = [V.knn_both(Fk[:, j], yknn, PCpool[:, j], yev[:len(PCpool)]) for j in range(Fk.shape[1])]
-    return res, per_img
+        Pr, pooled, _, _ = batch(ctx, jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), jnp.asarray(tv))
+        Str.append(np.asarray(pooled, np.float32)); Fk.append(A.pooled(np.asarray(Pr, np.float64), tv))
+    res["_probe_inputs"] = (Ste, np.concatenate(Str), np.concatenate(Fk), Fev)
+    return res, per
 
 
 def main():
-    root, outd = sys.argv[1], sys.argv[2]; depths = [int(x) for x in sys.argv[3:]] or [6, 10]
+    root, outd = sys.argv[1], sys.argv[2]; depths = [int(x) for x in sys.argv[3:]] or [10, 6]
     st = os.path.join(outd, "states"); os.makedirs(st, exist_ok=True)
     vc, enc, tenc, _ = A.load_encoders(os.path.join(root, "Q1-PhaseA", A.V0_DIR))
     Xtr, ytr, Xte, yte = D.load_cifar10(root=os.path.join(root, "data"), n_train=-1, n_test=2000, seed=0)
-    Xknn, yknn = Xtr[:5000], ytr[:5000]
-    U, ev = target_basis(tenc, vc, Xte, A.eval_masks(len(Xte), vc, 200), 200)
-    json.dump({"eig": ev.tolist()}, open(os.path.join(outd, "target_basis.json"), "w"))
+    Xknn, yknn = Xtr[:5000], ytr[:5000]; masks = A.eval_masks(len(Xte), vc, 200)
+    bf = os.path.join(outd, "target_basis.npz")
+    if os.path.exists(bf):
+        z = np.load(bf); U, ev, mu, bands = z["U"], z["ev"], z["mu"], [tuple(x) for x in z["bands"]]
+    else:
+        U, ev, mu, bands = target_basis(enc, tenc, vc, Xte, masks, 200); np.savez(bf, U=U, ev=ev, mu=mu, bands=np.array(bands))
+    # input-information floor for the probes: pooled clean context embeddings (independent of the predictor)
+    def ctx_feats(X):
+        F = []
+        for i in range(0, len(X), 200):
+            ci, cv, ti, tv = masks[(i // 200) % len(masks)]; Xb = X[i:i + 200]
+            ctx, _ = A.encode(enc, tenc, jnp.asarray(V.standardise(Xb)), jnp.asarray(V.standardise(Xb)), jnp.asarray(ci), jnp.asarray(cv), jnp.asarray(ti), vc)
+            c = np.asarray(ctx, np.float64) * cv[..., None]; F.append(c.sum(1) / cv.sum(1, keepdims=True))
+        return np.concatenate(F)
+    cf = os.path.join(outd, "ctx_floor.json")
+    if not readable(cf):
+        Ft, Fr = ctx_feats(Xte), ctx_feats(Xknn); r = V.knn_both(Fr, yknn, Ft, yte); r["ridge"] = ridge_probe(Fr, yknn, Ft, yte); dump(r, cf)
     SA = os.path.join(root, "Q1-PhaseA/runs_vit/stageA")
     for depth in depths:
-        runs = []
-        for arm in ARMS_LA:
-            for d in sorted(glob.glob(f"{SA}/{arm}_d{depth}_lr*_e25_full_s*")):
-                if os.path.isdir(d) and os.path.exists(d + "/report.json") and os.path.exists(d + "/predictor.eqx"):
-                    rep = json.load(open(d + "/report.json")); cfg = rep["cfg"]
-                    if arm == "bp" and cfg["lr"] != 3e-3: continue                       # BP: the selected lr (3e-3) only
-                    runs.append((os.path.basename(d), arm, cfg, rep))
-        print("RUNS", depth, [r[0] for r in runs], flush=True)
-        for name, arm, cfg, rep in runs:
-            f = os.path.join(outd, f"latent_{name}.json")
-            if os.path.exists(f): continue
-            t0 = time.time(); a = A.ACfg(**{k: v for k, v in cfg.items() if k in A.ACfg.__dataclass_fields__})
-            pred = eqx.tree_deserialise_leaves(os.path.join(SA, name, "predictor.eqx"), A.make_predictor(vc, a))
-            res, per = analyse(name, pred, enc, tenc, vc, Xte, yte, Xknn, yknn, U, st)
-            res["reported"] = {c: rep["eval"][c]["nmse"] for c in CONDS}; res["arm"], res["depth"], res["seed"] = arm, depth, cfg["seed"]
-            res["reproduces_report"] = all(abs(res["conds"][c]["nmse"] - res["reported"][c]) <= 1e-5 * res["reported"][c] for c in CONDS)
-            res["sec"] = round(time.time() - t0)
-            np.savez_compressed(os.path.join(outd, f"perimg_{name}.npz"), **{f"{k}__{kk}" if isinstance(v, dict) else k: (vv if isinstance(v, dict) else v)
-                                                                             for k, v in per.items() for kk, vv in (v.items() if isinstance(v, dict) else [("", v)])})
-            json.dump(res, open(f, "w")); print("DONE", name, res["reproduces_report"], res["instr_vs_model_maxabs"], res["sec"], flush=True)
-        # CKA per node: every model against BP seed 0; BP seeds 1-4 give the "same solution" reference
-        ref = [r[0] for r in runs if r[1] == "bp" and r[2]["seed"] == 0]
-        if not ref: continue
-        load = lambda n: np.concatenate([np.load(x) for x in sorted(glob.glob(os.path.join(st, f"{n}_b*.npy")))])
-        R0 = load(ref[0]); cf = os.path.join(outd, f"cka_d{depth}.json")
-        cka = json.load(open(cf))["cka"] if os.path.exists(cf) else {}        # a later pass (spc_u1) adds to the file
-        for name, *_ in runs:
-            if name == ref[0] or name in cka or not glob.glob(os.path.join(st, f"{name}_b*.npy")): continue
-            X = load(name); cka[name] = [linear_cka(R0[:, j], X[:, j]) for j in range(R0.shape[1])]
-        json.dump({"reference": ref[0], "cka": cka, "rows": "per (image, target block), pooled over the valid target tokens"},
-                  open(os.path.join(outd, f"cka_d{depth}.json"), "w"))
-        for name, *_ in runs:                    # state files are large (~0.1 GB per model); the BP seed-0 reference is kept
-            if name != ref[0]:
-                for x in glob.glob(os.path.join(st, f"{name}_b*.npy")): os.remove(x)
-        print("CKA", depth, {k: round(float(np.mean(v)), 3) for k, v in cka.items()}, flush=True)
+        bp = {}
+        for d in glob.glob(f"{SA}/bp_d{depth}_lr*_e25_full_s*"):
+            if os.path.exists(d + "/report.json") and os.path.exists(d + "/predictor.eqx"):
+                c = json.load(open(d + "/report.json"))["cfg"]; bp[(c["lr"], c["seed"])] = os.path.basename(d)
+        lr_sel = {lr for (lr, s) in bp if s > 0}
+        assert len(lr_sel) == 1, f"BP seeds 1-4 at more than one lr: {lr_sel}"; lr_sel = lr_sel.pop()
+        assert {s for (lr, s) in bp if lr == lr_sel} == {0, 1, 2, 3, 4}, f"d{depth}: BP seeds at lr {lr_sel}: {sorted(bp)}"
+        runs = [(bp[(lr_sel, s)], "bp", s) for s in range(5)]; pc_lrs = set()
+        for arm in PC_ARMS:
+            ds = [d for d in glob.glob(f"{SA}/{arm}_d{depth}_lr*_e25_full_s0_*") if os.path.exists(d + "/report.json") and os.path.exists(d + "/predictor.eqx")]
+            assert len(ds) <= 1, ds
+            if ds:
+                runs.append((os.path.basename(ds[0]), arm, 0)); pc_lrs.add(json.load(open(ds[0] + "/report.json"))["cfg"]["lr"])
+            elif arm != "spc_u1":
+                raise SystemExit(f"missing {arm} d{depth}")
+        for lr in sorted(pc_lrs - {lr_sel}):     # lr-matched BP control (seed 0) for any PC arm trained at another lr
+            if (lr, 0) in bp: runs.append((bp[(lr, 0)], "bp_lrmatch", 0))
+        runs.append((f"init_d{depth}_s0", "init", 0))
+        print("RUNS", depth, lr_sel, [r[0] for r in runs], flush=True)
+        for name, arm, seed in runs:
+            f = os.path.join(outd, f"latent_{name}.json"); old = readable(f)
+            if old and old.get("sha") == SHA and os.path.exists(os.path.join(st, name + ".npy")): continue
+            t0 = time.time()
+            if arm == "init":
+                a = A.ACfg(arm="bp", depth=depth, seed=0); pred = A.make_predictor(vc, a); rep = None
+            else:
+                rep = json.load(open(os.path.join(SA, name, "report.json"))); cfg = rep["cfg"]
+                a = A.ACfg(**{k: v for k, v in cfg.items() if k in A.ACfg.__dataclass_fields__})
+                pred = eqx.tree_deserialise_leaves(os.path.join(SA, name, "predictor.eqx"), A.make_predictor(vc, a))
+            res, per = analyse(name, pred, enc, tenc, vc, Xte, Xknn, U, bands, os.path.join(st, name + ".npy"))
+            Ste, Str, Fk, Fev = res.pop("_probe_inputs")
+            res["knn_pred"] = V.knn_both(Fk, yknn, Fev, yte[:len(Fev)]); res["node_probes"] = node_probes(Ste, Str, yte, yknn)
+            res.update(arm=arm, depth=depth, seed=seed, lr=(a.lr if arm != "init" else None), sha=SHA, sec=round(time.time() - t0), bands=[list(b) for b in bands])
+            if rep:
+                dev = {c: abs(res["conds"][c]["nmse"] - rep["eval"][c]["nmse"]) / rep["eval"][c]["nmse"] for c in CONDS}
+                dev["noise_cal_cleanalpha"] = abs(res["conds"]["noise"]["noise"]["nmse_cal_cleanalpha"] - rep["eval"]["noise"]["nmse_cal_cleanalpha"]) / rep["eval"]["noise"]["nmse_cal_cleanalpha"]
+                dev["knn_pred"] = abs(res["knn_pred"]["knn"] - rep["eval"]["knn_pred"]["knn"])
+                res["report_dev"] = dev; res["reproduces_report"] = max(v for k, v in dev.items() if k != "knn_pred") <= 1e-4 and dev["knn_pred"] <= 2e-3
+            flat = {}
+            for c, d_ in per.items():
+                if isinstance(d_, dict): flat.update({f"{c}__{kk}": vv for kk, vv in d_.items()})
+                else: flat[c] = d_
+            np.savez_compressed(os.path.join(outd, f"perimg_{name}.npz"), **flat)
+            dump(res, f); print("DONE", name, res.get("reproduces_report"), res["instr_vs_model_rel"]["clean"], res["sec"], flush=True)
+        # CKA per node >= 1 on position-residualised states, every pair; image-shuffled control
+        cf2 = os.path.join(outd, f"cka_d{depth}.json"); ck = (readable(cf2) or {}).get("pairs", {})
+        names = [r[0] for r in runs if os.path.exists(os.path.join(st, r[0] + ".npy"))]
+        cache = {n: residualise(np.load(os.path.join(st, n + ".npy"))).reshape(-1, *np.load(os.path.join(st, n + ".npy"), mmap_mode="r").shape[2:]).astype(np.float32)
+                 for n in names}                  # (rows, nodes, w); all state files are kept (later passes add spc_u1)
+        for i1 in range(len(names)):
+            for i2 in range(i1 + 1, len(names)):
+                key = f"{names[i1]}|{names[i2]}"
+                if key not in ck:
+                    X, Y = cache[names[i1]], cache[names[i2]]; ck[key] = [linear_cka(X[:, j], Y[:, j]) for j in range(1, X.shape[1])]
+        X, Y = cache[runs[0][0]], cache[runs[1][0]]; perm = np.random.default_rng(0).permutation(len(Y))
+        dump({"pairs": ck, "nodes": "1..2L (node 0 = embedding, removed by residualisation)", "shuffled_control": [linear_cka(X[:, j], Y[perm, j]) for j in range(1, X.shape[1])],
+              "rows": "(image, target block) states pooled over valid target tokens, minus the per-(mask shape, block) mean over images"}, cf2)
+        print("CKA", depth, len(ck), flush=True); del cache
     print("ALL DONE", flush=True)
 
 

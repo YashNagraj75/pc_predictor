@@ -31,7 +31,7 @@ X2 = jnp.asarray(V.standardise(Xtr[:256])); m2 = [jnp.asarray(x) for x in V.samp
 e0, p0, _ = V.init(vc)                            # V0 loss at batch 256 with the TRAINED encoders and a fresh V0 predictor
 fns = {"pred_bp": lambda: P.grads(pred, *b, "bp", chunk=64)[0],
        "pred_epc": lambda: P.grads(pred, *b, "epc", rho=500.0, alpha=1.0, T=10, chunk=32, gn_iters=4)[0],
-       "pred_spc_u1": lambda: P.grads(pred, *b, "spc", rho=1.0, alpha=0.0, T=20, chunk=32, hv_iters=8)[0],
+       "pred_spc_u1": lambda: P.grads(pred, *b, "spc", rho=1.0, alpha=0.0, T=20, chunk=32, hv_iters=A.ACfg.hv_iters)[0],
        "pred_epc_blk": lambda: P.grads(pred, *b, "epc", rho=1.0, alpha=1.0, T=10, chunk=32, gn_iters=4, rho_rel=4.0)[0],
        "v0_loss": lambda: eqx.filter_grad(V.loss_fn)((enc, p0), tenc, X2, *m2, vc)}
 out = {"tag": TAG, "backend": jax.default_backend(), "xla_flags": os.environ.get("XLA_FLAGS", ""), "ckpt": ck[0] if ck else "init"}
