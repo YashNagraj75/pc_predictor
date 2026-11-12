@@ -1,0 +1,9 @@
+depth,arm,logged_points,cos_median,cos_min,frac_cos_below_0p9,ratio_median,min_leaf_cos_median,gain_max_peak,gain_jumps_10x,train_loss_max_after_1k,mean_excess_loss_vs_bp_after_1k,resumed
+6,"ePC + multipliers, median rho (planned)",25,0.987,-0.076,0.28,0.98,0.82,2.4e+06,3,0.152,0.0134,False
+6,"ePC + multipliers, per-block rho",25,0.977,0.794,0.32,1.02,0.67,7.8e+05,0,0.149,0.0104,False
+6,"ePC, no multipliers, rho = gain/4",25,0.908,0.087,0.48,0.35,0.37,5e+09,3,0.141,0.0083,False
+6,"ePC, no multipliers, rho = gain/16",25,0.797,0.54,0.64,0.29,0.43,8.2e+07,3,0.148,0.0144,False
+10,"ePC + multipliers, median rho (planned)",27,0.996,0.581,0.04,0.99,0.93,1.1e+05,4,0.453,0.0507,True
+10,"ePC + multipliers, per-block rho",26,0.988,0.899,0.04,1.04,0.89,1.8e+06,0,0.185,0.0105,True
+10,"ePC, no multipliers, rho = gain/4",26,0.833,-0.775,0.54,0.24,0.19,2.4e+10,4,0.143,0.01,True
+10,"ePC, no multipliers, rho = gain/16",25,0.606,-0.319,0.92,0.24,-0.07,6.1e+09,6,0.152,0.0197,False
