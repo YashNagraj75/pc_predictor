@@ -32,9 +32,11 @@ log "sequence start at $(git rev-parse --short HEAD), stages: ${STAGES:-depth:10
 for st in ${STAGES:-depth:10 depth:6 noise}; do
   mode=${st%%:*}; depth=${st#*:}; [ "$depth" = "$st" ] && depth=""
   case $mode in
+    smoke_spc) bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" smoke_spc; rc=$?; log "smoke_spc rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: smoke_spc failed"; exit 5; } ;;
     gpugate) log "gpu gate d$depth"; bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" gpugate $depth; rc=$?
              log "gpu gate d$depth rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: GPU gate failed"; exit 4; } ;;
-    depth)   if [ "$depth" = 10 ]; then export STAGEA_ARMS="${STAGEA_ARMS:-bp epc_k4 epc_k16 epc_alm_blk4 epc_alm_k4}"; else unset STAGEA_ARMS; fi
+    depth)   if [ -n "${ARMS_OVERRIDE:-}" ]; then export STAGEA_ARMS="$ARMS_OVERRIDE"
+             elif [ "$depth" = 10 ]; then export STAGEA_ARMS="${STAGEA_ARMS:-bp epc_k4 epc_k16 epc_alm_blk4 epc_alm_k4}"; else unset STAGEA_ARMS; fi
              run_stage "depth $depth" depth $depth; rc=$?; unset STAGEA_ARMS; [ $rc -eq 0 ] || { log "STOPPED in depth $depth, rc=$rc"; exit $rc; } ;;
     noise)   run_stage "noise" noise; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in noise, rc=$rc"; exit $rc; } ;;
     *)       log "unknown stage $st"; exit 64 ;;

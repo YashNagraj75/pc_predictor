@@ -58,7 +58,7 @@ gpu_gate() {
 }
 case "$MODE" in
   gpugate) gpu_gate; exit $? ;;
-  depth|noise|a0) gpu_gate || exit 4 ;;
+  depth|noise|a0|smoke_spc) gpu_gate || exit 4 ;;
 esac
 case "$MODE" in
   smoke)   # every arm at depth 6 for 12 steps (via run1, with resume at step 6), and the depth-10 ePC memory/time case
@@ -71,6 +71,14 @@ case "$MODE" in
     done
     d=$(run1 epc_k16 10 1e-3 2 val 91 --max-steps 3); rc=$?; [ $rc -eq 0 ] || exit 5; cp "$d/report.json" "$JOBDIR/smoke_epc_k16_d10.json"
     rm -rf $B/*_s90* $B/*_s91*; [ -f $B/a0/.provisional ] && rm -f $B/a0/a0_choice.json $B/a0/.provisional; note "smoke ok" ;;
+  smoke_spc)  # spc_u1: 6 + 6 steps at depth 6 with a resume check, then 3 steps at depth 10 (memory, s/step)
+    d=$(run1 spc_u1 6 1e-3 2 val 90 --max-steps 6); [ $? -eq 0 ] || exit 5
+    rm -f "$d/report.json"; d=$(run1 spc_u1 6 1e-3 2 val 90 --max-steps 12); [ $? -eq 0 ] || exit 5
+    grep -q "RESUME at step 6" "$d.log" || { note "smoke spc_u1: resume did not start from step 6"; exit 6; }
+    cp "$d/report.json" "$JOBDIR/smoke_spc_u1_d6.json"; cp "$d.log" "$JOBDIR/smoke_spc_u1_d6.log"
+    d=$(run1 spc_u1 10 1e-3 2 val 91 --max-steps 3); [ $? -eq 0 ] || exit 5
+    cp "$d/report.json" "$JOBDIR/smoke_spc_u1_d10.json"; cp "$d.log" "$JOBDIR/smoke_spc_u1_d10.log"
+    rm -rf $B/*_s90* $B/*_s91*; note "smoke_spc ok" ;;
   a0)
     $PY -W ignore a0_vit.py $B/a0 > "$JOBDIR/a0.log" 2>&1; rc=$?; note "a0 rc=$rc"; cp $B/a0/a0_choice.json "$JOBDIR/" 2>/dev/null; exit $rc ;;
   depth)

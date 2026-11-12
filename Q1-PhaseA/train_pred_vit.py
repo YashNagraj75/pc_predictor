@@ -14,6 +14,11 @@ ARMS = {"bp": (None, 0.0), "epc_alm_k4": (4.0, 1.0), "epc_k4": (4.0, 0.0), "epc_
 # epc_alm_blk<k> (user-approved follow-up to findings/40): ePC-ALM with a per-block rho = max(1, own gain / k); k is fixed
 # by the pre-set screen in test_blockrho.py before any training.
 BLOCK = {"epc_alm_blk4", "epc_alm_blk2", "epc_alm_blk1"}
+# spc_u1 (user 2026-11-12): textbook standard PC baseline, relaxation over the activities (vit_epc.spc_one), unit precision
+# (rho fixed at 1, never gain-relative), no multipliers, same T and lr selection.  Gain and credit are still logged.
+ARMS["spc_u1"] = (1.0, 0.0)
+SPC = {"spc_u1"}
+method_of = lambda arm: "bp" if ARMS[arm][0] is None else ("spc" if arm in SPC else "epc")
 LOG_EVERY, EVAL_SEED = 200, 12345
 gain_due = lambda it: it % 10 == 0 if it < 500 else it % 50 == 0
 V0_DIR = "runs_vit/v0_d6_s0"
@@ -75,7 +80,7 @@ def gain_stats(pred, ctx, cidx, cvalid, tidx, tvalid):         # 8 images x 4 bl
 
 def make_step(a, opt):
     k, alpha = ARMS[a.arm]
-    meth = "bp" if k is None else "epc"
+    meth = method_of(a.arm)
     rr = float(k) if a.arm in BLOCK else 0.0
 
     @eqx.filter_jit
@@ -89,9 +94,9 @@ def make_step(a, opt):
 
 
 @eqx.filter_jit
-def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0):  # cos / ratio to BP, per leaf
+def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0, meth="epc"):  # cos / ratio to BP, per leaf
     gb = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "bp", chunk=chunk)[0]
-    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "epc", rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel)[0]
+    ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel)[0]
     lb = jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array)); le = jax.tree_util.tree_leaves(eqx.filter(ge, eqx.is_inexact_array))
     fb, fe = jnp.concatenate([x.ravel() for x in lb]), jnp.concatenate([x.ravel() for x in le])
     cl = jnp.stack([jnp.sum(x * y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y) + 1e-30) for x, y in zip(le, lb)])
@@ -229,7 +234,7 @@ def run(a, out_dir):
             gs = tuple(float(x) for x in gain_stats(pred, ctx, cidx, cvalid, tidx, tvalid))
             if not np.all(np.isfinite(gs)):
                 return diverged(it, "non-finite gain")
-            rho = max(1.0, gs[1] / k)
+            rho = 1.0 if a.arm in SPC else max(1.0, gs[1] / k)
         pred, ost, en = stepf(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, jnp.float32(rho))
         state = (pred, ost)
         if (it + 1) % LOG_EVERY == 0 or it == step0 or it + 1 == stop:
@@ -245,7 +250,7 @@ def run(a, out_dir):
                                 "frac_energy_rise": float(np.mean(E2[..., 1] > E2[..., 0]))})
                 cx, cy = encode(enc, tenc, jnp.asarray(V.standardise(Xcr)), jnp.asarray(V.standardise(Xcr)), jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), vc)
                 c1, rr, cmin, cl = credit(pred, cx, jnp.asarray(cr[0]), jnp.asarray(cr[1]), jnp.asarray(cr[2]), jnp.asarray(cr[3]), cy,
-                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0)
+                                          jnp.float32(rho), alpha, a.T, a.chunk, a.gn_iters, float(k) if a.arm in BLOCK else 0.0, method_of(a.arm))
                 row.update({"cos_bp": float(c1), "ratio_bp": float(rr), "min_leaf_cos": float(cmin), "leaf_cos": [round(float(x), 4) for x in cl]})
             log.append(row); print(json.dumps(row), flush=True)
             if not np.isfinite(loss):
