@@ -3,7 +3,7 @@
 # FINISHED rented-GPU run checks that the A4000 copy in runs_vit/stageA exists and every file has the same git hash.
 # Also reads each rented GPU's BACKUP_VERIFY verdict.  Report: runs_vit/stageA/MERGE_VERIFY.txt.
 set +e; set -u
-R=${R:-/media/md_lab/hd_21/preprocessed/pc_predictor/Q1-PhaseA/runs_vit}; V=${V:-/media/md_lab/hd_21/preprocessed/pc_predictor_runs_verify}
+R=${R:-${PCP_ROOT:?set PCP_ROOT, see .env.example}/Q1-PhaseA/runs_vit}; V=${V:-${PCP_VERIFY_DIR:?set PCP_VERIFY_DIR, see .env.example}}
 URL=${URL:-https://github.com/YashNagraj75/pc_predictor-runs.git}; EVERY=${EVERY:-1800}; JOBDIR=$(pwd); OUT=$R/stageA/MERGE_VERIFY.txt
 end=$(( $(date +%s) + ${LIMIT:-$((6 * 86400))} ))
 log() { echo "$(date '+%m-%d %H:%M') $*" >> "$JOBDIR/verify_merge_log.txt"; }

@@ -4,7 +4,7 @@
 # run_stageA_all.sh, then a check that both 25-epoch runs exist with hv_iters 8, (3) latent analysis again (adds spc_u1).
 # Results are packed on exit, whatever happens.  Log: sequence.txt.  Needs SHA=<short commit>.
 set +e; set +o pipefail; set -u
-JOBDIR=$(pwd); R=${R:-/media/md_lab/hd_21/preprocessed/pc_predictor}; SHA=${SHA:?set SHA}; OUT=$R/Q1-PhaseA/runs_vit/latent; B=$R/Q1-PhaseA/runs_vit/stageA
+JOBDIR=$(pwd); R=${R:-${PCP_ROOT:?set PCP_ROOT, see .env.example}}; SHA=${SHA:?set SHA}; OUT=$R/Q1-PhaseA/runs_vit/latent; B=$R/Q1-PhaseA/runs_vit/stageA
 log() { echo "$(date '+%m-%d %H:%M') $*" >> "$JOBDIR/sequence.txt"; }
 pack() {
   tar czf "$JOBDIR/latent_results.tar.gz" -C "$OUT" --exclude=states . ; log "pack latent rc=$?"

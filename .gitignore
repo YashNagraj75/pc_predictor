@@ -1,4 +1,4 @@
-# Environments -- regenerate with uv (see Q1-PhaseA/README or provision.sh)
+# Environments -- regenerate with uv (tools/provision.sh)
 .venv/
 __pycache__/
 *.pyc
@@ -29,3 +29,10 @@ Q1-PhaseA/runs_smoke*.csv
 Q1-PhaseA/heads_smoke*
 Q1-PhaseA/sel_*.json
 Q1-PhaseA/dose_*.json
+
+# local settings and per-machine scratch
+.env
+Q1-PhaseA/lg/
+Q1-PhaseA/cmds.txt
+Q1-PhaseA/st.txt
+*.lock

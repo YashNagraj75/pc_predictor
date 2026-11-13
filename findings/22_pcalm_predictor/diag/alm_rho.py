@@ -1,8 +1,8 @@
-import sys, json
-sys.path.insert(0, "/home/yash/pc_predictor/Q1-PhaseA")
+import os, sys, json
+sys.path.insert(0, os.path.join(os.environ["PCP_ROOT"], "Q1-PhaseA"))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx, jpc, pred_ff as PF
 D = sys.argv[1]
-ztr, ttr, *_ = PF.load("/home/yash/pc_predictor/Q1-PhaseA/pred_latents.npz", "bp", "emb")
+ztr, ttr, *_ = PF.load(os.path.join(os.environ["PCP_ROOT"], "Q1-PhaseA/pred_latents.npz"), "bp", "emb")
 X, Y, *_ = PF.pairs(ztr[:4000], ttr[:4000], True)
 idx = np.random.default_rng(123).integers(0, len(X), 512); x, y = jnp.asarray(X[idx]), jnp.asarray(Y[idx])
 L = lambda g: jnp.concatenate([l.ravel() for l in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array))])

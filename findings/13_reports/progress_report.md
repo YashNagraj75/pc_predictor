@@ -420,4 +420,4 @@ In the order they were last discussed and roughly cheapest-first:
 - [q1_tsweep_report.md]({{artifact:066b9fcb-f145-4046-bb3f-df4447076baf}}), [q1_tsweep_results.csv]({{artifact:932d1ebc-a7de-4c34-8cc9-2f7ddca156b8}}), [q1_tsweep.png]({{artifact:4deccc48-b2ce-4667-a5ec-6375baea552c}})
 
 **Codebase**
-- `Q1-PhaseA/{config,data,sigreg,metrics,encoder,train}.py` — on the granted host path `/home/yash/pc_predictor`, not duplicated here as artifacts (source of truth is the repo)
+- `Q1-PhaseA/{config,data,sigreg,metrics,encoder,train}.py` — in the repository root (`$PCP_ROOT`), not duplicated here as artifacts (source of truth is the repo)

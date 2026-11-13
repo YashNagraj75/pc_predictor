@@ -157,8 +157,8 @@ information retained, not representation quality. If you report it, report it as
 ## 6. Running it
 
 ```bash
-cd /home/yash/pc_predictor/Q1-PhaseA
-/home/yash/pc_predictor/.venv/bin/python3 -W ignore test_helpers.py
+cd "$PCP_ROOT/Q1-PhaseA"
+"$PCP_ROOT/.venv/bin/python3" -W ignore test_helpers.py
 ```
 
 Use the **absolute** interpreter path. Two sandbox gotchas, both already

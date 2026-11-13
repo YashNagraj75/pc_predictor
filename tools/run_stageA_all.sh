@@ -5,7 +5,7 @@
 # moves on; any other rc (GPU gate, lock, sync, crash) stops for a decision.  The host runs job commands with -e, so
 # this script turns it off and never depends on a line running after a non-zero command.  Log: sequence.txt.
 set +e; set +o pipefail; set -u
-JOBDIR=$(pwd); R=${R:-/media/md_lab/hd_21/preprocessed/pc_predictor}; SHA=${SHA:-8ee37d9}; PASS_MIN=${PASS_MIN:-1380}
+JOBDIR=$(pwd); R=${R:-${PCP_ROOT:?set PCP_ROOT, see .env.example}}; SHA=${SHA:-8ee37d9}; PASS_MIN=${PASS_MIN:-1380}
 log() { echo "$(date '+%m-%d %H:%M') $*" >> "$JOBDIR/sequence.txt"; }
 cd "$R" || { log "cannot cd to $R"; exit 2; }
 [ "$(git rev-parse --short HEAD)" = "$SHA" ] || { log "HEAD is $(git rev-parse --short HEAD), expected $SHA"; exit 9; }

@@ -1,11 +1,11 @@
 #!/bin/bash
 set -x
-ROOT=/media/md_lab/hd_21/preprocessed/pc_predictor
+ROOT=${PCP_ROOT:?set PCP_ROOT, see .env.example}
 cd $ROOT
 if [ ! -x .venv/bin/python ]; then
-  /snap/bin/uv venv --python 3.11 .venv
+  "${UV:-uv}" venv --python 3.11 .venv
 fi
-/snap/bin/uv pip install --python .venv/bin/python "jax[cuda12]" equinox optax numpy h5py
+"${UV:-uv}" pip install --python .venv/bin/python "jax[cuda12]" equinox optax numpy h5py
 echo "=== GPU VERIFY ==="
 .venv/bin/python -c "
 import jax, jaxlib, equinox, optax, h5py

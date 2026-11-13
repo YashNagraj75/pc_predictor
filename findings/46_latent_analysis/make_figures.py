@@ -2,7 +2,7 @@ import glob, json, os
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt
 # Figures for findings/46 (latent analysis, pass 1) from raw/latent_*.json and raw/cka_d*.json.  Run inside a kernel where
 # figure-style's apply_figure_style / panel_letter are loaded: exec(open(<this file>).read()).
-HERE = "/home/yash/pc_predictor/findings/46_latent_analysis"; RAW = HERE + "/raw"
+HERE = os.path.join(os.environ["PCP_ROOT"], "findings/46_latent_analysis"); RAW = HERE + "/raw"
 L = {}
 for f in glob.glob(RAW + "/latent_*.json"):
     r = json.load(open(f)); L[r["run"]] = r
