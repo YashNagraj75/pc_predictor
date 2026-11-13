@@ -9,16 +9,19 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Prints a PASS/FAIL line for one gate and folds cond into the overall OK flag."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def rel(a, b):
+    """Returns the relative L2 difference between two (possibly nested) arrays, flattened."""
     a, b = E.flat(a), E.flat(b)
     return float(jnp.linalg.norm(a - b) / (jnp.linalg.norm(b) + 1e-30))
 
 
 def ff_random(depth=3, B=64, seed=0, act=None):
+    """Builds a random feedforward residual-muPC network and a random (x, y) batch for it."""
     cfg = R.RCfg(arm="pc", depth=depth, seed=seed)
     params = R.make(jax.random.PRNGKey(seed), 146, 128, cfg)
     if act is not None:                          # same architecture, other activation (linear: convex energy)
@@ -29,6 +32,7 @@ def ff_random(depth=3, B=64, seed=0, act=None):
 
 
 def main():
+    """Runs the ePC-vs-sPC/BP known-answer gates on both the feedforward and generative architectures."""
     # 1. ff: power iteration == exact largest eigenvalue of J^T J (per sample)
     cfg, params, x, y = ff_random()
     a = R.scalings(params, x, cfg); h0 = R.activities(params, x, cfg)[:-1]; e0 = [jnp.zeros_like(v) for v in h0]

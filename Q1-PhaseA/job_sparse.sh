@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # Sparse PC-ALM arms (cases B and C): gates -> selection -> pilots+gate -> full runs
 # -> untrained floors -> probes -> inference analysis -> learning diagnostic -> collect.
-# Spec: vault PCWM/Methods/'Method - Sparse PC-ALM arms spec'.
-#
-#   bash job_sparse.sh <project_root> <job_dir>
-#
-# Run from anywhere: everything happens in <project_root>/Q1-PhaseA and the
-# results tarball is written to <job_dir> (captured BEFORE any cd -- $OLDPWD is
-# unset in this host's job shell).
+# Usage: bash job_sparse.sh <project_root> <job_dir>. Run from anywhere: everything
+# happens in <project_root>/Q1-PhaseA; the results tarball goes to <job_dir>, captured
+# before any cd since $OLDPWD is unset in this host's job shell.
 set -uo pipefail
 P="$1"; JOBDIR="$2"
 cd "$P/Q1-PhaseA"
@@ -18,8 +14,10 @@ STEPS=${STEPS:-17200}; PILOT=${PILOT:-2000}; SEEDS=${SEEDS:-"0 1 2"}
 COMMON="--T 16 --eta-h 0.0625 --alpha 1 --eval-every 2000"
 REUSED="runs/pc_sigreg_T16_coupled_alm_s0 runs/pc_sigreg_T16_coupled_alm_s1 runs/pc_sigreg_T16_coupled_alm_s2 runs/bp_sigreg_etafix_s0 runs/bp_sigreg_etafix_s1 runs/bp_sigreg_etafix_s2"
 STATUS=sparse_status.txt; : > $STATUS
+# Prints a status line and appends it to $STATUS.
 note() { echo "$*" | tee -a $STATUS; }
 
+# Tars up all result/log/config files for this job into $JOBDIR.
 collect() {
   tar czf "$JOBDIR/q1_sparse.tar.gz" sparse_status.txt sparse_selected.json \
       gates_sparse.log select_sparse.log train_sparse*.log gate_*.json \

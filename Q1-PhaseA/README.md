@@ -1,291 +1,115 @@
-# Q1 / Phase A — does PC give richer latents than BP, under an identical objective?
+# Q1-PhaseA: code map
 
-## The question, stated so it can fail
+All experiment code lives here; each script's results are filed under `../findings/<NN>_<experiment>/`.
+Job scripts (`job_*.sh`) are what the GPU host runs; `test_*.py` are the gate tests run before each job.
+`golden_ref/` is a frozen copy of the original Phase-A modules used by `test_sparse.py` as a regression reference.
+The original Phase-A design notes are kept in `../findings/13_reports/README.md`.
 
-> Train the **same encoder** on the **same objective** with the **same data budget**,
-> changing **only how the weight gradient is obtained** — backprop vs predictive
-> coding — and ask whether the PC-trained representation is measurably richer.
+## ViT I-JEPA predictor (stage A)
 
-"Richer" is not a mood. It is the metric list in §4. If every metric comes out
-inside run-to-run noise, the answer is **no** and that is a publishable answer.
+| file | what it does |
+|---|---|
+| `a0_vit.py` | A0 script: measures credit (cosine to BP) and step time of ePC arms at varying T/power-iteration settings on a depth-10 predictor. |
+| `diag_spc.py` | Inference-only diagnostic of the standard-PC baseline (spc_u1): per-node error propagation, credit vs BP, float32 vs float64, and step-size rule comparisons. |
+| `gpu_gate.py` | GPU-vs-CPU gradient gate at real training shapes and trained weights (findings/41: Triton GEMMs gave wrong batched gradients). run <root> <tag> <outdir> [depth]: save... |
+| `job_latent_vit.sh` | Latent analysis (plan_latent_analysis.md, rev 2): GPU-vs-CPU gate at both depths, known-answer tests, then latent_vit.py on every finished stage-A 25-epoch run under... |
+| `job_stageA.sh` | Stage A (plan_stageA_scoped.md v3). bash job_stageA.sh <project_root> <job_dir> <smoke/a0/depth/noise> [depth] Resumable: re-launch the same command after a deadline... |
+| `job_vit.sh` | ViT I-JEPA (plan_vit_ijepa.md). bash job_vit.sh <project_root> <job_dir> <gates/smoke/v0> gates: test_vit.py (V0 + transformer ePC, incl. real-batch memory); smoke:... |
+| `latent_vit.py` | Inference-only latent analysis of the stage-A ViT predictors: attention/context-mixing stats, probes, target-basis PCA, interventions, and CKA between runs. |
+| `test_blockrho.py` | Regression + measurement script for the per-block rho precision scheme: gates against a prior commit, measures block gain spread, and decides whether the per-block... |
+| `test_latent_vit.py` | Known-answer tests for latent_vit.py's CKA and residualisation helpers. |
+| `test_vit.py` | Gate suite for vit_ijepa.py and vit_epc.py: mask sampling, attention masking, patchify round-trip, padding/EMA invariance, init scale, a training smoke test, and the... |
+| `train_pred_vit.py` | Trains a stage-A I-JEPA ViT predictor on frozen V0 encoders via BP or ePC arms, evaluating under clean/corrupted conditions. |
+| `vit_epc.py` | ePC and state-PC (sPC) relaxation/gradient rules for the I-JEPA transformer predictor, with optional ALM multipliers and chunked batch gradients. |
+| `vit_ijepa.py` | I-JEPA (Assran et al. 2023) model for CIFAR-10: ViT encoder/predictor classes, I-JEPA multi-block masking, EMA target update, training loop and evaluation gate... |
 
-**What this phase is NOT.** No predictor, no patch prediction, no world model.
-That is Phase B, and it is *conditional* on this phase — LeJEPA's own ablation
-shows adding a predictor is neutral-to-harmful for representation quality
-(ResNet-50 / ImageNet-100: 83.93% without a predictor vs 83.57% with; ViT-tiny:
-71.79% vs 67.74%). So the predictor cannot be the thing that makes PC look
-good, and testing latents directly is the more direct experiment.
+## Predictors on frozen latents (residual / generative / saccades)
 
-## 1. Design — the one-variable rule
+| file | what it does |
+|---|---|
+| `choose_rho.py` | Pre-registered (gpc_alm_prereg.json, rev 2) choice of the high penalty and the phase-2 budget, per depth, from diag_c2.json. m(T2) = median over scale in {1, 2}, k in... |
+| `diag_c2.py` | C2 pre-launch diagnostic (review findings F1/N2/N1/D1), never feeds training. Production pipeline: s0 = 0, alm_infer T=400 on k seen views, phase 2 over all views for... |
+| `diag_c3.py` | Inference-only follow-up to C2: belief-inference vs decoder-quality separation, and depth-10 multiplier-loop stability sweep. |
+| `diag_c4.py` | Inference-only diagnostic (never trains) testing two fixes from Qi et al. 2025 -- spiking precision and a forward weight-update rule -- on trained generative decoders. |
+| `diag_e1_credit.py` | Inference-only check of whether PC-ALM's weight gradient converges to BP's on trained E1 checkpoints as inference budget/penalty grow. |
+| `diag_epc.py` | Inference-only diagnostic comparing error-based PC (ePC) against standard state PC (sPC) and BP on trained feedforward and generative checkpoints, writing... |
+| `diag_saccade.py` | MPC-style saccade/glimpse diagnostic for the PC predictors: crop-table rendering, bottom-up/top-down fixation planning, glimpse pooling, and scoring against... |
+| `diag_saccade2.py` | Saccade-policy diagnostic (grid4 front end): kNN class probes, precision-weighted latent pooling (leave-one-latent/-glimpse-out), the 'ig' planner, and... |
+| `diag_scale.py` | Diagnostic sweeping crop area to measure how glimpse scale degrades a frozen backbone's latents: OOD (Mahalanobis) distance, kNN class accuracy, and trained... |
+| `ds_check_latents.py` | Prep-time check (review N6/P7): the stored test latents must be reproduced by re-encoding the test views exactly as the robustness tests will, and the latents must... |
+| `ds_gate.py` | Backbone gate for a new dataset: the frozen encoder must carry class information well above its own initialisation (kNN k=20 cosine on deterministic centre views).... |
+| `gpc_sweep.py` | Step-size / precision selection sweep for the generative PC predictor arms; --collect writes the selected settings. |
+| `job_alm_pred.sh` | Job script running the PC-ALM feedforward predictor pipeline on frozen latents: gates, alpha x T selection via held-out nmse, training the selected config at 3 seeds,... |
+| `job_bp_lr.sh` | Shell job that selects a learning rate for a BP feedforward residual-d10 predictor on a Galaxy holdout, then trains/tests 3 seeds at that lr across three datasets. |
+| `job_c2_amend_c05.sh` | C2 amendment (user-approved 2026-10-17, post hoc): depth-10 PC-ALM rho=4 at c=0.5, seeds 0,1,2. The pre-registered c=1 arm oscillated at depth 10 (seed 0 test nmse... |
+| `job_datasets.sh` | The two best PC predictors and their frozen BP references on another dataset (plan_datasets_precision.md, rev 3). bash job_datasets.sh <project_root> <job_dir>... |
+| `job_e123.sh` | E1 residual feedforward PC-ALM (d3, d10) + E2/E3 generative belief/credit separation (d3, d10). Spec: wiki 'Method - Deep feedforward PC-ALM and belief-credit... |
+| `job_epc.sh` | ePC inference-only check (diag_epc.py): gates (test_epc.py) then the diagnostic, Galaxy10 checkpoints. bash job_epc.sh <project_root> <job_dir> |
+| `job_ffres_alm_fix.sh` | Job script rerunning the ffres PC-ALM predictor (depth 10) with the GPU numerics fix: gates, audit, hyperparameter selection, 3-seed training, and testing. |
+| `job_ffres_bp_fix.sh` | Retrain the frozen residual feedforward BP reference at depth 10 with the GPU numerics fix ONLY (findings/27). Same as E1: standard parameterisation, lr 1e-3 (no... |
+| `job_gpc.sh` | Generative PC predictor, stage 1 (seed 0), spec rev 2. bash job_gpc.sh <project_root> <job_dir> (resumable) |
+| `job_gpc_alm.sh` | C2 (rev 2, after the 3-reviewer pass): PC-ALM generative predictor at depths 3 and 10. Spec: wiki 'Method - PC-ALM generative predictor (C2)'; prereg... |
+| `job_latent.sh` | Latent analysis (Phase C, inference only) on Galaxy10, MNIST and CIFAR-10. bash job_latent.sh <project_root> <job_dir> [smoke] Per dataset: gates (test_latent.py,... |
+| `job_pred.sh` | Phase P on the GPU host: frozen-latent predictors. bash job_pred.sh <project_root> <job_dir> Backbone = runs/bp_sigreg_etafix_s0 (canonical BP, host data split).... |
+| `job_qi.sh` | Qi et al. 2025 fixes trained into the generative PC predictor (seed 0 screen), depths 3 and 10. Spec: wiki 'Method - Qi fixes training screen'; prereg qi_prereg.json.... |
+| `job_saccade.sh` | Saccade S2 (inference only): gates -> 200-image smoke -> full run (3 seeds, K <= 32, whole views <= 192). PC predictors get glimpses; frozen BP references get one... |
+| `job_saccade2.sh` | Saccade follow-up (inference only): old gates -> new gates -> 200-image smoke -> full run (3 seeds, K <= 32, views <= 192). bash job_saccade2.sh <project_root>... |
+| `job_sep_seeds.sh` | Seeds 0-2 for the three amortisation arms of E2/E3 (rule sep), depths 3 and 10, with the GPU numerics fix. Settings frozen from pred_runs/sep_sel/selected.json... |
+| `latent_analysis.py` | Phase-C latent-analysis sweep probing why generative/residual PC predictors degrade differently than their BP counterparts under occlusion/noise, across pooling... |
+| `pred_bpset.py` | Trains a permutation-invariant set predictor (pooling encoder/decoder MLP pair) mapping a context subset of glimpse embeddings to target-transform predictions. |
+| `pred_data.py` | Extracts per-layer latents (trained backbone + random-init baseline) and tau features for train/test splits, saved to an npz file for training downstream set predictors. |
+| `pred_eval.py` | Evaluation utilities for latent-prediction tests: case generation, nmse/cosine/retrieval metrics, pixel-view construction/encoding/corruption, and reproduction checks. |
+| `pred_ff.py` | Feedforward predictor baselines (BP, plain-PC, PC-ALM trained MLPs) mapping a seen view's latent to a target view's latent; includes the pre-registered target-layer... |
+| `pred_ffres.py` | Residual feedforward predictor (E1): muPC-scaled MLP with skip connections, trained by BP, PC, or PC-ALM, with its own inference, training loop, and evaluation. |
+| `pred_gpc.py` | Generative-latent-network (GLN) predictor: hierarchical predictive-coding model over per-view latents, trained/evaluated under plain PC, PC-ALM, BP auto-decoding, and... |
+| `pred_sdpc.py` | Sparse deep predictive-coding (SDPC) dictionary predictor: non-negative sparse-coded layers trained by alternating proximal-gradient inference and dictionary updates. |
+| `run_gpc_tests.py` | Trains and evaluates one generative-PC (gpc) predictor arm: selects step scale/precision, trains with divergence-ladder retries, then runs the full eval suite (pairs,... |
+| `run_pred_ff.sh` | Phase P track 1 grid: {bp, pc} x {bp, rand} backbones x seeds {0,1,2}, layer emb (pre-registered), T=20, eta_h=0.05 (pre-registered 2026-10-12 from the real-batch... |
+| `run_pred_ff_adaptive.sh` | Corrected PC arm (declared after the first grid, 2026-10-12): curvature-tracking activity step eta_h = 0.9 / (1 + 2 max_l //W_l//^2), recomputed every step. BP arm... |
+| `run_pred_final.sh` | Phase P final runs (detached). 1. select SDPC hyperparameters from the validation sweep (pre-registered rule: lowest val k=1 nmse); 2. save the feedforward PC models... |
+| `run_pred_tests.py` | Trains or loads a latent predictor (sdpc/bpset/ff/ffres/copy) and evaluates it on clean, k-seen, T_inf-sweep, and corruption-robustness cases, writing results to JSON. |
+| `sdpc_sweep.py` | Grid sweep (lambda, beta, decay) for the sparse-dictionary PC predictor on the frozen BP latents; appends to pred_runs/sdpc_sweep.json. |
+| `test_datasets.py` | Gate suite for the mnist/cifar10 dataset presets and loaders: shape/dtype/balance/determinism checks, corruption (occlusion/noise) checks, and Galaxy10... |
+| `test_epc.py` | Gates for diag_epc.py's episodic-PC (ePC) port: known-answer checks against sPC/BP on random weights and trained checkpoints, for both the feedforward and generative... |
+| `test_ffres.py` | Gates for pred_ffres.py: checks the feedforward/PC/ALM residual network's forward pass, energy, gradients, and stability against float64 and BP references. |
+| `test_latent.py` | Gate suite for latent_analysis.py: reproduces stored evaluations, verifies swap-model identities, and runs known-answer tests for each statistic. |
+| `test_pred_gpc.py` | Gates for pred_gpc.py: PC/BP/ALM inference stability and equivalence, locality of weight updates, batch invariance, predictive training, and divergence detection. |
+| `test_pred_sdpc.py` | Unit tests for pred_sdpc: inference monotonicity/KKT checks, dictionary-gradient agreement, batch independence, and predict()'s causal behaviour. |
+| `test_qi.py` | Gates for the Qi et al. options (spike, wrule) added to pred_gpc.py, checking the default path still reproduces the pre-change code. |
+| `test_saccade.py` | Gate suite for diag_saccade.py: renderer/encoder/crop-table parity, planner, surprise, policies, and occlusion checks against reference computations. |
+| `test_saccade2.py` | Gates for diag_saccade2.py (revision 2): reproduces findings/31 pooling/surprise/leave-one-out formulas, checks precision pools and ig weights, and compares saccade... |
+| `test_sep.py` | Gates for the 'sep' rule in pred_gpc.py (belief stage, then credit assignment at fixed belief s). |
 
-|                | BP arm | PC arm |
-|----------------|--------|--------|
-| encoder        | identical | identical |
-| objective      | identical (`sigreg.lejepa_loss`) | identical |
-| optimiser, lr, clipping, batch order, seed, data budget | identical | identical |
-| **gradient source** | `jax.grad` | relaxation + local error terms |
+## Phase-A encoder (PC vs BP LeJEPA encoder)
 
-Anything else that differs is a confound. If you need to tune the PC arm's
-`activity_lr` or `T`, tune it and **report the sweep**, don't quietly pick a
-winner — the µPC parameterisation exists precisely so learning rates transfer,
-so a required per-arm retune is itself a finding.
-
-## 2. Why SIGReg is in here at all
-
-Three separate jobs. Only the first is "match LeJEPA":
-
-1. **Anti-collapse.** The view-prediction term alone has a trivial optimum:
-   map everything to one point. Something has to forbid that. SIGReg forbids it
-   by pushing the embedding's marginal toward `N(0, I)`.
-2. **Removing the per-arm tuning confound.** The alternatives to SIGReg
-   (stop-grad, EMA teacher, temperature/centering schedules) all carry
-   hyperparameters that would need per-arm tuning — reintroducing exactly the
-   confound §1 exists to kill. SIGReg is hyperparameter-light by comparison.
-3. **Cross-arm comparability.** Metrics that depend on the scale of the
-   representation are only comparable across arms if both arms' embeddings sit
-   at the same scale. SIGReg pins that scale.
-
-### The trap this creates, and the fix
-
-SIGReg regularises the **embedding's** spectrum directly. So measuring the
-embedding's eigenspectrum measures *the regulariser*, not the representation —
-both arms will look flat and you will have learned nothing.
-
-**Read spectral metrics at the HIDDEN layers.** SIGReg does not constrain them,
-and they are exactly where PC and BP should diverge, since PC's relaxation
-assigns activities to every hidden node rather than propagating a signal
-through them. `encoder.forward` therefore returns `(z, hs)` and `hs` is
-mandatory, not decoration.
-
-Correction to a blanket claim made earlier in this project: **only
-spectral/second-moment metrics are neutralised at the embedding.**
-Assignment-based metrics (kNN, clustering agreement) keep full discriminative
-power there, because SIGReg constrains the marginal, not which point goes where.
-So kNN at the embedding is a valid headline number.
-
-### Measured property of the statistic (from `test_helpers.py`)
-
-At `N=1024`, `K=16`, 128 directions, paper defaults:
-
-| alternative | statistic | vs H0 band (1.17 ± 0.20, 3sd = 1.76) |
-|---|---|---|
-| collapsed (0.1×) | 402 | ~230× the band edge |
-| scaled 3× | 576 | ~330× |
-| bimodal | 2.26 | 1.3× |
-| uniform, unit variance | 1.85 | 1.05× |
-| Laplace, unit variance | 1.67 | *inside* the band |
-
-**Read this correctly.** SIGReg is a powerful detector of second-moment misfit
-(collapse, scale drift) and a weak detector of shape misfit at unit variance.
-That is fine — job (1) above is a second-moment job. But do not describe the
-embedding as "Gaussian" on the strength of a low SIGReg value; it is
-"unit-covariance and not obviously collapsed".
-
-## 3. The one genuinely new problem
-
-Discriminative PC clamps the output to a per-sample target. **SIGReg has no
-per-sample target** — it is a statistic over the batch. So the output node
-cannot be clamped, and the loss must enter through the output node's activity
-gradient:
-
-```
-dF/dz_out + dL/dz_out  =  (z_out - f_out(z_L)) + dL/dz_out
-```
-
-Two treatments, both to be built and compared (`cfg.pc.output_drive`):
-
-- **`coupled`** — recompute `dL/dz_out` at every relaxation step. Exact, but
-  row *n* of the gradient depends on every other row, so the energy is *not* a
-  sum of per-sample energies and the batch relaxes jointly.
-  `test_helpers.py::t_batch_coupling` verifies the coupling is real: perturbing
-  row 0 moves row 5's gradient by 4.8e-03.
-- **`frozen`** — compute `g = dL/dz_out` once from the feedforward embeddings,
-  hold it fixed for all *T* steps. Factorises over the batch.
-
-**Identity that makes `frozen` cheap:** holding `g` fixed is *exactly*
-equivalent to clamping the output to the per-sample pseudo-target
-`y_n := z_out_ff[n] - g[n]`, since for `L~ = ||z_out - y_n||²/2` we get
-`dL~/dz_out = z_out - y_n`, which equals `g[n]` at `z_out = z_out_ff`. So
-`frozen` is ordinary discriminative PC against a pseudo-target and can reuse
-jpc's existing API unchanged. `coupled` cannot, and needs a hand-written
-relaxation.
-
-This is the direct analogue of the `fixed_prediction` assumption, applied to
-the *loss* instead of to the *predictions*. Earlier in this project we verified
-that `fixed_prediction` is load-bearing for PC tracking backprop: with it, PC
-branch gradient `-11.370010` vs backprop `-11.370533`; without it, `-3.413946`.
-Whether the assumption survives a **batch statistic** driving the output is
-unknown — nobody has reported it. **Measure it**: cosine between the PC weight
-gradient and the true BP gradient, as a function of *T*.
-
-The difference between `coupled` and `frozen` is itself a result.
-
-## 4. What gets measured
-
-At **every layer**, both arms, on a deterministic centre view (no augmentation):
-
-| metric | function | valid where | reads as |
-|---|---|---|---|
-| kNN accuracy | `metrics.knn_accuracy` | all layers incl. embedding | linear-probe-free task signal |
-| eigenspectrum / effective rank / log-cond | `metrics.spectrum_report` | **hidden only** | dimensional richness |
-| intrinsic dimension (TwoNN) | `metrics.twonn_dimension` | all layers | manifold dimension |
-| collapse diagnostics | `metrics.collapse_report` | all layers | did an arm degenerate |
-| layer-wise CKA between arms | `metrics.linear_cka` | all layers | *where* the arms differ |
-| projected two-sample (KS over random directions) | `metrics.projected_two_sample` | embedding | are the two embeddings the same distribution |
-
-`train.evaluate` and `train.compare_arms` are **complete** — they run this whole
-pass. Metric validity notes are in each function's docstring; trust those over
-this table if they ever disagree.
-
-Metrics deliberately **excluded**: decoder reconstruction quality. An invariance
-objective *deliberately discards* pixel information, so reconstruction measures
-information retained, not representation quality. If you report it, report it as
-"information retained" and never as "better".
-
-## 5. Files
-
-| file | status | what it is |
-|---|---|---|
-| `config.py` | **complete** | frozen dataclasses + `q1_grid()` run generator |
-| `sigreg.py` | **complete, tested** | Epps–Pulley quadrature, SIGReg, view-prediction term, full LeJEPA loss |
-| `metrics.py` | **complete, tested** | the §4 metric suite, self-contained |
-| `data.py` | **complete, tested** | Galaxy10/MNIST loading, multi-view augmentation, deterministic eval view |
-| `test_helpers.py` | **complete, 14/14 pass** | pins down the above |
-| `encoder.py` | **skeleton — ours to write** | µPC-parameterised FC residual net |
-| `train.py` | **skeleton — ours to write** | BP arm, PC arm, shared loop (`evaluate`/`compare_arms` already done) |
-
-## 6. Running it
-
-```bash
-cd "$PCP_ROOT/Q1-PhaseA"
-"$PCP_ROOT/.venv/bin/python3" -W ignore test_helpers.py
-```
-
-Use the **absolute** interpreter path. Two sandbox gotchas, both already
-handled but worth knowing:
-
-- `PYTHONSAFEPATH=1` is set in this environment, which strips the script's own
-  directory from `sys.path`. `test_helpers.py` and `train.py` re-insert it at
-  the top. Any new entry-point script needs the same three lines.
-- A relative path like `../.venv/bin/python3` triggers a `sys.prefix` mismatch
-  warning. Harmless, but the absolute path avoids it.
-- The CUDA plugin traceback on every run is the GPU being unreachable from the
-  sandbox. JAX falls back to CPU. Ignore it.
-
-## 7. Open items — resolve before trusting any depth result
-
-1. **RESOLVED — the `ScaledLinear` "scaling gap" is not a gap.** µPC's Table 1
-   gives `b_ℓ = 1`: µPC initialises weights from a *standard* Gaussian and puts
-   **all** the scaling in per-layer premultipliers, applied at every forward
-   evaluation, not folded into the weight. Table 1 in full:
-
-   | | `a_1` (input) | `a_ℓ` (hidden) | `a_L` (output) | `b_ℓ` (init var) |
-   |---|---|---|---|---|
-   | PC   | 1 | 1 | 1 | `N_{ℓ-1}^{-1}` |
-   | µPC  | `N_0^{-1/2}` | `(N_{ℓ-1} L)^{-1/2}` | `N_{L-1}^{-1}` | 1 |
-
-   So the standard-normal draw is correct and the misplaced comment is the only
-   error. jpc applies the premultipliers inside the energy
-   (`_get_param_scalings` → `scalings[l] * vmap(model[l])(...)`), which is
-   load-bearing: folding `a_ℓ` into the init gives an identical forward pass at
-   `t=0` but scales the gradient on `W` by `a_ℓ` instead of `a_ℓ²`, destroying
-   the learning-rate transfer that is the point of the method.
-   **Gate:** the depth factor is conditional —
-   `al = 1/sqrt(N) if no_skips else 1/sqrt(N*L)`. Omit `skip_model=` and you
-   silently get the non-residual scaling and lose depth transfer.
-2. **RESOLVED — `FCResnet` and `make_mlp(param_type="mupc")` agree.** Verified
-   at `D=784, N=128, depth=30`: jpc gives `a_1=0.03571429`,
-   `a_ℓ=0.01613743`, `a_L=0.0078125`, exactly Table 1, and `len(model)=30`, so
-   jpc's `L` *is* the `depth` argument — `FCResnet`'s `1/sqrt(width*depth)`
-   matches `1/sqrt(N*L)` at **ratio 1.000000**. Hidden weight std = 1.0013
-   (`b=1` confirmed). Structure also matches: `make_mlp` builds each layer as
-   `Sequential([Lambda(act_fn), Linear])` — activation *before* the linear map,
-   identity on layer 0 — and the energy adds the skip **unscaled**
-   (`err = z_ℓ - a_ℓ·W_ℓφ(z_{ℓ-1}) - I·z_{ℓ-1}`), which is what
-   `ResNetBlock.__call__` does. `make_skip_model(depth)` places identities at
-   `l ∈ [1, depth-2]` (28 of 30 non-None at depth 30), matching the paper's
-   `τ_ℓ = 1` for `ℓ = 2..H`.
-   **Decision: use `make_mlp` + `make_skip_model`; do not use `FCResnet` here.**
-   jpc's µPC branch reads the width off `model[0][1].weight.shape[0]`, i.e. it
-   assumes the `Sequential` nesting — and `FCResnet` already applies its scaling
-   in `__call__`, so routing it through jpc with `param_type="mupc"` would apply
-   the scaling **twice**.
-3. **Appendix B.6 discrepancy** in the LeJEPA paper: Eq (5)'s all-pairs form and
-   Eq (7)'s distance-from-centre form are not equal; they differ by exactly the
-   within-view variance (`t_b6_discrepancy` verifies: 13.3492 vs 9.4851, gap
-   3.8640). `sigreg.py` implements Eq (7). Also, the paper's rendering truncates
-   the statistic's final scaling factor — implemented as the `scale_by_n`
-   option; **check the official codebase before quoting an absolute SIGReg
-   value.**
-4. **Galaxy10 is not downloaded.** zenodo.org returns 504 through the sandbox
-   proxy (gateway timeout at ~30 s, not a size limit); `data/galaxy10/Galaxy10.h5`
-   is a 92-byte error page — delete it before retrying. MNIST is unpacked at
-   `data/MNIST/raw` and `data.load_dataset` handles both, so bring the pipeline
-   up on MNIST and swap datasets once Galaxy10 lands. `h5py 3.16.0` **is**
-   installed (see below), so only the download is missing.
-5. **NEW — µPC's output scaling puts the embedding at the wrong scale for
-   SIGReg.** Measured per-layer RMS of `init_activities_with_ffwd` at
-   `depth=30, N=128, embed=64` on Gaussian input:
-
-   ```
-   hidden (29 layers): 0.9696 0.9822 0.9833 ... 1.2017 1.2136 1.2230
-   embedding (last):   0.0685
-   ```
-
-   The hidden stack is flat in depth — Desideratum 1 holds empirically at
-   depth 30, which is worth citing. But `a_L = 1/N` (not `1/√N`) leaves the
-   embedding ~17× smaller in RMS than the hidden activations, and SIGReg's
-   target is `N(0, I)`, i.e. RMS 1. So at initialisation the regulariser sees
-   an embedding whose scale is wrong by more than an order of magnitude, and
-   its first job will be to inflate it — a large, uninformative transient that
-   contaminates the early training comparison and, worse, differs between the
-   PC and BP arms because it interacts with the relaxation.
-   µPC's `a_L = 1/N` is designed for a **readout to logits**, not for an
-   embedding a distributional regulariser will constrain. Three options, and
-   this is a real decision to make before the first run:
-   (a) keep `a_L = 1/N` and accept/measure the transient;
-   (b) use `gamma` — jpc's `_get_param_scalings` already supports
-   `scalings[-1] /= gamma`, so `gamma = 1/√N` restores an O(1) embedding
-   through the supported API, at the cost of departing from Table 1 at the
-   output layer only. **Measured** (D=784, N=128, embed=64, 256 Gaussian
-   inputs), embedding RMS by choice of gamma:
-
-   | jpc depth | last hidden | `gamma=None` | `gamma=1/N` | `gamma=1/√N` |
-   |---|---|---|---|---|
-   | 10 | 1.2071 | 0.0733 | 9.3761 | **0.8287** |
-   | 30 | 1.2599 | 0.0725 | 9.2848 | **0.8207** |
-   | 60 | 1.2621 | 0.0763 | 9.7680 | **0.8634** |
-
-   `gamma = 1/√N` gives `a_L = 1/√N = 0.088388` (the µP/ntp output scaling)
-   and lands the embedding at RMS ≈ 0.82–0.86, stable across depth — so the
-   fix does not reintroduce a depth dependence. `gamma = 1/N` overshoots to
-   ≈ 9.3 and is **wrong**; an earlier version of this README said `1/N`.
-   **Gotcha:** `gamma` is accepted by `init_activities_with_ffwd`,
-   `update_pc_activities`, `update_pc_params` and `pc_energy_fn`, but **not**
-   by `make_pc_step` — so the training loop must use the lower-level
-   activity/param update calls, as `mu_pc.ipynb`'s `train` already does;
-   (c) standardise the embedding before SIGReg — but this is a normalisation
-   on the output activity and so is at odds with inference convergence
-   (§3.2 of µPC makes exactly this objection to activity normalisation).
-   Whichever you pick, **apply it identically to both arms** — it is a
-   property of the shared forward map, not of the learning rule.
-
-## 9. Note on the venv
-
-`uv` is not on `PATH` in this sandbox and the project venv shipped without
-`pip`, so package installs need a one-time bootstrap:
-
-```bash
-./.venv/bin/python3 -m ensurepip --upgrade
-./.venv/bin/python3 -m pip install <package>
-```
-
-That is already done — `pip 26.2.1` and `h5py 3.16.0` are installed against
-CPython 3.14.7.
-
-## 8. Cost note
-
-The µPC smoke test — 30-layer residual PCN, width 128, T=30, batch 64 — ran
-**100 iterations in 6.7 s on CPU** and reached 85.97% MNIST test accuracy after
-~6,400 images. So the *T* sweep and the depth sweep are minutes of compute, not
-hours. Sweep them properly; there is no excuse to guess.
+| file | what it does |
+|---|---|
+| `_golden_pcalm.py` | Captures golden-reference snapshots of pcalm's PC-ALM relax/grad outputs, used by test_sparse.py to pin behaviour across edits. |
+| `audit_jit.py` | Audit script comparing compiled (jit) vs. eager training gradients at trained weights, across every training path in the project, to catch GPU/XLA miscompilation. |
+| `config.py` | Dataclass configs for the Phase-A encoder runs (data, encoder, SIGReg, PC-ALM inference, sparse prior, optimiser) and presets. |
+| `data.py` | Dataset loaders (Galaxy10, MNIST, CIFAR-10) plus augmentation (random affine crop/flip/jitter views) and a shuffled batch iterator. |
+| `det_check.py` | Review D5: the stage-1 seed-0 controls (commit 7468692) are reused; check the current code reproduces their first logged training row (same init, same batch stream)... |
+| `diag_agree_heads.py` | Diagnostic comparing PC vs BP gradients (cosine, magnitude ratio) on the encoder, side-dictionary heads, and generative heads of sparse-case-D runs. |
+| `diag_collapse.py` | Trains sparse PC/BP configs over a sweep of cases/arms and logs per-step health diagnostics to track representation collapse. |
+| `diag_dose.py` | Measures the head-loss vs. task-loss gradient ratio ('dose') for PC and BP arms at given sparse-head depths, and can rescale PC head weights to hit a target ratio. |
+| `diag_heads.py` | Diagnostic probes for sparse-coding 'heads' (case D): embedding/layer/code linear and knn probes under clean/noise/occlusion corruption, written to CSV. |
+| `diag_inference.py` | Diagnostic for PC relaxation hyperparameters: checks the per-sample activity step eta_h is batch-invariant, then sweeps eta_h for relaxation stability/descent and... |
+| `diag_learning.py` | CLI that measures per-layer weight displacement and probe trajectory for trained runs, flagging frozen layers. |
+| `diag_sparse.py` | Diagnostics for the sparse-coding predictor arm: robustness under corruption, inference curve/amortisation gap, LASSO solver validity, PC-vs-BP gradient agreement,... |
+| `encoder.py` | mu-PC-parameterised fully-connected residual encoder: builds the model/skip pair, runs the zero-energy feedforward pass, and computes the PC energy for it. |
+| `gate_pilot.py` | Pairwise gate between a PC-ALM run and its matched BP run: checks divergence, clipping rate, activity-growth/active-fraction bounds, and (sparse arms) case-D/E... |
+| `job_heads.sh` | Pipeline script for the Case-D sparse-side-heads study (K=1..5): preflight, gates, head selection, per-K pilot/gate, full training runs, screens, floor, probes,... |
+| `job_sparse.sh` | SLURM-style driver script for the sparse PC-ALM arms experiment: gates -> selection -> pilots -> full runs -> floors -> probes -> diagnostics -> collect. |
+| `metrics.py` | Representation-quality metrics (linear CKA, spectral diagnostics, kNN accuracy, intrinsic dimension, KS two-sample tests, collapse report) shared by the Q1 probes. |
+| `pcalm.py` | PC-ALM (predictive-coding augmented Lagrangian method): primal-dual activity relaxation and the resulting encoder weight gradient, matching jpc.pc_energy_fn... |
+| `probes.py` | Evaluation suite for a frozen embedding: scene/augmentation-factor probes (ridge, MLP, classification), a pixel decoder with an SSIM floor, path straightness, and... |
+| `run_arms.py` | CLI driver that parses arm/seed/sparse-case settings into RunCfg objects and trains (or initializes-only) each planned Q1-PhaseA run, refusing to overwrite existing... |
+| `run_probes.py` | CLI that loads saved runs and runs the full probe suite (classification/regression/decode/kNN) on their embeddings. |
+| `select_heads.py` | Calibrates per-head sparsity (gamma), head weights, and (case E) the reconstruction weight beta_r for nested sparse-coding head sets, writing the selection to json. |
+| `select_sparse.py` | Selects the sparsity thresholds beta (case B) and gamma (case C) that hit a target active fraction on sampled training centre views, writing the result to json. |
+| `sigreg.py` | SIGReg (sliced Epps-Pulley normality test) and the LeJEPA invariance loss used as the Phase-A embedding regulariser. |
+| `sparse.py` | Sparse-coding augmentations (cases B/C/D/E) for the PC encoder: dictionary/code init, ISTA/FISTA solvers, the deployed forward pass, PC-relaxation hooks, and... |
+| `test_helpers.py` | Known-answer tests for the SIGReg, spectral-metrics, and data-batching helper functions. |
+| `test_pcalm.py` | Regression tests for pcalm.py: energy equivalence to jpc at zero duals, dual growth with alpha, alpha=0 matching plain PC's weight gradient, and batch-size invariance... |
+| `test_sparse.py` | Gate suite for the sparse-layer arms (sparse.py/pcalm.py): case-none golden-bit match, then cases B/C/D/E math, batch invariance, and BP controls. |
+| `train.py` | Training loop for the Q1-PhaseA encoder: BP and PC-ALM arms share the objective/optimiser and differ only in the weight-gradient mechanism; also holds the shared... |

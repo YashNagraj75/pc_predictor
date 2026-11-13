@@ -13,15 +13,18 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Prints a PASS/FAIL line for one gate and folds cond into the overall OK flag."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def flat(t):
+    """Flattens a pytree's leaves into a single 1-D array."""
     return jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(t)])
 
 
 def cos(a, b):
+    """Returns the cosine similarity between two (possibly nested) arrays, flattened."""
     a, b = flat(a), flat(b)
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-300))
 

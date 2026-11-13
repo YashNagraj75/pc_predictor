@@ -1,3 +1,5 @@
+# Evaluation utilities for latent-prediction tests: case generation (which views are seen vs targeted),
+# nmse/cosine/retrieval metrics, pixel-view construction/encoding/corruption, and reproduction checks.
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -7,17 +9,20 @@ N_VIEWS = 4
 
 
 def k_cases(n, k):
+    """Returns a random (seen, target) view-index split of size k vs N_VIEWS-k for n images."""
     rng = np.random.default_rng(1000 + k)
     perm = np.stack([rng.permutation(N_VIEWS) for _ in range(n)])
     return perm[:, :k], perm[:, k:]
 
 
 def pair_cases(n):
+    """Returns, for every ordered pair of distinct views, (seen, target) index arrays of shape (n, 1)."""
     pairs = [(a, b) for a in range(N_VIEWS) for b in range(N_VIEWS) if a != b]
     return [(np.full((n, 1), a), np.full((n, 1), b)) for a, b in pairs]
 
 
 def _metrics(P, Z, img, tview, zte_all, n_retr=2000):
+    """Returns nmse, mean cosine similarity, and top-1 retrieval accuracy of predictions P against targets Z."""
     nmse = float(np.mean(np.sum((P - Z) ** 2, -1)) / np.mean(np.sum(Z ** 2, -1)))
     cos = float(np.mean(np.sum(P * Z, -1) / (np.linalg.norm(P, axis=-1) * np.linalg.norm(Z, axis=-1) + 1e-12)))
     hits = []
@@ -32,9 +37,8 @@ def _metrics(P, Z, img, tview, zte_all, n_retr=2000):
     return {"nmse": nmse, "cos": cos, "retr1": float(np.mean(np.concatenate(hits)))}
 
 
-# zseen: optional replacement latents for the seen views (n, 4, d)
-# e.g. corrupted re-encodings.
 def run_cases(predict, zte, tte, seen, tgt, zseen=None, batch=500):
+    """Runs predict on the given (seen, tgt) cases, optionally with corrupted seen latents zseen, and returns metrics."""
     n = zte.shape[0]
     src = zte if zseen is None else zseen
     ii = np.arange(n)[:, None]
@@ -48,8 +52,8 @@ def run_cases(predict, zte, tte, seen, tgt, zseen=None, batch=500):
     return _metrics(P.reshape(-1, P.shape[-1]), Z.reshape(-1, Z.shape[-1]), img, tview, zte)
 
 
-# The 12 ordered pairs, pooled -- comparable to pred_ff.evaluate.
 def eval_pairs(predict, zte, tte, zseen=None):
+    """Runs predict on all 12 ordered view pairs, pools the results, and returns metrics comparable to pred_ff.evaluate."""
     n = zte.shape[0]
     Ps, Zs, imgs, tv = [], [], [], []
     ii = np.arange(n)[:, None]
@@ -63,6 +67,7 @@ def eval_pairs(predict, zte, tte, zseen=None):
 
 # ------------------------------------------------------------------ pixels and corruption
 def test_views(cfg_data, Xte, chunk=512, key=202):
+    """Builds the 4 labeled views for each test image and returns them as an (n, 4, 3072) pixel array."""
     import data as D
     out = []
     for i in range(0, len(Xte), chunk):
@@ -73,6 +78,7 @@ def test_views(cfg_data, Xte, chunk=512, key=202):
 
 
 def encode(params, cfg_enc, pix, batch=1024):
+    """Encodes a pixel view array through the given encoder params and returns the latents in the same (n, views, d) shape."""
     import equinox as eqx, encoder as E
     f = eqx.filter_jit(lambda p, x: E.forward(p, x, cfg_enc)[0])
     flat = pix.reshape(-1, pix.shape[-1])
@@ -80,9 +86,8 @@ def encode(params, cfg_enc, pix, batch=1024):
     return z.reshape(pix.shape[0], pix.shape[1], -1)
 
 
-# Corrupt view which[i] of image i.
-# kind='noise': level = sigma; kind='occlude': level = area fraction.
 def corrupt(pix, which, kind, level, img_size=32, seed=0):
+    """Corrupts view which[i] of image i with noise (level=sigma) or an occluding square (level=area fraction)."""
     rng = np.random.default_rng(seed)
     out = pix.copy()
     n = pix.shape[0]
@@ -101,6 +106,7 @@ def corrupt(pix, which, kind, level, img_size=32, seed=0):
 
 
 def check_reproduction(z_reenc, z_stored, tol=1e-3):
+    """Asserts re-encoded latents z_reenc match the stored z_stored within tol relative error and returns that error."""
     err = float(np.max(np.abs(z_reenc - z_stored)) / (np.max(np.abs(z_stored)) + 1e-12))
     assert err < tol, f"re-encoded test views do not reproduce the stored latents (rel max err {err:.2e})"
     return err

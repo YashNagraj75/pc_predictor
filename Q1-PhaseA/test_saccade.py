@@ -11,12 +11,14 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Updates the global pass/fail flag based on a condition and prints the test result."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
-# MPC's score map (lgn_glimpser._plan_next_saccade, the deterministic part), copied verbatim in numpy form.
 def mpc_score_map(bu_map, hist_yx, hist_err, ior_sigma, err_sigma, w):
+    """Computes the MPC saccade score map, a numpy copy of lgn_glimpser._plan_next_saccade's deterministic part.
+    Blends the bottom-up map with error-weighted top-down history and suppresses it by inhibition-of-return."""
     H, W = bu_map.shape
     yy, xx = np.meshgrid(np.linspace(0, H - 1, H), np.linspace(0, W - 1, W), indexing="ij")
     td, ior = np.zeros((H, W)), np.ones((H, W))
@@ -28,6 +30,8 @@ def mpc_score_map(bu_map, hist_yx, hist_err, ior_sigma, err_sigma, w):
 
 
 def main():
+    """Runs the full saccade test suite, checking renderer, encoder, crop table, planner, surprise, policies, and occlusion logic against reference computations.
+    Prints ALL PASS or SOME FAIL and returns whether every check passed."""
     L = np.load("pred_latents.npz")
     raw_tr, raw_te = L["bp_emb_tr"], L["bp_emb_te"]
     mu, sd = raw_tr.reshape(-1, 128).mean(0), raw_tr.reshape(-1, 128).std(0) + 1e-6

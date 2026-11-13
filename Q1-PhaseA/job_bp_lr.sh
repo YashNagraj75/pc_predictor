@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Diagnostic (user-approved 2026-11-02): backprop feedforward predictor (residual d10, same muPC network as the frozen BPf)
-# with the SAME learning-rate selection PC-ALM got in findings/29: lr {1e-3, 3e-3, 1e-2} on the Galaxy 90/10 holdout,
-# seed 0, lowest held-out nmse wins (edge winners flagged, not extended).  Then 3 seeds at the selected lr on Galaxy10,
-# MNIST and CIFAR-10 (as PC's Galaxy-selected lr was carried to the other datasets).  Not a reference: the frozen BPf
-# models are untouched; outputs go to pred_runs/ffres_bplr and pred_runs/tests_ffres_bplr.
+# Diagnostic (user-approved 2026-11-02): BP feedforward residual-d10 predictor (same muPC net as
+# frozen BPf). Selects lr from {1e-3,3e-3,1e-2} on the Galaxy holdout as PC-ALM did in findings/29
+# (seed 0, lowest held-out nmse wins), then runs 3 seeds at that lr on Galaxy10/MNIST/CIFAR-10.
+# BPf itself is untouched; outputs go to pred_runs/ffres_bplr(_sel)/tests_ffres_bplr.
 #   bash job_bp_lr.sh <project_root> <job_dir>
 set -uo pipefail
 P="$1"; JOBDIR=$(readlink -f "$2"); cd "$P/Q1-PhaseA" || exit 2
 Q=$(pwd); PY="$(cd ../.venv/bin && pwd)/python"
 export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.15 NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_autotune_level=0
+# Logs a timestamped, [bplr]-tagged message to stdout and the status file.
 ST=$Q/bplr_status.txt; note() { echo "$(date +%m-%d_%H:%M) [bplr] $*" | tee -a "$ST"; }
 note "start at $(git rev-parse --short HEAD)"
 mkdir -p "$JOBDIR/bplr" pred_runs/ffres_bplr_sel

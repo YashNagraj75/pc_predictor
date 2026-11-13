@@ -1,3 +1,6 @@
+# Generative-latent-network (GLN) predictor: a hierarchical predictive-coding model over per-view latents,
+# trained and evaluated under plain PC, PC-ALM (multiplier-augmented), BP auto-decoding, and the separated
+# belief/credit (sep) rule. Includes amortised-inference training and the forward-update weight-rule variants.
 import dataclasses, json, math, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -15,6 +18,7 @@ C_ALM = (0.25, 0.5, 1.0)       # c = 2 diverges for rho >= 4 (gate, 2026-10-17)
 
 @dataclasses.dataclass
 class GCfg:
+    """Configuration for a GLN predictive-coding run: architecture, inference rule, and training hyperparameters."""
     backbone: str = "bp"
     rule: str = "pc"            # pc | bp | alm (PC-ALM: multipliers on the hidden levels) | sep (belief, then credit)
     start: str = "zero"         # zero | amort
@@ -45,14 +49,17 @@ class GCfg:
 
     @property
     def H(self):
+        """Returns the number of hidden levels (depth - 1)."""
         return self.depth - 1
 
     @property
     def n(self):
+        """Returns the hidden layer width, defaulting by depth when not set explicitly."""
         return self.width or WIDTH.get(self.depth, 256)
 
     @property
     def name(self):
+        """Builds the run's identifying name string by encoding the non-default config fields."""
         tag = (f"_w{self.width}" if self.width else "") + (f"_hp{self.hid_prec:g}" if self.hid_prec != 1.0 else "")
         tag += f"_a{self.alpha:g}_k{self.k_inner}" if self.rule in ("alm", "sep") else ""
         tag += f"_{self.belief}_c{self.c:g}_T2{self.T2}" if self.rule == "sep" else ""
@@ -63,11 +70,13 @@ class GCfg:
 
 
 def phi(tau):
+    """Appends a constant 1 feature to the last axis of tau (a bias/offset term)."""
     return jnp.concatenate([tau, jnp.ones(tau.shape[:-1] + (1,), tau.dtype)], -1)
 
 
 # ------------------------------------------------------------------ parameters
 def init(key, cfg, d=128):
+    """Initializes the top, mid, and bottom weight matrices for a GLN of the given config and data dimension d."""
     n, H = cfg.n, cfg.H
     ks = jax.random.split(key, H + 1)
     g = lambda k, o, i: jax.random.normal(k, (o, i)) / math.sqrt(i)
@@ -77,29 +86,35 @@ def init(key, cfg, d=128):
 
 
 def init_amort(key, d=128):
+    """Initializes the amortized-inference MLP mapping observation and time features to a belief state."""
     return jpc.make_mlp(key, d + 9, 256, 2, M, "relu", use_bias=True, param_type="sp")
 
 
 def n_params(p):
+    """Returns the total number of scalar parameters in a pytree."""
     return int(sum(x.size for x in jax.tree_util.tree_leaves(p)))
 
 
 # ------------------------------------------------------------------ predictions and energy
 def mu_top(p, s, Ph):
+    """Computes the top-down prediction of the top hidden level from belief s and time features Ph."""
     k = Ph.shape[1]
     inp = jnp.concatenate([jnp.broadcast_to(s[:, None], (s.shape[0], k, s.shape[-1])), Ph], -1)
     return inp @ p["top"][0].T + p["top"][1]
 
 
 def mu_mid(W, x, H):
+    """Computes the top-down prediction of one hidden level from the level above it via a residual ReLU map."""
     return x + jax.nn.relu(x) @ W.T / math.sqrt(H)
 
 
 def mu_bot(p, x1):
+    """Computes the top-down prediction of the observation from the lowest hidden level."""
     return jax.nn.relu(x1) @ p["bot"][0].T + p["bot"][1]
 
 
 def topdown(p, s, Ph, H):
+    """Runs the full top-down pass from belief s to all hidden levels and the predicted observation."""
     xs = [None] * H
     xs[H - 1] = mu_top(p, s, Ph)
     for l in range(H - 1, 0, -1):
@@ -107,9 +122,8 @@ def topdown(p, s, Ph, H):
     return xs, mu_bot(p, xs[0])
 
 
-# Unweighted per-level energies [level 0 (observation), 1, ..., H]
-# summed over views and batch.
 def level_energies(p, s, xs, Z, Ph, H):
+    """Returns the unweighted per-level energies [level 0 (observation), 1, ..., H], summed over views and batch."""
     e = [0.5 * jnp.sum((Z - mu_bot(p, xs[0])) ** 2)]
     for l in range(1, H):
         e.append(0.5 * jnp.sum((xs[l - 1] - mu_mid(p["mid"][l - 1], xs[l], H)) ** 2))
@@ -118,19 +132,20 @@ def level_energies(p, s, xs, Z, Ph, H):
 
 
 def energy(p, s, xs, Z, Ph, H, prior, out_w=1.0, hid=1.0):
+    """Computes the total weighted free energy (observation, hidden, and prior terms) for state (s, xs)."""
     e = level_energies(p, s, xs, Z, Ph, H)
     return out_w * e[0] + hid * sum(e[1:]) + 0.5 * prior * jnp.sum(s ** 2)
 
 
-# Hidden-level residuals [r_1 .. r_H], same order as level_energies[1:]; r_H = x_H - mu_top(s).
 def hid_residuals(p, s, xs, Ph, H):
+    """Returns the hidden-level residuals [r_1 .. r_H], where r_H = x_H - mu_top(s)."""
     r = [xs[l - 1] - mu_mid(p["mid"][l - 1], xs[l], H) for l in range(1, H)]
     return r + [xs[H - 1] - mu_top(p, s, Ph)]
 
 
-# PC-ALM augmented energy (completing-the-square form, rho = hid): the observation term is the objective,
-# every hidden residual carries a multiplier.  lam = None or all zero gives energy() exactly (gated).
 def alm_energy(p, s, xs, Z, Ph, H, prior, out_w, hid, lam):
+    """Computes the PC-ALM augmented energy with multipliers lam added to the hidden residuals.
+    lam = None (or all zero) reduces to energy() exactly."""
     r = hid_residuals(p, s, xs, Ph, H)
     if lam is not None:
         r = [ri + li for ri, li in zip(r, lam)]
@@ -139,17 +154,18 @@ def alm_energy(p, s, xs, Z, Ph, H, prior, out_w, hid, lam):
 
 
 def ad_loss(p, s, Z, Ph, H, prior):
+    """Computes the auto-decoder loss (backprop-through-inference) for belief s given views Z."""
     return 0.5 * jnp.sum((Z - topdown(p, s, Ph, H)[1]) ** 2) + 0.5 * prior * jnp.sum(s ** 2)
 
 
 def _E(cfg):
+    """Returns a closure computing energy() with this config's H, prior, out_w, and hid_prec bound in."""
     return lambda p, s, xs, Z, Ph: energy(p, s, xs, Z, Ph, cfg.H, cfg.prior, cfg.out_w, cfg.hid_prec)
 
 
 # ------------------------------------------------------------------ step sizes
-# Spectral norm via power iteration from a fixed start (review N5/G9: no SVD in step)
-# Applies 2% safety margin
 def _sn(W, iters=20):
+    """Estimates the spectral norm of W via power iteration from a fixed start, with a 2% safety margin."""
     W = jax.lax.stop_gradient(W)
     v = jax.random.normal(jax.random.PRNGKey(17), (W.shape[1],))
     v = v / jnp.linalg.norm(v)
@@ -159,8 +175,8 @@ def _sn(W, iters=20):
     return 1.02 * jnp.linalg.norm(W @ v)
 
 
-# [eta_s, eta_x1..eta_xH] = c * 0.9 / (own curvature + 2 * curvature of the term below).
 def pc_etas(p, k, cfg):
+    """Returns the PC step sizes [eta_s, eta_x1..eta_xH], each c * 0.9 / (own curvature + 2x curvature below)."""
     H, h = cfg.H, cfg.hid_prec
     below = [cfg.out_w * _sn(p["bot"][0]) ** 2] + [h * (1.0 + _sn(W) / math.sqrt(H)) ** 2 for W in p["mid"]]
     eta_x = [cfg.c * 0.9 / (h + 2.0 * L) for L in below]
@@ -168,9 +184,8 @@ def pc_etas(p, k, cfg):
     return [eta_s] + eta_x
 
 
-# Per-sample lambda_max(J^T J), where J = dG/ds evaluated at s0.
-# Computed via batched power iteration from a fixed random start.
 def gn_lambda(p, s0, Ph, H, iters=25):
+    """Estimates per-sample lambda_max(J^T J) (J = dG/ds at s0) via batched power iteration from a fixed start."""
     p, s0 = jax.lax.stop_gradient(p), jax.lax.stop_gradient(s0)
     f = lambda s: topdown(p, s, Ph, H)[1]
     _, vjp = jax.vjp(f, s0)
@@ -179,6 +194,7 @@ def gn_lambda(p, s0, Ph, H, iters=25):
     v = jnp.broadcast_to(jnp.linspace(1.0, 2.0, s0.shape[-1]), s0.shape)
     v = v / jnp.linalg.norm(v, axis=-1, keepdims=True)
     def body(_, v):
+        """Applies one power-iteration step (J^T J v, renormalized) for the fori_loop."""
         w = vjp(jax.jvp(f, (s0,), (v,))[1])[0]
         return w / (jnp.linalg.norm(w, axis=-1, keepdims=True) + 1e-12)
     v = jax.lax.fori_loop(0, iters, body, v)
@@ -187,11 +203,13 @@ def gn_lambda(p, s0, Ph, H, iters=25):
 
 
 def ad_eta(p, s0, Ph, cfg):
+    """Returns the per-sample auto-decoder step size from the Gauss-Newton curvature estimate."""
     return (cfg.c * 0.9 / (cfg.prior + 2.0 * gn_lambda(p, s0, Ph, cfg.H)))[:, None]
 
 
 # ------------------------------------------------------------------ inference
 def start_s(p, amort, Z, T9, cfg):
+    """Returns the initial belief s0: zeros, or the amortiser's forward pass averaged over views."""
     b = Z.shape[0]
     if cfg.start == "zero" or amort is None:
         return jnp.zeros((b, M))
@@ -200,8 +218,9 @@ def start_s(p, amort, Z, T9, cfg):
     return PF.forward(amort, x).reshape(b, k, M).mean(1)
 
 
-# Returns: s, xs, energy history (T,), size of next s step relative to |s| (convergence diagnostic).
 def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, spike_on=True):
+    """Relaxes (s, xs) by T gradient steps on the energy (optionally with spiking step scales).
+    Returns the final (s, xs), the energy history, and the relative size of the last s step."""
     T = cfg.T if T is None else T
     xs0 = topdown(p, s0, Ph, cfg.H)[0] if xs0 is None else xs0
     etas = pc_etas(p, Z.shape[1], cfg)
@@ -219,6 +238,7 @@ def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, spike_on=True)
         mx, ms = None, None
 
     def step(v, t):
+        """Performs one relaxation step on (s, xs), scanned over t; returns the new state and its energy."""
         gs, gx = gfn(v)
         if mx is None:
             s = v[0] if freeze_s else v[0] - etas[0] * gs
@@ -234,10 +254,9 @@ def pc_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, spike_on=True)
     return s, xs, hist, rel
 
 
-# PC-ALM relaxation: T primal steps on (s, xs) with the PC step sizes, a dual step lam += alpha * r after every
-# k_inner primal steps (never after the last).  alpha = 0 is pc_infer exactly (gated).  At the converged saddle
-# r = 0, s minimises the auto-decoder loss and the weight gradient equals the BP auto-decoder's.
 def alm_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, lam0=None):
+    """Runs PC-ALM relaxation: T primal steps with a dual step lam += alpha * r every k_inner steps (alpha=0 is pc_infer).
+    Returns the final (s, xs, lam), the augmented-energy history, and the relative size of the last s step."""
     T = cfg.T if T is None else T
     H = cfg.H
     xs0 = topdown(p, s0, Ph, H)[0] if xs0 is None else xs0
@@ -247,6 +266,7 @@ def alm_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, lam0=None):
     gfn = jax.grad(lambda v, lam: Lf(v[0], v[1], lam))
 
     def step(c, t):
+        """Performs one primal step and, every k_inner steps, a dual update to lam; scanned over t."""
         (s, xs), lam = c
         gs, gx = gfn((s, xs), lam)
         s = s if freeze_s else s - etas[0] * gs
@@ -263,17 +283,20 @@ def alm_infer(p, s0, Z, Ph, cfg, T=None, freeze_s=False, xs0=None, lam0=None):
 
 
 def alm_wgrads(p, s, xs, lam, Z, Ph, cfg):
+    """Returns the weight gradient of the PC-ALM augmented energy at the given (s, xs, lam), stop-gradiented."""
     s, xs, lam = jax.lax.stop_gradient(s), jax.lax.stop_gradient(xs), jax.lax.stop_gradient(lam)
     g = jax.grad(lambda q: alm_energy(q, s, xs, Z, Ph, cfg.H, cfg.prior, cfg.out_w, cfg.hid_prec, lam))(p)
     return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
 
 
 def ad_infer(p, s0, Z, Ph, cfg, T=None):
+    """Runs T gradient steps on the auto-decoder loss; returns the final s, the loss history, and relative last step."""
     T = cfg.T if T is None else T
     eta = ad_eta(p, s0, Ph, cfg)
     gfn = jax.grad(lambda s: ad_loss(p, s, Z, Ph, cfg.H, cfg.prior))
 
     def step(s, _):
+        """Performs one auto-decoder gradient step on s, scanned over the step count."""
         s = s - eta * gfn(s)
         return s, ad_loss(p, s, Z, Ph, cfg.H, cfg.prior)
 
@@ -282,11 +305,9 @@ def ad_infer(p, s0, Z, Ph, cfg, T=None):
     return s, hist, rel
 
 
-# Belief from the given (seen) views: returns (s*, s0, energy history, relative last step).
-# sep stage 1: the belief from the seen views, with no multipliers.  pc: plain-PC relaxation of the joint energy
-# (unit hidden precision); oracle: the BP auto-decoder's own inference (backprop used for inference only);
-# amort: one pass of the amortiser.  Returns (s, history, relative last step); s carries no gradient.
 def sep_belief(p, amort, Z, T9, cfg, T=None):
+    """Computes the sep-rule stage-1 belief from the seen views via plain PC, the BP auto-decoder, or the amortiser.
+    Returns (s, energy/loss history, relative last step); s carries no gradient."""
     Ph, b = phi(T9), Z.shape[0]
     if cfg.belief == "amort":
         return jax.lax.stop_gradient(start_s(p, amort, Z, T9, cfg)), jnp.zeros(1), jnp.zeros(())
@@ -299,23 +320,22 @@ def sep_belief(p, amort, Z, T9, cfg, T=None):
     return jax.lax.stop_gradient(s), hist, rel
 
 
-# sep stage 2: credit at fixed s.  Hidden levels start at the clean top-down pass (every hidden residual is zero) and
-# lam = 0; then T2 primal steps with a dual step after every k_inner (alm_infer, freeze_s).  alpha = 0: plain PC at
-# fixed s with hidden precision rho.  Returns (xs, lam, energy history).
 def credit_fixed_s(p, s, Z, Ph, cfg):
+    """Runs sep-rule stage-2 credit assignment: T2 PC-ALM steps on all views at fixed belief s.
+    Returns (xs, lam, energy history)."""
     xs0 = topdown(p, s, Ph, cfg.H)[0]
     _, xs, lam, hist, _ = alm_infer(p, s, Z, Ph, cfg, T=cfg.T2, freeze_s=True, xs0=xs0)
     return xs, lam, hist
 
 
-# Local error at s after stage 2 (only the top link and the prior depend on s); with exact credit it equals the
-# BP auto-decoder's gradient at s.  The amortiser is trained toward s - eta_s * g_s.
 def sep_s_target(p, s, xs, lam, Z, Ph, cfg):
+    """Returns the one-step target s - eta_s * g_s used to train the amortiser toward the sep-rule belief."""
     gs = jax.grad(lambda v: alm_energy(p, v, xs, Z, Ph, cfg.H, cfg.prior, cfg.out_w, cfg.hid_prec, lam))(s)
     return jax.lax.stop_gradient(s - pc_etas(p, Z.shape[1], cfg)[0] * gs)
 
 
 def infer_s(p, amort, Z, T9, cfg, T=None):
+    """Dispatches inference by cfg.rule (sep/pc/alm/bp); returns (s, s0, energy/loss history, relative last step)."""
     Ph = phi(T9)
     s0 = start_s(p, amort, Z, T9, cfg)
     if T == 0:
@@ -333,6 +353,7 @@ def infer_s(p, amort, Z, T9, cfg, T=None):
 
 # ------------------------------------------------------------------ weight gradients
 def pc_wgrads(p, s, xs, Z, Ph, cfg):
+    """Returns the plain-PC weight gradient at (s, xs), or dispatches to fu_grads for a forward-update rule."""
     if cfg.wrule != "pc":
         assert cfg.hid_prec == 1.0 and cfg.out_w == 1.0, "fu_grads assumes unit precisions"
         return fu_grads(p, s, xs, Z, Ph, cfg.H, cfg.wrule)
@@ -341,10 +362,9 @@ def pc_wgrads(p, s, xs, Z, Ph, cfg):
     return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
 
 
-# Forward-update weight rule (Qi et al. 2025), adapted: errors relative to the clean top-down pass from the final
-# belief (the computation used at prediction).  qi: relaxed presynaptic activity; fixed: top-down presynaptic
-# (Millidge's fixed-prediction form).  mode pc reproduces pc_wgrads at unit precision (gated).
 def fu_grads(p, s, xs, Z, Ph, H, mode):
+    """Computes the forward-update weight gradient (Qi et al. 2025); mode pc/qi/fixed selects the presynaptic term.
+    mode pc reproduces pc_wgrads at unit precision."""
     sg = jax.lax.stop_gradient
     s, xs = sg(s), [sg(x) for x in xs]
     xtd = [sg(x) for x in topdown(p, s, Ph, H)[0]]
@@ -360,6 +380,7 @@ def fu_grads(p, s, xs, Z, Ph, H, mode):
     e0, em, eH = sg(e0), [sg(e) for e in em], sg(eH)
 
     def sur(q):
+        """Computes the surrogate scalar whose gradient w.r.t. q gives the forward-update weight gradient."""
         v = jnp.sum(e0 * mu_bot(q, pre[0])) + jnp.sum(eH * mu_top(q, s, Ph))
         v += sum(jnp.sum(e * mu_mid(q["mid"][l - 1], pre[l], H)) for l, e in zip(range(1, H), em))
         return -v
@@ -368,12 +389,14 @@ def fu_grads(p, s, xs, Z, Ph, H, mode):
 
 
 def ad_wgrads(p, s, Z, Ph, cfg):
+    """Returns the weight gradient of the auto-decoder loss at the given belief s, stop-gradiented."""
     s = jax.lax.stop_gradient(s)
     g = jax.grad(lambda q: ad_loss(q, s, Z, Ph, cfg.H, cfg.prior))(p)
     return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
 
 
 def amort_grads(amort, Z, T9, s, cfg):
+    """Returns the amortiser's weight gradient toward target belief s, via the rule (PC/PC-ALM/BP) matching cfg."""
     b, k = Z.shape[:2]
     x = jnp.concatenate([Z, T9], -1).reshape(b * k, -1)
     # s is one target per image (b, M), or one per view (b, k, M) for rule sep (review E123 F3)
@@ -386,10 +409,9 @@ def amort_grads(amort, Z, T9, s, cfg):
     return PF.bp_grads(amort, x, y, None)
 
 
-# PC phase 2 / BP: gradients on all 4 views at the belief s inferred from the seen views.
-# Phase 2: all views relaxed at fixed s, seen views warm-started from phase 1 (pc: xs; alm: (xs, lam)).
-# Returns the phase-2 state and its energy history.
 def phase2(p, s, carry, Zall, Pall, seen, cfg):
+    """Relaxes all views at fixed belief s, warm-starting the seen views from phase 1.
+    Returns the phase-2 hidden state (and multipliers, for alm) and its energy history."""
     ii = jnp.arange(Zall.shape[0])[:, None]
     xs_s, lam_s = carry if cfg.rule == "alm" else (carry, None)
     xs0 = topdown(p, s, Pall, cfg.H)[0]
@@ -403,6 +425,7 @@ def phase2(p, s, carry, Zall, Pall, seen, cfg):
 
 
 def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
+    """Dispatches weight-gradient computation by cfg.rule after phase 2; returns (gradients, energy history)."""
     if cfg.rule == "pc":
         xs, _, h2 = phase2(p, s, Zs_seen_xs, Zall, Pall, seen, cfg)
         return pc_wgrads(p, s, xs, Zall, Pall, cfg), h2
@@ -414,6 +437,8 @@ def weight_grads(p, s, Zs_seen_xs, Zall, Pall, seen, cfg):
 
 # ------------------------------------------------------------------ training
 def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
+    """Trains a GLN predictor under cfg via minibatch SGD, logging energy, prediction error, and alignment diagnostics.
+    Returns (final params, final amortiser, log list, whether training diverged)."""
     assert cfg.rule not in ("alm", "sep") or cfg.out_w == 1.0, "the alm saddle equals the BP auto-decoder only at out_w = 1"
     assert cfg.rule != "sep" or (cfg.belief == "amort") == (cfg.start == "amort"), "sep: belief amort <=> start amort"
     kp, ka = jax.random.split(jax.random.PRNGKey(cfg.seed))
@@ -428,6 +453,7 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
 
     @eqx.filter_jit
     def step(p, amort, st, st_a, Zall, Tall, perm, k):
+        """Runs one training step: infers the belief from k seen views, then updates weights and the amortiser."""
         ii = jnp.arange(Zall.shape[0])[:, None]
         seen, tgt = perm[:, :k], perm[:, k:]
         Zs, Ts = Zall[ii, seen], Tall[ii, seen]
@@ -488,11 +514,10 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
             m["n_views"] = jnp.asarray(Zall.shape[1], jnp.float32)
         return p2, amort2, st, st_a2, m
 
-    # Credit diagnostic (pc / alm only; never feeds training), on a FIXED probe batch with fixed seen views, k = 1 and 3:
-    # cosine of this rule's weight gradient with the BP auto-decoder gradient at the SAME s (all / seen / unseen views,
-    # per block), norm ratio, phase-2 residual size, and distance of s from a settled auto-decoder belief (c=1, T=2000).
     @eqx.filter_jit
     def align(p, amort, Zall, Tall, perm, k):
+        """Computes the credit diagnostic on a fixed probe batch: cosine/ratio of this rule's weight gradient
+        vs. the BP auto-decoder's at the same belief s, plus s's distance from a settled auto-decoder belief."""
         ii = jnp.arange(Zall.shape[0])[:, None]
         seen, uns = perm[:, :k], perm[:, k:]
         Zs, Ts = Zall[ii, seen], Tall[ii, seen]
@@ -508,6 +533,7 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
                 s, xs, _, _ = pc_infer(p, s0, Zs, Ps, cfg); carry = xs
             xf, lf, _ = phase2(p, s, carry, Zall, Pall, seen, cfg)
         def grads(ix):
+            """Returns (this rule's weight gradient, the BP auto-decoder's) restricted to view index ix (or all)."""
             sel = (lambda a: a) if ix is None else (lambda a: a[ii, ix])
             X, Zv, Pv = [sel(x) for x in xf], sel(Zall), sel(Pall)
             g = alm_wgrads(p, s, X, [sel(l) for l in lf], Zv, Pv, cfg) if cfg.rule in ("alm", "sep") else pc_wgrads(p, s, X, Zv, Pv, cfg)
@@ -566,19 +592,18 @@ def train(cfg, ztr, ttr, verbose=True, log_every=250, ckpt=None):
 
 
 def make_predict(p, amort, cfg, T=None):
+    """Builds a jitted prediction function mapping (seen Z, seen times, target times) to predicted observations."""
     @eqx.filter_jit
     def _p(p, amort, Zs, Ts, Tt):
+        """Infers the belief from the seen views and predicts the observation at the target times Tt."""
         s, _, _, _ = infer_s(p, amort, Zs, Ts, cfg, T)
         return topdown(p, s, phi(Tt), cfg.H)[1]
     return lambda Zs, Ts, Tt: _p(p, amort, jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
 
 
-# Finite but blown up (review N3).
-# Compares each logged value with BEST value seen BEFORE it (not run median)
-#   -- first version used median and flagged every run, 2026-10-13.
-# Primary signal: held-out prediction error of batch; secondary: settled energy,
-#   with absolute floor since PC's seen-view energy can approach 0.
 def exploded(log, factor=5.0, warm=2):
+    """Detects whether a run has blown up: a logged pred_err/energy/residual exceeds a multiple of its prior best.
+    Checks held-out prediction error primarily, settled energy and ALM residual secondarily (review N3)."""
     pv = lambda r: r["pred_err"] / (4 - r["k"]) if "k" in r else r["pred_err"]       # per held-out view
     ev = lambda r: r["E"] / r.get("n_views", r["k"]) if "k" in r else r["E"]          # per view in the energy
     P = [pv(r) for r in log if "pred_err" in r and np.isfinite(r["pred_err"])]
@@ -597,6 +622,7 @@ def exploded(log, factor=5.0, warm=2):
 
 
 def _clean(o):
+    """Recursively converts an object for strict JSON output: non-finite floats become None, numpy scalars become Python."""
     if isinstance(o, dict):
         return {k: _clean(v) for k, v in o.items()}
     if isinstance(o, (list, tuple)):
@@ -608,8 +634,8 @@ def _clean(o):
     return o
 
 
-# Atomic write (review N7); non-finite floats become null (strict JSON).
 def dump_json(obj, path):
+    """Writes obj as JSON atomically (via a temp file and rename), with non-finite floats serialized as null."""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(_clean(obj), f, indent=1, default=str)

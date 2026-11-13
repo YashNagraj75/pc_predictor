@@ -1,3 +1,6 @@
+# Selects the sparsity thresholds beta (case B) and gamma (case C) that hit
+# a target active-fraction of 0.2 on a sample of training centre views, at
+# init, and writes the chosen values plus the achieved fractions to json.
 import argparse
 import dataclasses
 import json
@@ -17,12 +20,15 @@ TARGET = 0.2
 
 
 def centre_views(cfg, n=1024, seed=0):
+    """Returns centre-crop views for a random sample of up to n training images."""
     Xtr = D.load_dataset(cfg.data)[0]
     idx = np.random.default_rng(seed).choice(len(Xtr), min(n, len(Xtr)), replace=False)
     return D.eval_batch(jnp.asarray(Xtr[idx]), cfg.data)
 
 
 def select_beta(x, layer):
+    """Picks beta (case B) from the quantile of |f_s| hitting TARGET active fraction on x.
+    Returns the beta value and the achieved active fraction."""
     cfg = RunCfg(sparse=SparseCfg(case="B", layer=layer, beta=0.0))
     params = SP.init_params(jax.random.PRNGKey(0), cfg, cfg.data.input_dim)
     _, ex = SP.deploy(params, x, cfg)
@@ -34,11 +40,14 @@ def select_beta(x, layer):
 
 
 def select_gamma(x, layer, T_test, lo=1e-5, hi=10.0, iters=40, tol=0.005):
+    """Binary-searches gamma (case C) over [lo, hi] for TARGET active fraction on x.
+    Returns the gamma value and the achieved active fraction."""
     base = RunCfg(sparse=SparseCfg(case="C", layer=layer, gamma=1.0, beta_g=1.0,
                                    T_test=T_test))
     params = SP.init_params(jax.random.PRNGKey(0), base, base.data.input_dim)
 
     def frac(g):
+        """Returns the active fraction of `a` under gamma=g."""
         cfg = dataclasses.replace(base, sparse=dataclasses.replace(base.sparse, gamma=g))
         _, ex = SP.deploy(params, x, cfg)
         return float(jnp.mean(ex["a"] != 0))
@@ -56,6 +65,7 @@ def select_gamma(x, layer, T_test, lo=1e-5, hi=10.0, iters=40, tol=0.005):
 
 
 def main():
+    """Selects beta and gamma for the target active fraction and writes the results to --out."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="sparse_selected.json")
     ap.add_argument("--layer", type=int, default=SparseCfg.layer)

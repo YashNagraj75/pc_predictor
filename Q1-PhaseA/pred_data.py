@@ -1,3 +1,6 @@
+# Extracts per-layer latents (trained backbone + random-init baseline) and tau
+# features (box + pose) for train/test splits from a given run, and saves
+# them to an npz file for training downstream set predictors.
 import argparse, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jax, jax.numpy as jnp, numpy as np
@@ -9,11 +12,13 @@ LAYERS = {"h3": 3, "h7": 7, "emb": None}
 
 
 def tau_features(boxes, params):
+    """Builds per-glimpse tau features from box coords and sin/cos pose params."""
     b, p = np.asarray(boxes, np.float32), np.asarray(params, np.float32)
     return np.concatenate([b, np.sin(p[..., :1]), np.cos(p[..., :1]), p[..., 1:4]], -1)
 
 
 def main():
+    """Extracts multi-layer latents and tau features for a run's train/test splits and writes them to an npz file."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="runs/bp_sigreg_e400")
     ap.add_argument("--out", default="pred_latents.npz")

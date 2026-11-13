@@ -1,3 +1,6 @@
+# Captures golden-reference snapshots of pcalm's PC-ALM relax/grad outputs (activities,
+# duals, energy history, gradients) for two alpha settings, used by test_sparse.py to pin
+# behaviour across edits.
 import os, sys
 # GOLDEN_REF (set by test_sparse.py) points at the PRE-EDIT source; it must come
 # first on the path so `import pcalm` etc. resolve to the old modules.
@@ -9,6 +12,7 @@ import data as D, encoder as E, sigreg as S, pcalm as PA
 from config import RunCfg, PCCfg, DataCfg, OptCfg
 
 def setup(alpha, B=8, T=4):
+    """Builds a small PC config, encoder params, input views, and sigreg directions for alpha."""
     cfg = RunCfg(arm="pc", pc=PCCfg(T=T, eta_h=0.0625, alpha=alpha),
                  data=DataCfg(n_train=64, n_test=16), opt=OptCfg(batch_size=B))
     rng = np.random.default_rng(0)
@@ -19,6 +23,7 @@ def setup(alpha, B=8, T=4):
     return cfg, params, Zin, A
 
 def snapshot(alpha):
+    """Runs relax and grads once for alpha and flattens activities, duals, energy history and gradients into a dict."""
     cfg, params, Zin, A = setup(alpha)
     acts, duals, hist = PA.relax(params, Zin, A, cfg, jax.random.PRNGKey(3))
     g, aux = PA.grads(params, Zin, A, cfg, jax.random.PRNGKey(3))

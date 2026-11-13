@@ -26,6 +26,8 @@ V0_DIR = "runs_vit/v0_d6_s0"
 
 @dc.dataclass(frozen=True)
 class ACfg:
+    """Configuration for the ViT predictor training run, covering arm, schedule, and optimizer settings.
+    Sets split to choose train/eval data sizing and hv_iters to cap spc power iterations near diag_spc cost."""
     arm: str = "bp"
     depth: int = 10
     lr: float = 1e-3
@@ -45,6 +47,8 @@ class ACfg:
 
 
 def load_encoders(v0_dir=V0_DIR):
+    """Loads the frozen V0 context and target encoders, verifying each file's sha256 against the gate report.
+    Raises if any encoder file has changed since the V0 gate, then returns the config, encoders, and metadata."""
     import hashlib
     meta = json.load(open(os.path.join(v0_dir, "v0_report.json")))
     for n, h in meta["sha256"].items():          # the frozen encoders must be exactly the gated ones
@@ -57,11 +61,15 @@ def load_encoders(v0_dir=V0_DIR):
 
 
 def make_predictor(vc, a):
+    """Constructs a ViT-style Predictor with fixed width 192, 3 heads, and mlp dim 768.
+    Seeds it deterministically from 10_000 plus the run seed."""
     return V.Predictor(jax.random.PRNGKey(10_000 + a.seed), vc, depth=a.depth, width=192, heads=3, mlp=768, scaled=True)
 
 
 @eqx.filter_jit
 def encode(enc, tenc, imgs_ctx, imgs_tgt, cidx, cvalid, tidx, vc):
+    """Encodes context images via vmapped encoder and computes target embeddings.
+    Returns the context encodings and target outputs as a tuple."""
     ctx = jax.vmap(lambda im, a, b: enc(im, a, b, vc.patch))(imgs_ctx, cidx, cvalid)
     Y = V.targets_of(tenc, imgs_tgt, tidx, vc)
     return ctx, Y
@@ -69,23 +77,31 @@ def encode(enc, tenc, imgs_ctx, imgs_tgt, cidx, cvalid, tidx, vc):
 
 @eqx.filter_jit
 def predict(pred, ctx, cidx, cvalid, tidx, tvalid):
+    """Vmaps the predictor over batch and target dimensions.
+    Returns predictions for each target index given context and validity masks."""
     return jax.vmap(lambda a, ci, cv, ti, tv: jax.vmap(lambda t1, t2: pred(a, ci, cv, t1, t2))(ti, tv))(ctx, cidx, cvalid, tidx, tvalid)
 
 
 @eqx.filter_jit
 def gain_stats(pred, ctx, cidx, cvalid, tidx, tvalid):         # 8 images x 4 blocks -> (min, median, max)
+    """Computes PC gain over the first 8 images and 4 blocks each via vmap.
+    Returns the min, median, and max gain across those samples."""
     g = jax.vmap(lambda a, ci, cv, ti, tv: jax.vmap(lambda t1, t2: P.gain(pred, a, ci, cv, t1, t2))(ti, tv))(
         ctx[:8], cidx[:8], cvalid[:8], tidx[:8], tvalid[:8])
     return jnp.min(g), jnp.median(g), jnp.max(g)
 
 
 def make_step(a, opt):
+    """Builds a JIT-compiled training step for the given arm's method, k, and alpha settings.
+    Computes gradients and energy, applies the optimizer update, and returns the updated predictor, optimizer state, and energy."""
     k, alpha = ARMS[a.arm]
     meth = method_of(a.arm)
     rr = float(k) if a.arm in BLOCK else 0.0
 
     @eqx.filter_jit
     def step(pred, ost, ctx, cidx, cvalid, tidx, tvalid, Y, rho):
+        """Computes gradients and energy for the predictor via `P.grads`, then applies an optimizer update.
+        Returns the updated predictor, optimizer state, and energy (or energy tuple when `rho_rel` is active)."""
         out = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=a.T, chunk=a.chunk, gn_iters=a.gn_iters,
                       rho_rel=rr, return_rho=rr > 0, hv_iters=a.hv_iters)
         g, en = out[0], (out[2], out[3]) if rr > 0 else out[2]
@@ -96,6 +112,8 @@ def make_step(a, opt):
 
 @eqx.filter_jit
 def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_iters, rho_rel=0.0, meth="epc", hv_iters=20):  # cos / ratio to BP, per leaf
+    """Computes gradients from backprop (bp) and the given method, comparing them per parameter leaf.
+    Returns overall cosine similarity and norm ratio, plus per-leaf min cosine, cosine array, and norm-ratio array."""
     gb = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, "bp", chunk=chunk)[0]
     ge = P.grads(pred, ctx, cidx, cvalid, tidx, tvalid, Y, meth, rho=rho, alpha=alpha, T=T, chunk=chunk, gn_iters=gn_iters, rho_rel=rho_rel, hv_iters=hv_iters)[0]
     lb = jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array)); le = jax.tree_util.tree_leaves(eqx.filter(ge, eqx.is_inexact_array))
@@ -108,24 +126,30 @@ def credit(pred, ctx, cidx, cvalid, tidx, tvalid, Y, rho, alpha, T, chunk, gn_it
 
 
 def optimiser(a, spe):
+    """Builds a warmup-cosine-decay AdamW optimiser, capping warmup so decay always exceeds it.
+    Returns the chained optax optimiser along with the total number of training steps."""
     total = a.epochs * spe
     warm = max(1, min(a.warmup_epochs * spe, total // 5))      # never the whole run (optax needs decay > warmup)
     sch = optax.warmup_cosine_decay_schedule(0.0, a.lr, warm, max(total, warm + 1), a.lr * 1e-3)
     return optax.chain(optax.clip_by_global_norm(a.clip), optax.adamw(sch, weight_decay=a.wd, mask=V.wd_mask)), total
 
 
-# ------------------------------------------------------------------ evaluation (fixed masks and corruptions, paired)
 def per_image(Pr, Y, tvalid):                    # per image: sum err^2, sum Y^2, sum P*Y, sum P^2 over valid tokens
+    """Computes per-image sums over valid tokens of squared error, Y^2, P*Y, and P^2.
+    Returns an array stacking these four sums per image, for fixed-mask paired evaluation."""
     m = np.asarray(tvalid)[..., None].astype(np.float64); Pr, Y = np.asarray(Pr, np.float64), np.asarray(Y, np.float64)
     f = lambda z: (m * z).sum((1, 2, 3))
     return np.stack([f((Pr - Y) ** 2), f(Y ** 2), f(Pr * Y), f(Pr ** 2)], 1)
 
 
 def pooled(Z, tvalid):
+    """Computes the mean of Z over valid timesteps, masked by tvalid."""
     m = np.asarray(tvalid)[..., None]; return (np.asarray(Z) * m).sum((1, 2)) / m.sum((1, 2))
 
 
 def drop_context(rng, cidx, cvalid, frac):       # remove a fraction of the valid context tokens (re-packed to the front)
+    """Removes a fraction of valid context tokens per batch, keeping at least one, re-packed to the front.
+    Returns updated context indices and validity masks."""
     ci, cv = cidx.copy(), cvalid.copy()
     for b in range(len(ci)):
         v = ci[b][cv[b]]; keep = rng.permutation(len(v))[:max(1, int(round(len(v) * (1 - frac))))]
@@ -134,6 +158,8 @@ def drop_context(rng, cidx, cvalid, frac):       # remove a fraction of the vali
 
 
 def corrupt(rng, X, kind):
+    """Applies one of two corruptions to a batch of images: a random 16x16 black square occlusion or additive Gaussian noise.
+    Leaves the input unchanged if the kind is neither "square" nor "noise"."""
     X = X.copy()
     if kind == "square":                         # black square, 25% of the image area (16 x 16 px)
         for b in range(len(X)):
@@ -144,6 +170,8 @@ def corrupt(rng, X, kind):
 
 
 def eval_masks(n, vc, bs=200, per=50):           # one mask shape per 50 images (40 shapes on 2000), model batches of 200
+    """Builds deterministic evaluation mask batches, varying the mask shape every 50 images (40 shapes per 2000).
+    Returns a list of per-batch tuples of 4 concatenated arrays sampled with a fixed eval seed."""
     rng = np.random.default_rng(EVAL_SEED); out = []
     for _ in range(n // bs):
         parts = [V.sample_masks(rng, per, vc) for _ in range(bs // per)]
@@ -152,6 +180,8 @@ def eval_masks(n, vc, bs=200, per=50):           # one mask shape per 50 images 
 
 
 def evaluate(pred, enc, tenc, vc, Xev, yev, Xknn, yknn, bs=200):
+    """Evaluates the predictor under clean, context-drop, square, and noise corruption conditions.
+    Computes per-condition NMSE with clean-calibrated alpha and reports kNN accuracy for predictions versus the target ceiling."""
     masks = eval_masks(len(Xev), vc, bs)
     conds = {"clean": ("none", 0.0), "ctx_drop25": ("none", 0.25), "ctx_drop50": ("none", 0.5), "square": ("square", 0.0), "noise": ("noise", 0.0)}
     out, per, Fp, Fy = {}, {}, [], []           # Fp / Fy: clean-condition pooled predictions and targets (kNN)
@@ -187,8 +217,9 @@ def evaluate(pred, enc, tenc, vc, Xev, yev, Xknn, yknn, bs=200):
     return out, per
 
 
-# ------------------------------------------------------------------ training
 def run(a, out_dir):
+    """Runs the full training loop, resuming from a checkpoint if present (restoring rho/gain so resume is exact).
+    Logs/checkpoints periodically, evaluates the trained and untrained predictors at the end, and saves report/log/checkpoint artifacts."""
     os.makedirs(out_dir, exist_ok=True)
     vc, enc, tenc, meta = load_encoders()
     Xtr, ytr, Xte, yte = D.load_cifar10(n_train=-1, n_test=2000, seed=0)
@@ -220,6 +251,8 @@ def run(a, out_dir):
     t0, epoch, perm, ep_t = time.time(), -1, None, None
 
     def diverged(it, why):
+        """Saves divergence info and the training log to JSON files.
+        Prints a divergence message and returns None."""
         V.save_json(os.path.join(out_dir, "diverged.json"), {"step": it, "why": why, "cfg": dc.asdict(a), "commit": commit})
         V.save_json(logf, {"log": log, "cfg": dc.asdict(a), "commit": commit, "diverged": it})
         print("DIVERGED", it, why, flush=True)

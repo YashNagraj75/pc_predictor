@@ -15,21 +15,22 @@ SHA = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=Tru
 
 
 def dump(obj, path):                             # atomic json write
+    """Writes obj as JSON to a temp file, then atomically replaces path with it."""
     tmp = path + ".tmp"; json.dump(obj, open(tmp, "w")); os.replace(tmp, path)
 
 
 def readable(path):
+    """Loads and parses a JSON file at the given path.
+    Returns None if the file cannot be read or parsed."""
     try:
         return json.load(open(path))
     except Exception:
         return None
 
 
-# Instrumented forward pass, identical to Predictor.__call__.  Returns the prediction, the per-node states pooled over the
-# valid target tokens, per attention layer and head [mass on context keys, mass-weighted distance to context keys,
-# distance under uniform attention over context, entropy over valid keys] (valid target queries), and per layer the norm of
-# the context keys' value contribution to the target rows relative to the residual stream.  One image, one target block.
 def forward_instr(p, ctx, cidx, cvalid, tidx, tvalid, g):
+    """Runs the transformer over context and target tokens, tracking per-layer attention and context-mixing stats.
+    Returns target predictions, pooled hidden states per layer, stacked attention metrics, and context-contribution ratios."""
     kvalid = jnp.concatenate([cvalid, tvalid]); NC, nt = cidx.shape[0], tidx.shape[0]
     pos = jnp.concatenate([cidx, tidx]); rc = jnp.stack([pos // g, pos % g], -1).astype(jnp.float32)
     dist = jnp.sqrt(jnp.sum((rc[:, None] - rc[None]) ** 2, -1))[NC:]                    # (nt, N) from target queries
@@ -63,14 +64,20 @@ def forward_instr(p, ctx, cidx, cvalid, tidx, tvalid, g):
 
 
 def make_fns(pred, g):
+    """Builds and JIT-compiles batched helper functions for a predictor: forward predictions, Jacobian top singular values, gain, and single-instance prediction.
+    Estimates the top singular value of d(valid predictions)/d(valid context) via power iteration at 20 and 40 steps."""
     one = lambda c, ci, cv, ti, tv: forward_instr(pred, c, ci, cv, ti, tv, g)
     batch = eqx.filter_jit(jax.vmap(lambda c, ci, cv, ti, tv: jax.vmap(lambda t1, t2: one(c, ci, cv, t1, t2))(ti, tv)))
 
     def jac_top(c, ci, cv, ti, tv, key):         # top singular value of d(valid predictions)/d(valid context): iters 20 and 40
+        """Estimates the top singular value of d(valid predictions)/d(valid context) via power iteration.
+        Returns stacked norms at 20 and 40 iterations plus the prediction and context norms."""
         f = lambda z: pred(z, ci, cv, ti, tv) * tv[:, None]
         cm = cv[:, None].astype(c.dtype)
         v = jax.random.normal(key, c.shape) * cm; v = v / jnp.linalg.norm(v)
         def it(_, v):
+            """Computes one power-iteration step for estimating the top singular vector of f's Jacobian at c.
+            Applies the Jacobian via jvp, its transpose via vjp masked by cm, then renormalizes the result."""
             _, Jv = jax.jvp(f, (c,), (v,)); w = jax.vjp(f, c)[1](Jv)[0] * cm
             return w / (jnp.linalg.norm(w) + 1e-30)
         v20 = jax.lax.fori_loop(0, 20, it, v); v40 = jax.lax.fori_loop(0, 20, it, v20)
@@ -83,6 +90,8 @@ def make_fns(pred, g):
 
 
 def nearest_ctx_dist(cidx, cvalid, tidx, tvalid, g):   # (B, K, NT) distance of each target patch to the nearest valid ctx patch
+    """Computes, for each target patch, the Chebyshev-free Euclidean grid distance to the nearest valid context patch.
+    Returns NaN for invalid target patches and ignores invalid context patches when taking the minimum."""
     cr, cc = cidx // g, cidx % g; tr, tc = tidx // g, tidx % g
     d = np.sqrt((tr[..., None] - cr[:, None, None, :]) ** 2 + (tc[..., None] - cc[:, None, None, :]) ** 2)
     d = np.where(cvalid[:, None, None, :], d, np.inf).min(-1)
@@ -90,6 +99,8 @@ def nearest_ctx_dist(cidx, cvalid, tidx, tvalid, g):   # (B, K, NT) distance of 
 
 
 def ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g):   # (B, NC) distance of each valid ctx patch to the nearest valid target
+    """Computes, for each valid context patch, the Chebyshev-like grid distance to the nearest valid target patch.
+    Returns NaN for invalid context patches and ignores invalid target patches when taking the minimum."""
     cr, cc = cidx // g, cidx % g; T = tidx.reshape(len(tidx), -1); Tv = tvalid.reshape(len(tidx), -1)
     d = np.sqrt((cr[:, :, None] - (T // g)[:, None]) ** 2 + (cc[:, :, None] - (T % g)[:, None]) ** 2)
     d = np.where(Tv[:, None], d, np.inf).min(-1)
@@ -97,8 +108,8 @@ def ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g):   # (B, NC) distance of 
 
 
 def intervention_masks(rng, cidx, cvalid, tidx, tvalid, g, keep_min=4):
-    # Encoder held fixed; remove (a) every visible ctx patch within 1.5 of a target patch (capped so >= keep_min remain),
-    # (b) the same number at random (matched control), (c) up to the same number farther than 2.1 (fewer if not available).
+    """Builds three context-patch masks (near-target removed, random-matched, far-removed) for an intervention ablation.
+    Returns the masks dict alongside the per-batch (near, far) removal counts, keeping at least keep_min context patches."""
     dct = ctx_dist_to_targets(cidx, cvalid, tidx, tvalid, g); out = {k: cvalid.copy() for k in ("near", "far", "random")}; n_rm = []
     for b in range(len(cidx)):
         val = np.where(cvalid[b])[0]; near = val[dct[b, val] <= 1.5]; far = val[dct[b, val] > 2.1]
@@ -112,29 +123,39 @@ def intervention_masks(rng, cidx, cvalid, tidx, tvalid, g, keep_min=4):
 
 
 def residualise(S):                              # S (n_img, K, nodes, w): remove the per-(mask shape, block) mean over images
+    """Removes the per-group mean over images from S, grouping images into blocks of size GROUP.
+    Truncates S to a multiple of GROUP before computing the residual."""
     n = S.shape[0] // GROUP * GROUP; X = S[:n].reshape(n // GROUP, GROUP, *S.shape[1:]).astype(np.float64)
     return (X - X.mean(1, keepdims=True)).reshape(n, *S.shape[1:])
 
 
 def linear_cka(X, Y):
+    """Computes the linear centered kernel alignment (CKA) similarity between X and Y.
+    Returns NaN if the denominator is zero."""
     X = np.asarray(X, np.float64); Y = np.asarray(Y, np.float64); X = X - X.mean(0); Y = Y - Y.mean(0)
     den = np.linalg.norm(X.T @ X) * np.linalg.norm(Y.T @ Y)
     return float(np.linalg.norm(Y.T @ X) ** 2 / den) if den > 0 else float("nan")
 
 
 def spectrum(C):
+    """Computes the eigenvalue spectrum of covariance matrix C, sorted in descending order.
+    Returns a dict with effective rank, participation ratio, and top-10 eigenvalue fractions."""
     e = np.clip(np.linalg.eigvalsh(C)[::-1], 0, None); p = e / e.sum()
     return {"eff_rank": float(np.exp(-np.sum(p[p > 0] * np.log(p[p > 0])))), "part_ratio": float(e.sum() ** 2 / np.sum(e ** 2)),
             "top10_frac": [float(x) for x in p[:10]]}
 
 
 def ridge_probe(Ftr, ytr, Fte, yte, lam=10.0):
+    """Fits a ridge-regularized linear probe on standardized features to predict one-hot labels.
+    Returns the classification accuracy of the probe on the test set."""
     mu, sd = Ftr.mean(0), Ftr.std(0) + 1e-8; Xtr = np.c_[(Ftr - mu) / sd, np.ones(len(Ftr))]; Xte = np.c_[(Fte - mu) / sd, np.ones(len(Fte))]
     Y = np.eye(int(ytr.max()) + 1)[ytr]; W = np.linalg.solve(Xtr.T @ Xtr + lam * np.eye(Xtr.shape[1]), Xtr.T @ Y)
     return float(np.mean((Xte @ W).argmax(1) == yte))
 
 
 def node_probes(Ste, Str, yte, ytr):             # per node: kNN (raw/centred) and ridge probe on position-residualised states
+    """Computes, for each node, position-residualised and normalized features, then runs kNN and ridge probes.
+    Returns a list of per-node metric dicts with kNN (raw/centred) and ridge probe results."""
     Rte, Rtr = residualise(Ste), residualise(Str); out = []
     for j in range(Ste.shape[2]):
         mu, sd = Rtr[:, :, j].reshape(-1, Rtr.shape[-1]).mean(0), Rtr[:, :, j].reshape(-1, Rtr.shape[-1]).std(0) + 1e-8
@@ -144,8 +165,8 @@ def node_probes(Ste, Str, yte, ytr):             # per node: kNN (raw/centred) a
 
 
 def target_basis(enc, tenc, vc, Xev, masks, bs):
-    # Centred covariance of the clean targets.  Targets are layer-normed (zero feature mean), so they live in the 191-d
-    # complement of the all-ones direction; U = its 191 eigenvectors (desc) + the all-ones direction last ("off-manifold").
+    """Computes the centred covariance of clean layer-normed targets across all masked batches.
+    Returns its 191 eigenvectors sorted descending, with the all-ones "off-manifold" direction appended last."""
     S1, S2, n = np.zeros(vc.dim), np.zeros((vc.dim, vc.dim)), 0
     for i, (ci, cv, ti, tv) in enumerate(masks):
         Y = np.asarray(V.targets_of(tenc, jnp.asarray(V.standardise(Xev[i * bs:(i + 1) * bs])), jnp.asarray(ti), vc), np.float64)[tv]
@@ -154,6 +175,8 @@ def target_basis(enc, tenc, vc, Xev, masks, bs):
 
 
 def basis_from_moments(S1, S2, n, dim):
+    """Computes an orthonormal basis from accumulated first/second moments via PCA on the projected covariance.
+    Returns the basis, eigenvalues, mean, and frequency-band index ranges derived from cumulative variance cutoffs."""
     mu = S1 / n; C = S2 / n - np.outer(mu, mu); one = np.ones(dim) / math.sqrt(dim); Pi = np.eye(dim) - np.outer(one, one)
     e, U = np.linalg.eigh(Pi @ C @ Pi); U = U[:, ::-1][:, :dim - 1]; e = e[::-1][:dim - 1]
     U = np.linalg.qr(U - np.outer(one, one @ U))[0]; U = np.c_[U, one]
@@ -163,10 +186,14 @@ def basis_from_moments(S1, S2, n, dim):
 
 
 def noise_split(ac, NR):                         # NR columns ||dP||^2, ||Pc||^2, dP.Pc, dP.(Pc - Y): (var term, cross term)
+    """Computes variance and cross-noise terms by scaling NR columns with ac.
+    Returns a tuple (variance_term, cross_term) derived from ||dP||^2, ||Pc||^2, and dot products."""
     return ac ** 2 * NR[:, 0], 2 * ac * (ac * NR[:, 2] - (NR[:, 2] - NR[:, 3]))
 
 
 def analyse(run, pred, enc, tenc, vc, Xev, Xknn, U, bands, states_path, bs=200):
+    """Runs evaluation conditions, interventions, and sensitivity analyses on the latent ViT predictor.
+    Returns a results dict and a per-image metrics dict, and saves clean hidden states to states_path."""
     g = vc.grid; masks = A.eval_masks(len(Xev), vc, bs); batch, jt, gn, pr = make_fns(pred, g)
     res = {"run": run, "conds": {}}; per = {}; nb_ = len(bands)
     Sclean, Pclean, ctx_clean = [], [], []
@@ -287,6 +314,8 @@ def analyse(run, pred, enc, tenc, vc, Xev, Xknn, U, bands, states_path, bs=200):
 
 
 def main():
+    """Runs the full analysis pipeline per depth: loads runs, analyses each predictor, and saves results.
+    Computes per-node CKA between runs on residualised states with a shuffled control."""
     root, outd = sys.argv[1], sys.argv[2]; depths = [int(x) for x in sys.argv[3:]] or [10, 6]
     st = os.path.join(outd, "states"); os.makedirs(st, exist_ok=True)
     vc, enc, tenc, _ = A.load_encoders(os.path.join(root, "Q1-PhaseA", A.V0_DIR))
@@ -297,8 +326,9 @@ def main():
         z = np.load(bf); U, ev, mu, bands = z["U"], z["ev"], z["mu"], [tuple(x) for x in z["bands"]]
     else:
         U, ev, mu, bands = target_basis(enc, tenc, vc, Xte, masks, 200); np.savez(bf, U=U, ev=ev, mu=mu, bands=np.array(bands))
-    # input-information floor for the probes: pooled clean context embeddings (independent of the predictor)
     def ctx_feats(X):
+        """Computes pooled clean context embeddings in batches, independent of the predictor.
+        Serves as an input-information floor for the probes."""
         F = []
         for i in range(0, len(X), 200):
             ci, cv, ti, tv = masks[(i // 200) % len(masks)]; Xb = X[i:i + 200]

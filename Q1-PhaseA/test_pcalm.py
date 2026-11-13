@@ -1,3 +1,5 @@
+# Regression tests for PC-ALM (pcalm.py): energy equivalence to jpc at zero duals, dual growth with alpha,
+# alpha=0 matching plain PC's weight gradient, and batch-size invariance of the per-sample relaxation.
 import dataclasses
 import os
 import sys
@@ -17,14 +19,15 @@ FAILED = []
 
 
 def check(name, ok, detail=""):
+    """Prints a PASS/FAIL line for one gate and records its name in FAILED if it failed."""
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
     if not ok:
         FAILED.append(name)
 
 
-# Tiny encoder on real data -- small enough to run on CPU in seconds.
 def small_case(depth=4, width=16, T=3, alpha=0.0, use_sigreg=True, B=8, seed=0,
                projector="bn"):
+    """Builds a tiny encoder and a real-data batch, small enough to run on CPU in seconds."""
     enc = EncoderCfg(depth=depth, width=width, embed_dim=width)
     cfg = RunCfg(arm="pc", use_sigreg=use_sigreg, enc=enc, projector=projector,
                  pc=PCCfg(T=T, alpha=alpha), opt=OptCfg(seed=seed))
@@ -36,8 +39,8 @@ def small_case(depth=4, width=16, T=3, alpha=0.0, use_sigreg=True, B=8, seed=0,
     return params, Zin, A, cfg
 
 
-# duals=0, rho=1 => al_energy == jpc.pc_energy_fn.
 def test_al_energy_matches_jpc_at_zero_duals():
+    """Checks that al_energy with duals=None or all-zero duals equals jpc's plain PC energy at rho=1."""
     params, Zin, A, cfg = small_case()
     z, hs = E.forward(params, Zin[0], cfg.enc)
     acts = [*hs, z]
@@ -59,8 +62,8 @@ def test_al_energy_matches_jpc_at_zero_duals():
           abs(ours_zero - ours_none) < 1e-6 * max(abs(ours_none), 1.0))
 
 
-# Feedforward pass is zero-energy config, so r == 0
 def test_residuals_vanish_on_the_forward_pass():
+    """Checks that every layer residual is ~0 at the feedforward (zero-energy) activations."""
     params, Zin, A, cfg = small_case()
     z, hs = E.forward(params, Zin[0], cfg.enc)
     r = pcalm.residuals(params, [*hs, z], Zin[0], cfg.enc)
@@ -69,8 +72,8 @@ def test_residuals_vanish_on_the_forward_pass():
           f"max|r| = {worst:.2e}")
 
 
-# alpha=0 weight gradients must match the plain-PC path.
 def test_alpha_zero_reproduces_pc():
+    """Checks that pcalm.grads at alpha=0 reproduces train.pc_grads' weight gradient."""
     import train as T
     params, Zin, A, cfg = small_case(alpha=0.0)
     g_alm, _ = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -87,6 +90,7 @@ def test_alpha_zero_reproduces_pc():
 
 
 def test_duals_stay_zero_at_alpha_zero():
+    """Checks that the multipliers stay exactly zero through relaxation when alpha=0."""
     params, Zin, A, cfg = small_case(alpha=0.0)
     _, duals, _ = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
     worst = max(float(jnp.max(jnp.abs(l))) for dv in duals for l in dv)
@@ -94,16 +98,15 @@ def test_duals_stay_zero_at_alpha_zero():
 
 
 def test_duals_grow_at_positive_alpha():
+    """Checks that the multipliers become nonzero through relaxation when alpha=1."""
     params, Zin, A, cfg = small_case(alpha=1.0)
     _, duals, _ = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
     n = float(jnp.sqrt(sum(jnp.sum(l ** 2) for dv in duals for l in dv)))
     check("duals become nonzero at alpha=1", n > 0.0, f"||lam|| = {n:.6f}")
 
 
-# Purpose: credit should reach further down at alpha>0.
-# Reported, not asserted -- magnitude depends on T, eta_h, depth;
-# at tiny T on 4-layer net there's little room for a wavefront.
 def test_dual_reaches_deeper_than_pc():
+    """Reports (not asserts) how much further credit reaches at alpha=1 vs alpha=0, layer by layer."""
     params, Zin, A, cfg = small_case(depth=8, T=16, alpha=0.0)
     out = {}
     for alpha in (0.0, 1.0):
@@ -121,17 +124,12 @@ def test_dual_reaches_deeper_than_pc():
     print(f"      layers moving >1e-3:  alpha=0 -> {n0},  alpha=1 -> {n1}")
 
 
-# With SIGReg off the objective is per-sample, so relaxation must be batch-size invariant.
-# Adapted form of pc-alm's regression test; see module docstring for why SIGReg is off.
 def test_batch_invariance_without_sigreg():
+    """Checks that relaxation is batch-size invariant when SIGReg and the bn projector are both off
+    (otherwise the objective couples samples and this would measure augmentation, not invariance)."""
     sizes = (2, 8, 32)
-    # Build the views ONCE at the largest batch and slice, so sample 0 gets a
-    # byte-identical input in every batch.  D.make_views splits its key per
-    # sample, so calling it separately per B would hand sample 0 a different
-    # crop each time and the test would measure augmentation, not invariance.
-    # projector="none" as well as use_sigreg=False: the "bn" projector is a
-    # BatchNorm over the batch, so it couples samples INDEPENDENTLY of SIGReg.
-    # Both have to be off for the objective to be genuinely per-sample.
+    # Views are built ONCE at the largest batch and sliced, so sample 0 is byte-identical across batches
+    # (D.make_views splits its key per sample, so a separate call per B would change sample 0's crop).
     params, Zin_full, A, cfg = small_case(use_sigreg=False, alpha=1.0,
                                           B=max(sizes), projector="none")
     moved = []

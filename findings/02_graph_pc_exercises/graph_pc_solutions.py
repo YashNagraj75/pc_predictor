@@ -1,4 +1,7 @@
 
+# Graph-PC exercise solutions (findings/02): children-map, forward pass, PC
+# relaxation (Eq. 2) against autodiff, weight updates (Eq. 3), and three DAG
+# topologies (chain / folded-residual / explicit-residual) compared to BP.
 import time
 import jax
 import jax.numpy as jnp
@@ -20,6 +23,7 @@ jax.config.update("jax_platform_name", "cpu")
 
 # children_of(nodes)[i] = [(j, slot), ...]: node j has node i as parent #slot.
 def children_of(nodes):
+    """Returns children_of(nodes)[i] = [(j, slot), ...]: node j has node i as its parent at slot."""
     ch = [[] for _ in nodes]
     for j, (parents, _) in enumerate(nodes):
         for slot, p in enumerate(parents):
@@ -35,6 +39,7 @@ def children_of(nodes):
 
 # Feedforward pass. Returns v, which at this point equals mu (the predictions).
 def forward(nodes, thetas, x):
+    """Runs the feedforward pass and returns v, the list of node values (equal to mu, the predictions)."""
     v = [x] + [None] * (len(nodes) - 1)
     for i in range(1, len(nodes)):
         parents, fn = nodes[i]
@@ -43,6 +48,7 @@ def forward(nodes, thetas, x):
 
 
 def loss_fn(nodes, thetas, x, target):
+    """Returns the squared-error loss between the network's output and target."""
     v = forward(nodes, thetas, x)
     return 0.5 * jnp.sum((target - v[-1]) ** 2)
 
@@ -52,10 +58,12 @@ def loss_fn(nodes, thetas, x, target):
 # dL/dv_i by autodiff, for every node.
 # This is what PC has to reproduce.
 def true_node_grads(nodes, thetas, x, target):
+    """Returns dL/dv_i via autodiff for every node i; the reference PC's errors must reproduce."""
     v_ff = forward(nodes, thetas, x)
     grads = []
     for i in range(len(nodes)):
         def L_from_i(vi, i=i):
+            """Returns the loss when node i's value is replaced by vi, recomputing all downstream nodes."""
             v = list(v_ff)
             v[i] = vi
             for j in range(i + 1, len(nodes)):
@@ -68,7 +76,9 @@ def true_node_grads(nodes, thetas, x, target):
 
 # jT(j, slot, parent_vals, e) = (d fn_j / d parent[slot])^T @ e.
 def jT_factory(nodes, thetas):
+    """Returns a jT(j, slot, parent_vals, e) closure computing (d fn_j / d parent[slot])^T @ e."""
     def jT(j, slot, parent_vals, e):
+        """Returns (d fn_j / d parent[slot])^T @ e via a VJP of node j's function."""
         f = lambda vp: nodes[j][1](
             [vp if k == slot else parent_vals[k] for k in range(len(parent_vals))],
             thetas[j])
@@ -103,6 +113,7 @@ def jT_factory(nodes, thetas):
 # Returns (v, mu, eps_hist); eps_hist[t][i] = epsilon_i BEFORE step t.
 # entry 0 = feedforward state, entry n_steps = final state.
 def infer(nodes, thetas, x, target, n_steps, lr, fixed_prediction=True):
+    """Relaxes free vertices under Eq. 2 for n_steps and returns (v, mu, eps_hist) with eps_hist[t] before step t."""
     N  = len(nodes) - 1
     ch = children_of(nodes)
     jT = jT_factory(nodes, thetas)
@@ -144,6 +155,7 @@ def infer(nodes, thetas, x, target, n_steps, lr, fixed_prediction=True):
 # F = 1/2 sum_i ||eps_i||^2.
 # Must settle; if it grows without bound you are ascending.
 def energy(eps):
+    """Returns F = 1/2 sum_i ||eps_i||^2 over the non-input nodes."""
     return 0.5 * sum(float(jnp.sum(e ** 2)) for e in eps[1:])
 
 
@@ -156,6 +168,7 @@ def energy(eps):
 # everywhere else.
 
 def pc_input_grad(nodes, thetas, x, eps, v_ff):
+    """Returns the gradient at the clamped input node by pulling each child's eps back through its Jacobian."""
     jT  = jT_factory(nodes, thetas)
     tot = jnp.zeros_like(x)
     for (j, slot) in children_of(nodes)[0]:
@@ -177,6 +190,7 @@ D = 4
 
 # v_i = tanh(W_i v_{i-1}). The control.
 def mk_chain(L, key):
+    """Builds an L-layer chain graph v_i = tanh(W_i v_{i-1})."""
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     for i in range(L):
@@ -189,6 +203,7 @@ def mk_chain(L, key):
 # Same function as mk_resid_explicit, but graph stays a chain:
 # identity path lives inside one Jacobian, so no node gains a second child.
 def mk_resid_folded(L, key):
+    """Builds an L-layer chain graph with the residual connection folded inside each edge function."""
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     for i in range(L):
@@ -203,6 +218,7 @@ def mk_resid_folded(L, key):
 # Merge's thetas entry must be a real matrix, not None (None skipped by pc_weight_grads).
 # Lambdas don't close over loop var `i` by reference; use `ks[i]` evaluated immediately.
 def mk_resid_explicit(L, key):
+    """Builds an L-block ViT-style residual graph with explicit sublayer and merge nodes."""
     ks = jr.split(key, L)
     nodes, thetas = [([], None)], [None]
     prev = 0                                    # index of this block's input
@@ -228,6 +244,7 @@ def mk_resid_explicit(L, key):
 
 # Shortest number of edges from each node to the output node.
 def graph_dist_to_output(nodes):
+    """Returns the shortest number of edges from each node to the output node."""
     ch, N = children_of(nodes), len(nodes) - 1
     INF = 10 ** 9
     d = [INF] * len(nodes)
@@ -245,6 +262,7 @@ def graph_dist_to_output(nodes):
 
 # First inference step at which each node's error becomes nonzero.
 def front(nodes, thetas, xv, tgt, n_steps=14, lr=0.05, tol=1e-14):
+    """Returns, per node, the first relaxation step at which its error becomes nonzero."""
     _, _, hist = infer(nodes, thetas, xv, tgt, n_steps=n_steps, lr=lr)
     N   = len(nodes) - 1
     out = []
@@ -267,6 +285,7 @@ def front(nodes, thetas, xv, tgt, n_steps=14, lr=0.05, tol=1e-14):
 # Unparameterised nodes (the merges) are skipped.
 
 def pc_weight_grads(nodes, thetas, v, mu, N):
+    """Returns Eq. 3 weight gradients -vjp(eps_i) for every parameterised node, from the relaxed v."""
     out = [None] * len(nodes)
     for i in range(1, N + 1):
         if thetas[i] is None:
@@ -282,6 +301,7 @@ def pc_weight_grads(nodes, thetas, v, mu, N):
 # Train mk_resid_explicit(3) by backprop or by PC.
 # Deliberately un-jitted.
 def train(mode, xv, tgt, key, epochs=25, T=100, lr_w=0.05, lr_v=0.05):
+    """Trains mk_resid_explicit(3) by backprop ('bp') or PC for epochs and returns the per-epoch loss list."""
     nodes, thetas = mk_resid_explicit(3, key)
     losses = []
     for ep in range(epochs):
@@ -301,6 +321,7 @@ def train(mode, xv, tgt, key, epochs=25, T=100, lr_w=0.05, lr_v=0.05):
 # =============================================================================
 
 def _fig2():
+    """Builds the paper's Fig. 2 example graph (5 nodes, one reused input) with its theta/x/target."""
     theta_val = jnp.array([2.0])
     nodes = [
         ([],     None),                                          # v0 input
@@ -314,6 +335,7 @@ def _fig2():
 
 
 def main(fast=False):
+    """Runs every exercise check (1-7) against the Fig. 2 graph and the three topologies, printing results."""
     nodes, thetas, x, target = _fig2()
 
     print("=" * 72)
@@ -371,6 +393,7 @@ def main(fast=False):
         print(f"  {name:16s} {len(nd)-1} non-input nodes, {n_multi} node(s) with >1 child")
 
     def cos(a, b):
+        """Returns the cosine similarity between flattened a and b."""
         a, b = a.ravel(), b.ravel()
         return float(jnp.dot(a, b) / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30))
 

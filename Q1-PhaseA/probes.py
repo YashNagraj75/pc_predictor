@@ -1,3 +1,7 @@
+# Evaluation suite for a frozen embedding: scene-factor and augmentation-factor
+# probes (ridge/MLP/classification), a pixel decoder + SSIM floor, path
+# straightness, and t-SNE/reconstruction figures. run_suite() ties it together.
+
 import json
 import os
 
@@ -9,12 +13,9 @@ import optax
 
 
 # ===================================================== 1. scene quantities
-# imgs: (N,H,W,C) float in [0,1], must be same pixels used for embeddings.
-# Returns {name: (N,) float64}. Flux-weighted image moments + 2 morphology summaries.
-# Targets computed by fixed deterministic rule (no labels needed), unlike LeWM's simulator truth.
-# Orientation = sin/cos of 2x position angle (PA defined mod pi; avoids wrap-around penalty).
-# Measures what embedding retains, not invariance -- see augmentation_factors for that.
 def image_factors(imgs, eps=1e-8):
+    """Returns flux-weighted image moments and morphology summaries (deterministic scene factors) per image.
+    Orientation uses sin/cos of 2x position angle; measures what the embedding retains, not invariance."""
     X = np.asarray(imgs, np.float64)
     if X.ndim != 4:
         raise ValueError(f"image_factors needs (N,H,W,C), got {X.shape}")
@@ -66,12 +67,9 @@ def image_factors(imgs, eps=1e-8):
     return {k: np.asarray(v, np.float64) for k, v in out.items()}
 
 
-# Probe targets for quantities DELIBERATELY augmented away.
-# boxes: (B,4) crop boxes (cx,cy,w,h) from data.make_views
-# params: (B,4) optional (theta, flip, brightness, contrast)
-# Inverted vs image_factors: low r is GOOD (invariance held).
-# Kept separate from image_factors since goodness direction is opposite.
 def augmentation_factors(boxes, params=None):
+    """Returns augmentation-factor targets (crop box, optional rotation/flip/brightness/contrast) the
+    encoder should discard; unlike image_factors, a low probe r here is the good outcome."""
     b = np.asarray(boxes, np.float64)
     out = {"aug_crop_cx": b[:, 0], "aug_crop_cy": b[:, 1], "aug_crop_scale": b[:, 2]}
     if params is not None:
@@ -86,16 +84,14 @@ def augmentation_factors(boxes, params=None):
 
 # ============================================================== 2. probes
 def _standardise(Ztr, Zte):
+    """Standardises Ztr/Zte to zero mean, unit variance using Ztr's statistics."""
     mu, sd = Ztr.mean(0, keepdims=True), Ztr.std(0, keepdims=True) + 1e-8
     return (Ztr - mu) / sd, (Zte - mu) / sd
 
 
-# Closed-form ridge regression probe. -> {nmse, mse, r, alpha}
-# Ridge not OLS: D can approach N on hidden layers, unregularized fit
-# would report interpolation threshold rather than decodability.
-# alpha chosen on held-out slice of TRAIN -- never on test.
 def ridge_probe(Ztr, ttr, Zte, tte, alphas=(1e-3, 1e-2, 1e-1, 1, 10, 100, 1e3),
                 val_frac=0.2, seed=0):
+    """Fits closed-form ridge regression (alpha selected on held-out train) and returns {nmse, mse, r, alpha}."""
     Ztr, Zte = np.asarray(Ztr, np.float64), np.asarray(Zte, np.float64)
     ttr, tte = np.asarray(ttr, np.float64).ravel(), np.asarray(tte, np.float64).ravel()
     Ztr, Zte = _standardise(Ztr, Zte)
@@ -107,6 +103,7 @@ def ridge_probe(Ztr, ttr, Zte, tte, alphas=(1e-3, 1e-2, 1e-1, 1, 10, 100, 1e3),
     vi, ti = perm[:nval], perm[nval:]
 
     def fit(Z, t, a):
+        """Solves the ridge-penalised normal equations (bias column unpenalised) and returns the weight vector."""
         Z1 = np.concatenate([Z, np.ones((len(Z), 1))], 1)
         A = Z1.T @ Z1
         A[np.arange(Z.shape[1]), np.arange(Z.shape[1])] += a   # no penalty on bias
@@ -126,6 +123,7 @@ def ridge_probe(Ztr, ttr, Zte, tte, alphas=(1e-3, 1e-2, 1e-1, 1, 10, 100, 1e3),
 
 
 def _reg_scores(pred, targ, tsd):
+    """Returns {nmse, mse, r} comparing pred to targ, normalising nmse by tsd^2."""
     mse = float(((pred - targ) ** 2).mean())
     if pred.std() < 1e-12 or targ.std() < 1e-12:
         r = 0.0
@@ -134,15 +132,11 @@ def _reg_scores(pred, targ, tsd):
     return {"nmse": float(mse / (tsd ** 2)), "mse": mse, "r": r}
 
 
-# Two-layer MLP probe, early-stopped. -> {nmse, mse, r, best_step}
-# vs ridge_probe: distinguishes 'discarded' from 'kept but entangled nonlinearly'
-# EARLY STOPPING IS LOAD-BEARING: without it, high-capacity probe overfits
-# and can score WORSE than closed-form ridge (incoherent as a measurement).
-# Holds out slice of TRAIN for best-val params; TEST touched exactly once at end.
 def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
               lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
               eval_every=50,
               weight_decay=1e-4):
+    """Fits an early-stopped MLP regression probe (model selection on held-out train); returns {nmse, mse, r, best_step}."""
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ttr = np.asarray(ttr, np.float64).ravel()
     tte = np.asarray(tte, np.float64).ravel()
@@ -158,10 +152,12 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
     Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(y_all[vi])
 
     def loss_fn(m, zb, yb):
+        """Returns the mean squared regression loss of m on (zb, yb)."""
         return jnp.mean((jax.vmap(m)(zb).squeeze(-1) - yb) ** 2)
 
     @eqx.filter_jit
     def val_loss(m):
+        """Returns the validation loss of m on the held-out validation slice."""
         return loss_fn(m, Zv, yv)
 
     n = len(Zf)
@@ -176,6 +172,7 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
 
         @eqx.filter_jit
         def step(m, st, zb, yb):
+            """Takes one AdamW gradient step on m and returns (updated m, optimiser state, loss)."""
             l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
             upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
             return eqx.apply_updates(m, upd), st, l
@@ -197,14 +194,11 @@ def mlp_probe(Ztr, ttr, Zte, tte, hidden=256, steps=1500,
     return out
 
 
-# Linear (hidden=None) or MLP softmax probe, early-stopped over small LR grid.
-# Returns {accuracy, chance, best_step, best_lr, val_accuracy}; LR selected on val, not fixed.
-# Complements knn_accuracy (capacity-free, local): this finds globally-linear structure.
-# Model selection uses held-out slice of TRAIN (see mlp_probe) to avoid hidden=256 overfitting.
-# Both variants selected identically so linear-vs-MLP gap stays interpretable.
 def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
                 lrs=(3e-4, 1e-3, 3e-3), batch=512, seed=0, val_frac=0.2,
                 eval_every=50, weight_decay=1e-4):
+    """Fits an early-stopped linear or MLP softmax classification probe over a small LR grid.
+    Returns {accuracy, chance, val_accuracy, best_step, best_lr}."""
     Ztr, Zte = _standardise(np.asarray(Ztr, np.float32), np.asarray(Zte, np.float32))
     ytr = np.asarray(ytr).ravel().astype(np.int32)
     yte = np.asarray(yte).ravel().astype(np.int32)
@@ -219,11 +213,13 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
     Zv, yv = jnp.asarray(Ztr[vi]), jnp.asarray(ytr[vi])
 
     def loss_fn(m, zb, yb):
+        """Returns the mean cross-entropy loss of m's logits on (zb, yb)."""
         lg = jax.vmap(m)(zb)
         return -jnp.mean(jax.nn.log_softmax(lg)[jnp.arange(len(yb)), yb])
 
     @eqx.filter_jit
     def val_acc(m):
+        """Returns m's classification accuracy on the held-out validation slice."""
         return jnp.mean(jax.vmap(m)(Zv).argmax(-1) == yv)
 
     n = len(Zf)
@@ -241,6 +237,7 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
 
         @eqx.filter_jit
         def step(m, st, zb, yb):
+            """Takes one AdamW gradient step on m and returns (updated m, optimiser state, loss)."""
             l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, yb)
             upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
             return eqx.apply_updates(m, upd), st, l
@@ -262,12 +259,9 @@ def class_probe(Ztr, ytr, Zte, yte, hidden=None, steps=2000,
             "best_lr": float(best_lr)}
 
 
-# LeWM Table-1 analogue: every target x {linear, MLP}.
-# targets_* : {name: (N,)} from image_factors / augmentation_factors.
-# Returns {"regression": {name: {"linear": {...}, "mlp": {...}}},
-# "classification": {"linear": {...}, "mlp": {...}}}
 def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
                  mlp=True, seed=0):
+    """Runs ridge/MLP regression probes on every target and a classification probe, returning the nested report."""
     out = {"regression": {}, "classification": {}}
     for name in sorted(targets_tr):
         row = {"linear": ridge_probe(Ztr, targets_tr[name], Zte,
@@ -286,11 +280,8 @@ def probe_report(Ztr, Zte, targets_tr, targets_te, ytr=None, yte=None,
 
 
 # ============================================================= 3. decoder
-# Shared decoder: embedding -> pixels. Fixed architecture on purpose, pinned not configurable.
-# Pins arch so SSIM is comparable across all runs; changing this class breaks comparability -- version instead of editing.
-# RECONSTRUCTION IS NEVER PART OF TRAINING: encoder frozen, only decoder learns.
-# Measures what the embedding retained, not what encoder could be made to retain.
 class Decoder(eqx.Module):
+    """Fixed CNN decoder (embedding -> pixels), pinned architecture so SSIM stays comparable across runs."""
     fc: eqx.nn.Linear
     convs: list
     head: eqx.nn.Conv2d
@@ -298,6 +289,7 @@ class Decoder(eqx.Module):
     ch: int
 
     def __init__(self, embed_dim, out_hw, out_ch, width=128, base=4, *, key):
+        """Builds the decoder's linear projection and upsampling conv stack for the given embed_dim and output size."""
         ks = jax.random.split(key, 5)
         self.base, self.ch = base, out_ch
         self.fc = eqx.nn.Linear(embed_dim, width * base * base, key=ks[0])
@@ -308,6 +300,7 @@ class Decoder(eqx.Module):
         self.head = eqx.nn.Conv2d(chans[n_up], out_ch, 3, padding=1, key=ks[-1])
 
     def __call__(self, z):
+        """Decodes an embedding z into a (C,H,W) image in [0,1] via nearest-neighbour upsampling convs."""
         h = self.fc(z).reshape(-1, self.base, self.base)
         for cv in self.convs:
             h = jnp.repeat(jnp.repeat(h, 2, axis=1), 2, axis=2)   # nearest-neighbour up
@@ -315,10 +308,9 @@ class Decoder(eqx.Module):
         return jax.nn.sigmoid(self.head(h))                        # (C,H,W) in [0,1]
 
 
-# Fit Decoder on FROZEN embeddings -> returns decoder
-# Ztr: (N, embed_dim), Xtr: (N, H, W, C) in [0,1]
 def train_decoder(Ztr, Xtr, embed_dim, img_shape, steps=3000, lr=1e-3,
                   batch=128, width=128, seed=0, verbose=False):
+    """Trains a Decoder to reconstruct Xtr from frozen embeddings Ztr and returns the trained decoder."""
     H, W, C = img_shape
     assert H == W, "square images assumed"
     key = jax.random.PRNGKey(seed)
@@ -332,10 +324,12 @@ def train_decoder(Ztr, Xtr, embed_dim, img_shape, steps=3000, lr=1e-3,
     Xj = jnp.asarray(np.transpose(np.asarray(Xtr, np.float32), (0, 3, 1, 2)))
 
     def loss_fn(m, zb, xb):
+        """Returns the mean squared reconstruction loss of m on (zb, xb)."""
         return jnp.mean((jax.vmap(m)(zb) - xb) ** 2)
 
     @eqx.filter_jit
     def step(m, st, zb, xb):
+        """Takes one Adam gradient step on m and returns (updated m, optimiser state, loss)."""
         l, g = eqx.filter_value_and_grad(loss_fn)(m, zb, xb)
         upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
         return eqx.apply_updates(m, upd), st, l
@@ -351,22 +345,21 @@ def train_decoder(Ztr, Xtr, embed_dim, img_shape, steps=3000, lr=1e-3,
 
 
 def _gauss_win(size=11, sigma=1.5):
+    """Returns a normalised 2-D Gaussian window of the given size and sigma."""
     g = np.exp(-((np.arange(size) - size // 2) ** 2) / (2 * sigma ** 2))
     g /= g.sum()
     return np.outer(g, g)
 
 
-# Mean SSIM over a batch. A, B : (N,H,W,C) in [0, data_range].
-# Written out rather than imported so suite has no scikit-image dependency
-# and window/constants are visible and fixed.
-# SSIM numbers only comparable at identical settings; MPC Table 1 omits them.
 def ssim(A, B, data_range=1.0, size=11, sigma=1.5):
+    """Returns the mean SSIM over a batch of images A vs B (self-contained, no scikit-image dependency)."""
     A = np.asarray(A, np.float64); B = np.asarray(B, np.float64)
     w = _gauss_win(size, sigma)
     C1, C2 = (0.01 * data_range) ** 2, (0.03 * data_range) ** 2
     pad = size // 2
 
     def filt(X):                     # (N,H,W) valid-region correlation
+        """Returns the windowed correlation filter output for X, shape (N, H-2pad, W-2pad)."""
         N, H, W_ = X.shape
         out = np.empty((N, H - 2 * pad, W_ - 2 * pad))
         for i in range(size):
@@ -391,8 +384,8 @@ def ssim(A, B, data_range=1.0, size=11, sigma=1.5):
     return float(np.mean(vals))
 
 
-# Returns {mse, psnr, ssim} on held-out images, plus the reconstructions.
 def decode_report(dec, Zte, Xte):
+    """Reconstructs Xte from Zte via dec and returns ({mse, psnr, ssim}, reconstructions)."""
     recon = np.asarray(jax.vmap(dec)(jnp.asarray(np.asarray(Zte, np.float32))))
     recon = np.transpose(recon, (0, 2, 3, 1))          # -> (N,H,W,C)
     X = np.asarray(Xte, np.float64)
@@ -402,11 +395,8 @@ def decode_report(dec, Zte, Xte):
             "ssim": ssim(X, recon)}, recon
 
 
-# Floor for decode_report: best possible CONSTANT reconstruction.
-# Decoder ignoring embedding, emitting dataset mean image, scores decent SSIM
-# on centred, low-diversity datasets -- SSIM alone is unreadable otherwise.
-# Any claim embedding "retains the scene" must beat this row.
 def baseline_decode_report(Xtr, Xte):
+    """Returns {mse, psnr, ssim} for the constant mean-image reconstruction, the floor decode_report must beat."""
     mean_img = np.asarray(Xtr, np.float64).mean(0, keepdims=True)
     X = np.asarray(Xte, np.float64)
     rec = np.repeat(mean_img, len(X), 0)
@@ -417,12 +407,9 @@ def baseline_decode_report(Xtr, Xte):
 
 
 # ================================================== 4. path straightness
-# LeWM Eq. 9 analogue. Zseq: (T, B, D) -> {mean, per_step}
-# Mean cosine sim between consecutive velocity vectors v_t = z_{t+1}-z_t.
-# 1.0 = perfectly straight path, 0 = directionless.
-# Phase A: only PC relaxation trace use is available (inference, not representation).
-# Do not report this as the actual LeWM measurement (needs glimpse/saccade sequence).
 def path_straightness(Zseq):
+    """Returns the mean cosine similarity between consecutive velocity vectors in Zseq (1.0 = straight, 0 = random).
+    A PC-relaxation-trace proxy (Phase A), not the true LeWM glimpse/saccade measurement."""
     Z = np.asarray(Zseq, np.float64)
     if Z.ndim != 3 or Z.shape[0] < 3:
         raise ValueError(f"path_straightness needs (T>=3, B, D), got {Z.shape}")
@@ -434,9 +421,8 @@ def path_straightness(Zseq):
 
 
 # ====================================================== 5. visualisation
-# 2-D t-SNE.
-# Returns: coords (n,2), index into Z
 def tsne_embedding(Z, seed=0, perplexity=30, max_n=3000):
+    """Computes a 2-D t-SNE embedding of (a random subsample of) Z and returns (coords, sample index)."""
     from sklearn.manifold import TSNE
     Z = np.asarray(Z, np.float64)
     idx = np.arange(len(Z))
@@ -448,6 +434,7 @@ def tsne_embedding(Z, seed=0, perplexity=30, max_n=3000):
 
 
 def _style():
+    """Sets compact matplotlib rcParams shared by the probe figures."""
     import matplotlib as mpl
     mpl.rcParams.update({
         "figure.dpi": 150, "savefig.dpi": 200, "savefig.bbox": "tight",
@@ -459,10 +446,9 @@ def _style():
     })
 
 
-# t-SNE scatter: one panel colored by class, optionally one by continuous factor.
-# Ticks dropped -- t-SNE coordinates have no units.
 def tsne_figure(Z, y, path, colour_by=None, colour_name="", title="",
                 seed=0, class_names=None):
+    """Saves a t-SNE scatter coloured by class, with an optional second panel coloured by a continuous factor."""
     import matplotlib.pyplot as plt
     _style()
     XY, idx = tsne_embedding(Z, seed=seed)
@@ -498,10 +484,8 @@ def tsne_figure(Z, y, path, colour_by=None, colour_name="", title="",
     return path
 
 
-# Originals / reconstructions / (optional) constant-mean floor.
-# Row 3 is the point: compare row2 vs row1 is meaningless without seeing
-# what a trivial decoder (ignoring embedding) produces as baseline.
 def reconstruction_figure(X, recon, path, n=8, title="", mean_img=None):
+    """Saves a grid of original/decoded (/mean-image-floor) images for visual comparison."""
     import matplotlib.pyplot as plt
     _style()
     n = min(n, len(X))
@@ -531,15 +515,12 @@ def reconstruction_figure(X, recon, path, n=8, title="", mean_img=None):
 
 
 # ============================================================ 6. run_suite
-# Runs everything in one call -> dict (json-serialisable), written to disk.
-# Ztr/Zte: (N,D) embeddings from FROZEN encoder; Xtr/Xte: (N,H,W,C) images in [0,1]; ytr/yte: (N,) labels
-# Writes <out_dir>/probes<tag>.json plus two figures.
-# Returns the same dict so a sweep can collect results without re-reading disk.
 def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
               boxes_te=None, aug_params_te=None, boxes_tr=None,
               aug_params_tr=None, Zaug_tr=None, Zaug_te=None,
               decoder_steps=3000, probe_mlp=True,
               make_figures=True, seed=0, verbose=True):
+    """Runs the full probe/decoder/figure suite on frozen embeddings, writes probes<tag>.json, and returns the report."""
     os.makedirs(out_dir, exist_ok=True)
     Xtr = np.asarray(Xtr, np.float32); Xte = np.asarray(Xte, np.float32)
     img_shape = Xtr.shape[1:]
@@ -613,9 +594,9 @@ def run_suite(Ztr, Zte, Xtr, Xte, ytr, yte, out_dir, *, tag="",
     return rep
 
 
-# One flat row per run, for cross-run tables. -> dict
 def summarise(rep, targets=("flux", "size_rms", "ellipticity",
                             "concentration", "colour_rg")):
+    """Flattens a probe report into one row (per-target r/nmse, classification accuracy, decode SSIM) for tables."""
     row = {"tag": rep.get("tag", "")}
     for t in targets:
         r = rep.get("scene", {}).get("regression", {}).get(t)

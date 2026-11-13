@@ -1,3 +1,7 @@
+# Known-answer tests for the SIGReg (sigreg.py), spectral-metrics (metrics.py), and data-batching (data.py) helpers:
+# direction sampling, SIGReg's power against shape/scale alternatives, minimisation behaviour, batch coupling,
+# spectrum report, and eval_batch determinism. Each t_* prints PASS/FAIL via the `ok` helper.
+
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # sandbox sets PYTHONSAFEPATH=1, which strips the script dir from sys.path
 
@@ -10,8 +14,9 @@ K = jax.random.PRNGKey(0)
 ok = lambda name, v: print(f"  PASS  {name:44s} {v}")
 
 
-# ------------------------------------------------------------------ sigreg
 def t_directions():
+    """Tests that sampled direction vectors have shape (32, 64).
+    Checks that each column is normalized to unit length."""
     A = S.sample_directions(K, 32, 64)
     n = jnp.linalg.norm(A, axis=0)
     assert A.shape == (32, 64)
@@ -19,11 +24,9 @@ def t_directions():
     ok("directions: shape + unit-norm columns", f"|a|=1.0 for all 64")
 
 
-# Power against shape alternatives, measured vs NULL BAND (spread of stat under H0 over 20 Gaussian draws).
-# At N=1024 w/ paper defaults: little power vs MILD shape alts (unit-var uniform scores inside band);
-# large power vs variance/mean misfit.
-# SIGReg is anti-collapse mechanism, so the latter matters -- not a general shape test.
 def t_ep_ordering():
+    """Checks SIGReg power against shape alternatives, measured against a null band from 20 Gaussian draws.
+    Confirms strong detection of variance/mean misfit but weak detection of mild shape misfit at unit variance."""
     N, Kd, M = 1024, 16, 128
     A = S.sample_directions(K, Kd, M)
     null = []
@@ -57,9 +60,9 @@ def t_ep_ordering():
        " ".join(f"{n.split()[0]}={x:.3g}" for n, x in v.items()))
 
 
-# SIGReg tests against N(0,1) including mean and variance.
-# Must NOT be scale invariant, or it would not constrain embedding's scale.
 def t_ep_not_scale_invariant():
+    """Tests that SIGReg score increases when input is scaled or shifted away from N(0,1).
+    Confirms SIGReg is not scale invariant, so it constrains the embedding's scale."""
     k1, k2 = jax.random.split(K)
     A = S.sample_directions(k1, 16, 128)
     z = jax.random.normal(k2, (1024, 16))
@@ -68,9 +71,9 @@ def t_ep_not_scale_invariant():
     ok("epps-pulley: penalises scale and shift", f"z={a:.3f} 2z={b:.3f} z+2={c:.3f}")
 
 
-# End-to-end: descending SIGReg on embeddings turns anisotropic cloud isotropic
-# (paper's Figure 6 setup)
 def t_ep_minimisation():
+    """Runs gradient descent on SIGReg over an anisotropic embedding cloud, resampling directions each step.
+    Checks that effective rank rises and log condition number falls, matching the paper's Figure 6 setup."""
     k1, k2 = jax.random.split(K)
     N, Kd = 512, 16
     z = jax.random.normal(k1, (N, Kd)) * jnp.linspace(0.1, 4.0, Kd)
@@ -93,9 +96,9 @@ def t_ep_minimisation():
        f"trace {before['trace']:.1f}->{after['trace']:.1f}")
 
 
-# Tests claim: row n of dSIGReg/dZ depends on the OTHER rows.
-# Perturb row 0, watch row 5 move (motivates the two output_drive variants).
 def t_batch_coupling():
+    """Tests that perturbing row 0 of z changes the sigreg_grad output at row 5.
+    Confirms sigreg_grad is batch-coupled across rows, not computed per-sample independently."""
     k1, k2 = jax.random.split(K)
     A = S.sample_directions(k1, 8, 64)
     z = jax.random.normal(k2, (64, 8))
@@ -110,6 +113,8 @@ def t_batch_coupling():
 
 
 def t_prediction_loss():
+    """Tests that prediction_loss is near zero when all tiled views are identical.
+    Verifies prediction_loss becomes positive once the views are perturbed with noise."""
     k1, = jax.random.split(K, 1)
     Zv = jnp.tile(jax.random.normal(k1, (1, 32, 8)), (4, 1, 1))
     assert float(S.prediction_loss(Zv, 4)) < 1e-10
@@ -119,9 +124,9 @@ def t_prediction_loss():
        f"identical={float(S.prediction_loss(Zv,4)):.2e} perturbed={float(S.prediction_loss(Zv2,4)):.3f}")
 
 
-# Pin down Appendix B.6 discrepancy found earlier; backs comment in sigreg.py with a test.
-# Compares Eq (5) all-pairs form vs Eq (7) distance-from-centre form.
 def t_b6_discrepancy():
+    """Checks the Appendix B.6 discrepancy between Eq (5) all-pairs and Eq (7) distance-from-centre forms.
+    Confirms the two differ and that the gap equals the within-view variance term."""
     z = np.asarray(jax.random.normal(K, (6, 32, 8)))
     Vg, V = 2, 6
     mu = z[:Vg].mean(0)
@@ -135,8 +140,9 @@ def t_b6_discrepancy():
        f"eq5={eq5:.4f} eq7={eq7:.4f} within={within:.4f}")
 
 
-# ----------------------------------------------------------------- metrics
 def t_cka():
+    """Tests that linear CKA equals 1 for identical, rotated, and rescaled inputs.
+    Checks that linear CKA is low for independent random inputs."""
     x = np.asarray(jax.random.normal(K, (500, 24)))
     q, _ = np.linalg.qr(np.asarray(jax.random.normal(K, (24, 24))))
     assert abs(M.linear_cka(x, x) - 1) < 1e-9
@@ -149,6 +155,8 @@ def t_cka():
 
 
 def t_spectrum():
+    """Tests that spectrum_report gives effective rank near 20 for isotropic data.
+    Checks it gives effective rank near 1 for rank-1 data."""
     iso = np.asarray(jax.random.normal(K, (4000, 20)))
     r = M.spectrum_report(iso)
     assert r["effective_rank"] > 19, r
@@ -161,6 +169,8 @@ def t_spectrum():
 
 
 def t_knn():
+    """Tests that knn_accuracy scores near 1.0 on well-separated clusters and near chance on random data.
+    Asserts separable accuracy exceeds 0.95 while random accuracy stays below 0.4."""
     k1, k2 = jax.random.split(K)
     c = np.asarray(jax.random.normal(k1, (5, 16))) * 6
     y = np.repeat(np.arange(5), 200)
@@ -172,8 +182,9 @@ def t_knn():
     ok("knn: separable ~1.0, random ~chance", f"separable={a:.3f} random={b:.3f} (chance=0.2)")
 
 
-# Gaussian data on a d-dim linear subspace embedded in 40-d.
 def t_twonn():
+    """Tests that twonn_dimension recovers the true dimension of Gaussian data on a d-dim subspace embedded in 40-d.
+    Checks estimates for d in (2, 5, 10) stay within 0.35*d + 0.6 of the true value."""
     got = {}
     for d in (2, 5, 10):
         k = jax.random.PRNGKey(d)
@@ -186,6 +197,8 @@ def t_twonn():
 
 
 def t_two_sample():
+    """Checks that projected two-sample KS statistics stay small for matched distributions.
+    Verifies the statistic grows large when one sample is shifted."""
     k1, k2 = jax.random.split(K)
     A = np.asarray(S.sample_directions(k1, 12, 64))
     a = np.asarray(jax.random.normal(k1, (800, 12)))
@@ -198,8 +211,9 @@ def t_two_sample():
        f"same ks_max={same['ks_max']:.3f}  shifted ks_mean={diff['ks_mean']:.3f}")
 
 
-# -------------------------------------------------------------------- data
 def t_views():
+    """Tests that make_views produces correctly shaped, clipped-range views and crop boxes.
+    Checks that distinct views of the same image differ and reports shapes and mean view difference."""
     cfg = DataCfg(img_size=32, n_views=4, dataset="galaxy10")
     imgs = jnp.abs(jax.random.normal(K, (8, 69, 69, 3))) * 0.3
     imgs = jnp.clip(imgs, 0, 1)
@@ -218,6 +232,7 @@ def t_views():
 
 
 def t_eval_batch():
+    """Tests that D.eval_batch produces a deterministic output of the expected flattened shape."""
     cfg = DataCfg(img_size=32)
     imgs = jnp.clip(jnp.abs(jax.random.normal(K, (5, 69, 69, 3))) * .3, 0, 1)
     a = D.eval_batch(imgs, cfg); b = D.eval_batch(imgs, cfg)

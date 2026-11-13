@@ -1,3 +1,7 @@
+# Selects per-head sparsity (gamma), head weights, and (case E) the reconstruction
+# weight beta_r for nested sparse-coding head sets, calibrated to a target active
+# fraction and a target head/task encoder-gradient ratio at init. Writes the
+# selected values plus diagnostics to a json file.
 import argparse
 import json
 import os
@@ -22,6 +26,7 @@ PC = PCCfg(T=16, eta_h=0.0625, alpha=1.0)
 
 
 def head_sets():
+    """Returns, for each K, the sorted first-K head indices of ORDER."""
     return {K: tuple(sorted(ORDER[:K])) for K in range(1, len(ORDER) + 1)}
 
 
@@ -30,12 +35,14 @@ CODE_K = [1]                            # ISTA code steps per relaxation step (-
 
 
 def cfg_for(heads, gammas, ws):
+    """Builds a case-D RunCfg with the given heads, per-head gammas, and head weights."""
     return RunCfg(arm="bp", pc=PC, sparse=SparseCfg(case="D", heads=tuple(heads), gammas=tuple(gammas),
                                                      head_ws=tuple(ws), beta_g=BETA_G, T_test=T_TEST,
                                                      beta_r=BETA_R[0], code_k=CODE_K[0]))
 
 
 def main():
+    """Calibrates per-head gamma, weights, and (case E) beta_r for nested head sets and writes the selection to --out."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="heads_selected.json")
     ap.add_argument("--n", type=int, default=1024)
@@ -61,11 +68,14 @@ def main():
     all_heads = tuple(sorted(ORDER))
 
     def build():
+        """Builds cfg_all and params with all five heads attached and mu set over the sampled rows."""
         c = cfg_for(all_heads, (1.0,) * 5, (1.0,) * 5)
         p = SP.init_params(jax.random.PRNGKey(0), c, base.data.input_dim)
         return c, SP.init_mu(p, SP.mu_rows(Xtr, c, n=args.n), c)     # same rows as idx
 
     def select_gammas(cfg_all, params, acts):
+        """Bisects gamma per head to hit TARGET active fraction after NSTEP ISTA steps.
+        Returns {head: (gamma, achieved active fraction)}."""
         g = {}
         hd = SP._heads(params, cfg_all, x)
         for (l, Dl, mu, Gl, xc) in hd:
@@ -73,6 +83,7 @@ def main():
             eta = cfg_all.sparse.step_frac / (mst * SP.spectral_sq(Dst))
 
             def frac(gm):
+                """Returns the active fraction of ISTA codes at gamma=gm."""
                 return float(jnp.mean(SP.ista(F, Dst, gm, mst, NSTEP, eta) != 0))
             lo, hi = 1e-5, 10.0
             for _ in range(40):
@@ -84,8 +95,8 @@ def main():
             g[l] = (mid, fm)
         return g
 
-    # Mean over heads of the unweighted head and (beta_r = 1) reconstruction errors.
     def energy_split(params, cfg_all, acts, gammas):
+        """Returns the mean over heads of the unweighted head energy and (beta_r=1) reconstruction energy."""
         eh, er = [], []
         for (l, Dl, mu, Gl, xc) in SP._heads(params, cfg_all, x):
             f = SP.head_in(acts[l], mu)
@@ -147,6 +158,7 @@ def main():
     g_task = eqx.filter_grad(lambda p: TR.loss_from_views(p, Zin, A, cfg_all)[0])(params)
 
     def enc_norm(g, top):
+        """Returns the L2 norm of gradient g's encoder weights up to and including layer top."""
         return float(jnp.sqrt(sum(jnp.sum(W(g, l) ** 2) for l in range(top + 1))))
 
     sets = {}

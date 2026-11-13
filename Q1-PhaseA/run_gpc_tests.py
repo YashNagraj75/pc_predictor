@@ -1,3 +1,7 @@
+# Trains and evaluates one generative-PC (gpc) predictor arm: selects its step
+# scale/precision, trains with divergence-ladder retries, then runs the full
+# eval suite (pairs, k-seen at train/settled T, robustness, diagnostics).
+
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
@@ -8,15 +12,13 @@ T_LIST = (5, 10, 25, 50, 100, 200, 400, 2000)
 T_SETTLED = 2000
 
 
-# Width-control and precision arms reuse the step scale of their parent arm
-# (declared in the prereg).
 def parent_key(a):
+    """Returns the key for this arm's parent arm (width-control/precision arms reuse its step scale)."""
     return f"gpc_{a.rule}_d{a.depth}_{a.start}"
 
 
-# Degenerate-route checks on test k=2: tau-only, shuffled s,
-# per-level energy shares, convergence.
 def diagnostics(p, am, cfg, zte, tte, rng_seed=0):
+    """Runs degenerate-route checks (tau-only, shuffled s, per-level energy shares, convergence) at test k=2."""
     n = len(zte)
     seen, tgt = PE.k_cases(n, 2)
     ii = np.arange(n)[:, None]
@@ -44,6 +46,7 @@ def diagnostics(p, am, cfg, zte, tte, rng_seed=0):
 
 
 def main():
+    """Trains one generator/predictor arm, evaluates it (pairs, k-seen, robustness, diagnostics), and writes a JSON."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--rule", default="pc"); ap.add_argument("--depth", type=int, default=3); ap.add_argument("--start", default="zero")
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)

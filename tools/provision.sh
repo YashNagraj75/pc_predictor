@@ -1,4 +1,5 @@
 #!/bin/bash
+# Creates the project .venv with uv (Python 3.11, JAX CUDA 12) under $PCP_ROOT and verifies the GPU.
 set -x
 ROOT=${PCP_ROOT:?set PCP_ROOT, see .env.example}
 cd $ROOT

@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-# PC-ALM feedforward predictor on frozen latents: is credit assignment what holds PC back?
-# Same network, data, optimiser, steps and tests as the existing ff BP / ff plain-PC arms (findings/20);
-# the only change is the weight gradient (pred_ff.alm_grads).  Spec: wiki 'Method - PC-ALM predictor arm'.
-#   1. gates (CPU)
-#   2. selection: alpha in {0.1, 0.25, 1.0} x T in {20, 100}, seed 0, 6000 steps, train on 90% of the train
-#      images and score on the other 10% (never the test set); lowest held-out nmse wins
-#   3. selected config at seeds 0,1,2 on the full train set (--save), plus plain PC at the SAME T if T != 20
-#      (the existing plain-PC arm used T = 20), so the comparison is matched in inference budget
-#   4. full pred tests (k = 1 clean, robustness) for every saved model
+# PC-ALM feedforward predictor on frozen latents (spec: wiki 'Method - PC-ALM predictor arm'): same network,
+# data, optimiser, steps and tests as the ff BP / plain-PC arms (findings/20); only the weight gradient differs.
+# Runs: 1) gates, 2) alpha x T selection via held-out nmse (last 10% of train, never test), 3) selected config
+# at seeds 0-2 (+ plain PC at the same T for a matched comparison), 4) full pred tests for every saved model.
 #   bash job_alm_pred.sh <project_root> <job_dir>
 set -uo pipefail
 P="$1"; JOBDIR="$2"; cd "$P/Q1-PhaseA" || exit 2
 PY=../.venv/bin/python; export JAX_PLATFORMS=${JAX_PLATFORMS:-cuda}
+# Appends a timestamped status line to $ST.
 ST=alm_pred_status.txt; note() { echo "$(date +%m-%d_%H:%M) $*" | tee -a $ST; }
+# Tars up status, logs, and result JSONs into the job output dir; registered via trap below.
 collect() { tar czf "$JOBDIR/q1_alm_pred.tar.gz" $ST alm_pred_gates.log pred_runs/alm_sel pred_runs/alm_selected.json \
             pred_runs/ff_alm_bp_emb_s*.json pred_runs/ff_pcT*_bp_emb_s*.json pred_runs/tests/ffalm_*.json \
             pred_runs/tests/ffpcT*.json pred_runs/test_ffalm*.log 2>/dev/null; }
@@ -48,6 +45,7 @@ T=$(python3 -c "import json;print(json.load(open('pred_runs/alm_selected.json'))
 A=$(python3 -c "import json;print(json.load(open('pred_runs/alm_selected.json'))['alpha'])")
 note "selected T=$T alpha=$A"
 
+# Runs one pred_eval test unless its output already exists; logs PASS/FAIL via note.
 run() { out=$1; shift; [ -f pred_runs/tests/$out.json ] && return
   $PY -W ignore run_pred_tests.py "$@" > pred_runs/test_$out.log 2>&1 && note "tested $out" || note "TEST FAILED $out"; }
 for s in 0 1 2; do

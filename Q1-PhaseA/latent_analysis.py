@@ -6,58 +6,57 @@ import diag_saccade as S, diag_saccade2 as S2, pred_gpc as G
 from diag_saccade import D, load_run
 from scipy.stats import spearmanr
 
-# Latent analysis (Phase C, inference only), rev 2 after 3 reviews.  Why does the generative PC predictor (G) degrade less
-# than its frozen BP auto-decoder (BPg) under occlusion once it sees several views, and why does the residual ff PC
-# predictor (F) beat BPf on clean/noise?  Run from a dataset dir.  Views from diag_saccade2 (key 303; clean and corrupted
-# views share crops, so every comparison is paired).  The stored G-BPg occlusion gap is complete by K = 6 on all datasets.
-#  SWAP  weights {G, BPg} x pooling {joint MAP over K views, mean of per-view MAP beliefs, oracle-weighted mean}, plus G's
-#        own amortised mean: assigns the gap to pooling vs weights (review S1)
-#  A  nmse, calibrated nmse (best scalar rescale alpha*), alpha*, norm ratio, cosine (S3)
-#  B  paired corruption shift D = P_c - P_0: exact nmse-change decomposition, D split radial / along input / orthogonal,
-#     gain along the real corruption sqrt(rel_shift / input_rel_shift)
-#  C  gain to coherent (same direction in every view) and independent seen-latent perturbations, paired across models
-#  D  leave-one-view-out influence, normalised by the view's deviation from the pool, vs the view's actual latent
-#     displacement and occluded fraction; centred contribution ratio; oracle pool (weights 1 - occ) as the bound on
-#     what down-weighting could buy (S4, S5)
-#  E  effective rank, linear CKA with targets; predictions saved (float32) for cross-model CKA
+# Latent analysis (Phase C, inference only): why does the generative PC predictor (G) degrade less than
+# its frozen BP auto-decoder (BPg) under occlusion with more views, and why does residual ff PC predictor
+# (F) beat BPf on clean/noise? Run from a dataset dir; views from diag_saccade2 (key 303, paired clean/corrupted).
+# Computes: (SWAP) weight x pooling ablation; (A) nmse/calibrated nmse/cosine; (B) corruption-shift decomposition;
+# (C) coherent/independent perturbation gain; (D) leave-one-view-out influence; (E) effective rank and CKA.
 KS = (1, 6, 48)
 N_GAIN = 500
 
 
 def finite_rows(P):                              # images whose every predicted value is finite
+    """Returns a per-image boolean mask of rows whose every predicted value is finite."""
     return np.all(np.isfinite(P.reshape(len(P), -1)), 1)
 
 
 def eff_rank(P):
+    """Returns the effective rank (exp entropy of the normalized singular-value spectrum) of P's rows."""
     X = P.reshape(-1, P.shape[-1]).astype(np.float64); X = X - X.mean(0)
     s = np.linalg.svd(X, compute_uv=False) ** 2; p = s / s.sum()
     return float(np.exp(-np.sum(p * np.log(p + 1e-12))))
 
 
 def cka(A, B):                                   # linear CKA over all (image, target) rows
+    """Returns the linear CKA between A and B over all (image, target) rows."""
     A = A.reshape(-1, A.shape[-1]).astype(np.float64); B = B.reshape(-1, B.shape[-1]).astype(np.float64)
     A, B = A - A.mean(0), B - B.mean(0)
     return float(np.linalg.norm(A.T @ B) ** 2 / (np.linalg.norm(A.T @ A) * np.linalg.norm(B.T @ B)))
 
 
-# Per-view MAP beliefs pooled outside inference: weights p, BP inference (zero start) on each view alone, then a
-# (weighted) mean of the K beliefs, then one top-down readout.  With G's weights the config is GMap's (review S1).
 class MapPool:
+    """Per-view MAP beliefs pooled outside inference: BP-infers each view alone (zero start), then
+    (weighted-)means the K beliefs and does one top-down readout."""
+
     def __init__(self, p, cfg, kind, seed):
+        """Stores weights, config, kind label and seed, and builds jitted per-view infer/decode closures."""
         self.p, self.cfg, self.kind, self.seed = p, cfg, kind, seed
         self._s = eqx.filter_jit(lambda p, Z, T: G.infer_s(p, None, Z, T, cfg)[0])
         self._d = eqx.filter_jit(lambda p, s, t: G.topdown(p, s, G.phi(t), cfg.H)[1])
 
     def beliefs(self, Z, T, chunk=4000):         # (n, K, d), (n, K, 9) -> (n, K, M), every view inferred alone
+        """Returns per-view MAP beliefs (n, K, M) for inputs Z/T, each of the K views inferred alone."""
         n, K = Z.shape[:2]; Zr, Tr = Z.reshape(n * K, 1, -1), T.reshape(n * K, 1, -1)
         return np.concatenate([np.asarray(self._s(self.p, jnp.asarray(Zr[i:i + chunk]), jnp.asarray(Tr[i:i + chunk])))
                                for i in range(0, n * K, chunk)]).reshape(n, K, -1)
 
     def readout(self, s, t, batch=250):
+        """Decodes beliefs s and transforms t to predictions, processed in batches."""
         return np.concatenate([np.asarray(self._d(self.p, jnp.asarray(s[i:i + batch]), jnp.asarray(t[i:i + batch]))) for i in range(0, len(s), batch)])
 
 
 def contributions(m, Z, T, tte):                 # per-view contribution before pooling
+    """Returns model m's per-view contribution before pooling (None for joint-inference kinds BPg/Gmap)."""
     if m.kind == "G":
         return m.embed(Z, T)                     # (n, K, M) amortised embedding
     if m.kind == "MapPool":
@@ -70,6 +69,7 @@ def contributions(m, Z, T, tte):                 # per-view contribution before 
 
 
 def pool_c(m, C, tte, w=None):                   # (weighted) mean of contributions -> prediction
+    """Returns the (weighted) mean of contributions C, decoded to a prediction for G/MapPool kinds."""
     w = np.ones(C.shape[:2], np.float32) if w is None else w
     sh = (-1,) + (1,) * (C.ndim - 2)
     c = np.einsum("nk,nk...->n...", w, C) / np.maximum(w.sum(1), 1e-6).reshape(sh)
@@ -77,6 +77,7 @@ def pool_c(m, C, tte, w=None):                   # (weighted) mean of contributi
 
 
 def predict(m, Z, T, tte, pool="mean", C=None):
+    """Returns model m's prediction for views Z/T under the given pooling strategy."""
     K = Z.shape[1]
     if m.kind in ("BPg", "Gmap"):
         return S2._bp_predict(m, Z, T, tte, K)
@@ -89,6 +90,7 @@ def predict(m, Z, T, tte, pool="mean", C=None):
 
 
 def geometry(P, z):
+    """Returns nmse, calibrated nmse, best rescale alpha*, norm ratio, and cosine between predictions P and targets z."""
     ok = finite_rows(P); P, z = P[ok].astype(np.float64), z[ok].astype(np.float64)
     pz, pp, zz = np.sum(P * z), np.sum(P * P), np.sum(z * z)
     nP, nz = np.linalg.norm(P, axis=-1), np.linalg.norm(z, axis=-1)
@@ -98,6 +100,8 @@ def geometry(P, z):
 
 
 def shift(Pc, P0, Zc, Z0, z):
+    """Returns the corrupted-vs-clean prediction shift decomposed into exact nmse-change terms and
+    radial/along-input/orthogonal components."""
     ok = finite_rows(Pc) & finite_rows(P0)
     Pc, P0, z = Pc[ok].astype(np.float64), P0[ok].astype(np.float64), z[ok].astype(np.float64)
     Din = np.broadcast_to((Zc[ok].mean(1) - Z0[ok].mean(1))[:, None], P0.shape).astype(np.float64)
@@ -123,6 +127,7 @@ def shift(Pc, P0, Zc, Z0, z):
 
 
 def gain(m, Z, T, tte, pool, eps):               # paired directions: one fixed draw per K, shared by every model and pool
+    """Returns the per-unit-perturbation gain of m's predictions to coherent, independent, and one-view latent perturbations."""
     n, K, d = Z.shape; rg = np.random.default_rng((5, K))
     Uc = rg.standard_normal((n, 1, d)).astype(np.float32); Ui = rg.standard_normal((n, K, d)).astype(np.float32)
     P0 = predict(m, Z, T, tte, pool); out = {}
@@ -135,6 +140,7 @@ def gain(m, Z, T, tte, pool, eps):               # paired directions: one fixed 
 
 
 def influence(m, Z, T, tte, occ_frac, disp):    # K views, mean pool; leave-one-view-out
+    """Returns leave-one-view-out influence and its correlation with occlusion fraction and latent displacement."""
     K = Z.shape[1]; C = contributions(m, Z, T, tte); P = pool_c(m, C, tte)
     infl = np.stack([np.mean(np.linalg.norm(P - pool_c(m, np.delete(C, j, 1), tte), axis=-1), -1) for j in range(K)], 1)
     cf = C.reshape(*C.shape[:2], -1); dev = np.linalg.norm(cf - cf.mean(1, keepdims=True), axis=-1)
@@ -153,6 +159,8 @@ def influence(m, Z, T, tte, occ_frac, disp):    # K views, mean pool; leave-one-
 
 
 def contrib_centred(Cc, C0, cbar, disp):         # does a more-displaced view's contribution move toward the mean contribution?
+    """Returns whether a more-displaced view's contribution moves toward the mean contribution.
+    Reports the ratio and its correlation with displacement."""
     f = lambda C: np.linalg.norm((C - cbar).reshape(*C.shape[:2], -1), axis=-1)
     r = f(Cc) / (f(C0) + 1e-6)
     use = np.ptp(disp, 1) > 0
@@ -163,6 +171,7 @@ def contrib_centred(Cc, C0, cbar, disp):         # does a more-displaced view's 
 
 
 def build_models(seeds):
+    """Loads models for the given seeds and adds MapPool/Gmap variants built from the BPg/G weights."""
     models = S.load_models(seeds, (10,))
     # BP inference on G's weights uses the BP reference's selected step scale: at G's own c = 1 it oscillates (energy rises
     # on 37% of steps, output changes 32% with batch size; dbg job 669e6547), at the BP c it decreases monotonically.
@@ -182,6 +191,7 @@ def build_models(seeds):
 
 
 def main():
+    """Runs the full latent-analysis sweep over models, K values, and corruption conditions, writing results and predictions to --out."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True); ap.add_argument("--backbone", default=S.BACKBONE)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2]); ap.add_argument("--n", type=int, default=0)

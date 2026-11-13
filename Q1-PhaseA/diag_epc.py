@@ -5,40 +5,45 @@ jax.config.update("jax_default_matmul_precision", "highest")
 import pred_ff as PF, pred_ffres as R, pred_gpc as G
 import diag_e1_credit as DC
 
-# Inference-only check of ePC (Goemaere et al., ICML 2026; github.com/cgoemaere/error_based_PC pc_e.py) against
-# standard state PC (sPC) on trained depth-10 checkpoints.  ePC: the errors eps_l are the free variables, activities come
-# from a forward pass s_l = f_l(s_{l-1}) + eps_l (eps = 0 is the feedforward pass), inference is GD on
-# E = rho/2 sum ||eps + u||^2 + 1/2 ||y - yhat||^2, and the weight gradient is the usual local PC gradient at those
-# activities (their E_local).  Same equilibrium as sPC.  Measured: cosine and norm ratio of the weight gradient to BP's
-# (same weights, same batch), per layer, residual size, and settling, as a function of the budget T and precision rho.
+# Inference-only check of ePC (Goemaere et al., ICML 2026) vs standard state PC (sPC) on trained
+# depth-10 checkpoints. ePC: errors eps_l are free variables, activities s_l = f_l(s_{l-1}) + eps_l,
+# inference is GD on E = rho/2 sum||eps+u||^2 + 1/2||y-yhat||^2; the weight gradient is the usual
+# local PC gradient at those activities (same equilibrium as sPC). Measures cosine/norm ratio of the
+# weight gradient to BP's, per layer, residual size, and settling, vs budget T and precision rho.
 OUT = sys.argv[1] if len(sys.argv) > 1 else "pred_runs/diag_epc.json"
 TS = (20, 100, 400, 2000)
 
 
 def flat(t):
+    """Flattens a pytree's inexact-array leaves into a single 1D array."""
     return jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
 
 
 def cos(u, v):
+    """Returns the cosine similarity between two pytrees' flattened parameters."""
     u, v = flat(u), flat(v)
     return float(u @ v / (jnp.linalg.norm(u) * jnp.linalg.norm(v) + 1e-30))
 
 
 def ratio(u, v):
+    """Returns the ratio of the flattened L2 norms of u and v."""
     return float(jnp.linalg.norm(flat(u)) / (jnp.linalg.norm(flat(v)) + 1e-30))
 
 
-# Per-sample largest eigenvalue of J^T J for a row-wise map f (sample i of the output depends only on sample i of every
-# input leaf), by power iteration from a fixed start; leaves have the batch on axis 0.
 def gn_max(f, z0, iters=30):
+    """Returns per-sample largest eigenvalue of J^T J for row-wise map f, via power iteration from a fixed start.
+    Assumes sample i of the output depends only on sample i of each input leaf; leaves carry the batch on axis 0."""
     def pnorm(v):
+        """Returns the per-sample L2 norm of pytree v (batch on axis 0)."""
         return jnp.sqrt(sum(jnp.sum(x.reshape(x.shape[0], -1) ** 2, 1) for x in jax.tree_util.tree_leaves(v)))
     def scale(v, n):
+        """Scales pytree v per-sample by dividing by n."""
         return jax.tree_util.tree_map(lambda x: x / n.reshape((-1,) + (1,) * (x.ndim - 1)), v)
     _, vjp = jax.vjp(f, z0)
     v = jax.tree_util.tree_map(lambda x: jnp.broadcast_to(jnp.linspace(1.0, 2.0, x[0].size).reshape(x[0].shape), x.shape), z0)
     v = scale(v, pnorm(v))
     def body(_, v):
+        """Runs one power-iteration step and returns the rescaled updated vector."""
         w = vjp(jax.jvp(f, (z0,), (v,))[1])[0]
         return scale(w, pnorm(w) + 1e-12)
     v = jax.lax.fori_loop(0, iters, body, v)
@@ -47,6 +52,7 @@ def gn_max(f, z0, iters=30):
 
 # ------------------------------------------------------------------ feedforward (pred_ffres network)
 def ff_states(params, e, x, a):
+    """Returns the per-layer states h_l = f_l(h_{l-1}) + e_l for the feedforward (pred_ffres) network."""
     prev, h = x, []
     for l in range(len(e)):
         prev = R.layer_pred(params, l, prev, a) + e[l]; h.append(prev)
@@ -54,6 +60,8 @@ def ff_states(params, e, x, a):
 
 
 def ff_epc(params, x, y, cfg, T, rho, alpha, c=1.0, return_hist=False):
+    """Runs T ePC inference steps on the feedforward network's errors and returns the local-PC weight
+    gradient, states, duals and errors (plus energy history if return_hist)."""
     a = R.scalings(params, x, cfg)
     h0 = R.activities(params, x, cfg)[:-1]
     e0 = [jnp.zeros_like(v) for v in h0]; u0 = [jnp.zeros_like(v) for v in h0]
@@ -61,9 +69,11 @@ def ff_epc(params, x, y, cfg, T, rho, alpha, c=1.0, return_hist=False):
     lam = gn_max(yhat, e0)                                       # per sample, (B,)
     eta = (c * 0.9 / (rho + lam))[:, None]
     def E(e, u):                                                 # per-sample sums (no 1/B): separable across samples
+        """Returns the per-sample ePC energy for errors e and duals u."""
         return 0.5 * (rho * sum(jnp.sum((ei + ui) ** 2) for ei, ui in zip(e, u)) + jnp.sum((y - yhat(e)) ** 2))
     gfn = jax.grad(E)
     def step(c_, t):
+        """Runs one ePC primal/dual GD step and returns the new (e, u) carry and energy."""
         e, u = c_
         e = [ei - eta * gi for ei, gi in zip(e, gfn(e, u))]
         u = [jnp.where(t < T - 1, ui + alpha * ei, ui) for ui, ei in zip(u, e)]
@@ -77,6 +87,7 @@ def ff_epc(params, x, y, cfg, T, rho, alpha, c=1.0, return_hist=False):
 
 # ------------------------------------------------------------------ generative (pred_gpc network)
 def gen_states(p, s, e, Ph, H):                                  # e[j] is the error of hidden level j+1 (xs[j])
+    """Returns the generative hidden states via top-down prediction from belief s plus errors e."""
     xs = [None] * H
     xs[H - 1] = G.mu_top(p, s, Ph) + e[H - 1]
     for l in range(H - 1, 0, -1):
@@ -85,6 +96,8 @@ def gen_states(p, s, e, Ph, H):                                  # e[j] is the e
 
 
 def gen_epc(p, Z, Ph, cfg, T, s_fixed=None, c=1.0):
+    """Runs T steps of block-coordinate ePC inference (belief s, errors e) on the generative network.
+    Returns the settled belief, states, and energy history; s is held fixed if s_fixed is given."""
     H, b = cfg.H, Z.shape[0]
     s0 = jnp.zeros((b, G.M)) if s_fixed is None else s_fixed
     e0 = [jnp.zeros_like(v) for v in G.topdown(p, s0, Ph, H)[0]]
@@ -95,10 +108,12 @@ def gen_epc(p, Z, Ph, cfg, T, s_fixed=None, c=1.0):
     eta_s = c * 0.45 / (cfg.prior + cfg.out_w * lam_s)                    # (b,)
     eta = c * 0.45 / (cfg.hid_prec + cfg.out_w * lam_e)
     def E(v):
+        """Returns the generative PC energy for state/error pair v = (s, e)."""
         xs = gen_states(p, v[0], v[1], Ph, H)
         return G.energy(p, v[0], xs, Z, Ph, H, cfg.prior, cfg.out_w, cfg.hid_prec)
     gfn = jax.grad(E)
     def step(v, _):
+        """Runs one gradient step on (s, e) (s frozen if s_fixed is set) and returns the new carry and energy."""
         gs, ge = gfn(v)
         s = v[0] if s_fixed is not None else v[0] - eta_s[:, None] * gs
         return (s, [ei - eta[:, None, None] * gi for ei, gi in zip(v[1], ge)]), E(v)
@@ -108,6 +123,8 @@ def gen_epc(p, Z, Ph, cfg, T, s_fixed=None, c=1.0):
 
 
 def gen_metrics(p, s, xs, Z, Ph, cfg, s_ad, g_ad):
+    """Returns cosine/ratio of the PC weight gradient to the auto-decoder reference, plus belief
+    distance, observation nmse, and hidden residual."""
     g = G.pc_wgrads(p, s, xs, Z, Ph, cfg)
     blocks = {"top": cos(g["top"], g_ad["top"]), "bot": cos(g["bot"], g_ad["bot"]),
               "mid_first": cos(g["mid"][0], g_ad["mid"][0]), "mid_last": cos(g["mid"][-1], g_ad["mid"][-1])}
@@ -119,6 +136,7 @@ def gen_metrics(p, s, xs, Z, Ph, cfg, s_ad, g_ad):
 
 # ------------------------------------------------------------------ checkpoints
 def ff_ckpts():
+    """Returns available feedforward checkpoints (ALM-R16 seeds and the BP baseline) as (name, cfg, params) tuples."""
     out = []
     for s in (0, 1, 2):
         f = f"pred_runs/ffres_fix/ffres_almR16_d10_s{s}"
@@ -133,6 +151,7 @@ def ff_ckpts():
 
 
 def gen_ckpts():
+    """Returns available generative checkpoints (PC and BP rule seeds) as (name, cfg, params) tuples."""
     out = []
     for rule, seeds in (("pc", (0, 1, 2)), ("bp", (1, 2))):
         for s in seeds:
@@ -145,6 +164,7 @@ def gen_ckpts():
 
 
 def gen_batch(n=256, k=3):
+    """Returns n standardized bp_emb embeddings and their k-view tau features from pred_latents.npz."""
     L = np.load("pred_latents.npz")
     raw = L["bp_emb_tr"]; mu, sd = raw.reshape(-1, 128).mean(0), raw.reshape(-1, 128).std(0) + 1e-6
     idx = np.random.default_rng(999).choice(len(raw), n, replace=False)
@@ -152,10 +172,12 @@ def gen_batch(n=256, k=3):
 
 
 def dump(res):
+    """Writes res to OUT via an atomic tmp-file rename."""
     tmp = OUT + ".tmp"; json.dump(res, open(tmp, "w"), indent=1); os.replace(tmp, OUT)
 
 
 def main():
+    """Runs the ePC-vs-sPC/BP credit-assignment sweep over feedforward and generative checkpoints and writes OUT."""
     res = {"ff": [], "gen": [], "ckpts": {}}
     ztr, ttr, *_ = PF.load("pred_latents.npz", "bp", "emb")
     X, Y, *_ = PF.pairs(ztr, ttr, True)

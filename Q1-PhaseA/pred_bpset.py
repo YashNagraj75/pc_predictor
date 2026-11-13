@@ -1,3 +1,6 @@
+# A permutation-invariant set predictor: trains an MLP encoder/decoder pair
+# that pools a context subset of glimpse embeddings and transforms (Zs, Ts)
+# and predicts embeddings at target transforms Tt.
 import dataclasses, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -6,6 +9,7 @@ import jax, jax.numpy as jnp, equinox as eqx, optax
 
 @dataclasses.dataclass
 class BCfg:
+    """Training hyperparameters for the set predictor."""
     seed: int = 0
     steps: int = 6000
     batch: int = 256
@@ -15,32 +19,37 @@ class BCfg:
 
 
 class SetPred(eqx.Module):
+    """Permutation-invariant set predictor mapping context glimpses to target embeddings."""
     h: eqx.nn.MLP
     g: eqx.nn.MLP
 
     def __init__(self, key, d=128, dt=9, w=256):
+        """Builds the pooling encoder `h` and decoder `g` MLPs."""
         k1, k2 = jax.random.split(key)
         self.h = eqx.nn.MLP(d + dt, w, w, 1, activation=jax.nn.relu, key=k1)
         self.g = eqx.nn.MLP(w + dt, d, w, 2, activation=jax.nn.relu, key=k2)
 
-    # Zs (k, d), Ts (k, 9), Tt (m, 9) -> (m, d)
     def __call__(self, Zs, Ts, Tt):
+        """Pools context embeddings Zs/Ts (k, d)/(k, 9) and decodes predictions for targets Tt (m, 9) -> (m, d)."""
         pool = jnp.mean(jax.vmap(self.h)(jnp.concatenate([Zs, Ts], -1)), 0)
         return jax.vmap(lambda t: self.g(jnp.concatenate([pool, t])))(Tt)
 
 
 def train(cfg, ztr, ttr, verbose=True):
+    """Trains a SetPred model on random context/target splits of ztr/ttr and returns the trained model."""
     model = SetPred(jax.random.PRNGKey(cfg.seed), ztr.shape[-1], ttr.shape[-1], cfg.width)
     opt = optax.chain(optax.clip_by_global_norm(1.0),
                       optax.adamw(optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 200, cfg.steps), weight_decay=cfg.wd))
     st = opt.init(eqx.filter(model, eqx.is_inexact_array))
 
     def loss(m, Zs, Ts, Zt, Tt):
+        """Returns the mean squared error between predicted and target embeddings."""
         P = jax.vmap(m)(Zs, Ts, Tt)
         return 0.5 * jnp.mean(jnp.sum((P - Zt) ** 2, -1))
 
     @eqx.filter_jit
     def step(m, st, Zs, Ts, Zt, Tt):
+        """Performs one optimizer step and returns the updated model, optimizer state, and loss."""
         l, g = eqx.filter_value_and_grad(loss)(m, Zs, Ts, Zt, Tt)
         upd, st = opt.update(g, st, eqx.filter(m, eqx.is_inexact_array))
         return eqx.apply_updates(m, upd), st, l
@@ -60,9 +69,11 @@ def train(cfg, ztr, ttr, verbose=True):
 
 
 def make_predict(model):
+    """Returns a jitted prediction function wrapping the trained model."""
     f = eqx.filter_jit(lambda Zs, Ts, Tt: jax.vmap(model)(Zs, Ts, Tt))
     return lambda Zs, Ts, Tt: f(jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
 
 
 def n_params(model):
+    """Returns the total number of trainable (inexact-array) parameters in the model."""
     return int(sum(x.size for x in jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_inexact_array))))

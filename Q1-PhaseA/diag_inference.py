@@ -1,3 +1,7 @@
+# Diagnostic for PC inference (relaxation) hyperparameters: checks that the
+# per-sample activity step eta_h is batch-invariant, then sweeps candidate
+# eta_h values for relaxation stability/descent and selects the best one.
+
 import argparse
 import csv
 import dataclasses
@@ -18,13 +22,14 @@ import train as T
 from run_probes import cfg_from_dict
 
 
-# Forward activities in same order as pc_relax: [h_1..h_{L-1}, z_out].
 def _feedforward_layers(params, zin, enc):
+    """Returns feedforward activities in pc_relax's order: [h_1..h_{L-1}, z_out]."""
     z, hs = E.forward(params, zin, enc)
     return [*hs, z]
 
 
 def _objective(params, Zin, A, cfg):
+    """Computes the LeJEPA SIGReg + invariance objective at the feedforward embeddings of Zin."""
     Zv = jnp.stack([E.forward(params, Zin[v], cfg.enc)[0] for v in range(Zin.shape[0])])
     return float(S.lejepa_loss(Zv, A, cfg.data.n_global_views, cfg.sig.lambd,
                                cfg.use_sigreg, projector=cfg.projector,
@@ -32,10 +37,8 @@ def _objective(params, Zin, A, cfg):
                                scale_by_n=cfg.sig.scale_by_n)[0])
 
 
-# Returns list of (B, relative movement of sample 0's embedding).
-# Constant across B => per-sample step is batch-invariant (correct).
-# Falling with B => the 1/B mean factor is unhandled (bug).
 def batch_invariance(params, Xtr, A, cfg, key, sizes=(2, 8, 32)):
+    """Returns [(B, relative movement of sample 0's embedding)]; should stay constant across B if batch-invariant."""
     out = []
     for B in sizes:
         Zin, _ = D.make_views(key, jnp.asarray(Xtr[:B]), cfg.data)
@@ -46,8 +49,8 @@ def batch_invariance(params, Xtr, A, cfg, key, sizes=(2, 8, 32)):
     return out
 
 
-# Returns list of row dicts, one per candidate eta_h (PER-SAMPLE step).
 def stability_sweep(params, Xtr, A, cfg, key, lrs, batch=64):
+    """Runs pc_relax at each candidate eta_h (per-sample step) and returns one summary row per step size."""
     Zin, _ = D.make_views(key, jnp.asarray(Xtr[:batch]), cfg.data)
     ffl = _feedforward_layers(params, Zin[0], cfg.enc)
     rows = []
@@ -74,6 +77,7 @@ def stability_sweep(params, Xtr, A, cfg, key, lrs, batch=64):
 
 
 def main():
+    """Sweeps eta_h for batch invariance and relaxation stability, selects a step, and writes a CSV."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="runs/pc_sigreg_T16_coupled_e400",
                     help="run dir to read config.json from")
@@ -114,13 +118,11 @@ def main():
               f"{r['F_final']:11.4g} {r['L_final']:10.4g} "
               f"{str(r['L_monotone']):>9} {r['n_layers_moved']:>4}/{r['n_layers']}{flag}")
 
-    # SELECTION RULE.  Not "the largest stable step" -- that picks the edge of
-    # stability, and at B=256 the edge is measurably worse than a smaller step
-    # (eta_h=0.25 lands at objective 0.644 while 0.0625 reaches 0.557).  What
-    # we actually want is the relaxation that gets FURTHEST DOWN the objective
-    # within the T budget, among the steps that descend cleanly.  Monotonicity
-    # stays as a filter because a step that oscillates leaves erratic residuals,
-    # and the residuals are what the weight update is built from.
+    # SELECTION RULE: not "largest stable step" (edge of stability is worse,
+    # e.g. eta_h=0.25 -> 0.644 vs 0.0625 -> 0.557 at B=256). Pick the step
+    # that gets FURTHEST DOWN the objective within the T budget, among steps
+    # that descend cleanly; monotonicity filters oscillating steps, whose
+    # erratic residuals feed the weight update.
     usable = [r for r in rows if r["L_monotone"] and not r["diverged"]]
     if not usable:
         usable = [r for r in rows if not r["diverged"]]

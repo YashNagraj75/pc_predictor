@@ -1,3 +1,4 @@
+# Step-size / precision selection sweep for the generative PC predictor arms; --collect writes the selected settings.
 import argparse, glob, json, os, sys, time; sys.path.insert(0, ".")
 import numpy as np, pred_ff as PF, pred_eval as PE, pred_gpc as G
 ap = argparse.ArgumentParser(); ap.add_argument("--arm"); ap.add_argument("--stop", type=int, default=800)

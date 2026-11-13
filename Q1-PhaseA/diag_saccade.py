@@ -7,13 +7,10 @@ from pred_data import tau_features
 from run_probes import load_run
 
 # S2 of the saccade plan (wiki 'Method - Saccades for the PC predictors plan'; findings/30), revision 2 after 3 reviews.
-# MPC-style glimpses fed to the trained PC predictors, inference only.  BP references get NO glimpses (user rule
-# 2026-10-27): one augmented whole view, re-scored under the same image-space corruption.
-# Crop table per image: foveal crops (area 0.4) and parafoveal crops (area 0.6, centre clipped) on a 13 x 13 lattice
-# (spacing h, |c| <= 6h = 0.36), plus the peripheral whole-image crop (area 1, centred).  All crops unrotated, unjittered.
-# Geometries: 'grid4' = MPC's 2x2 foveal grid at c +- 2h + parafoveal + peripheral, fixations |c| <= 4h (9 x 9);
-#             'fov1'  = one foveal crop at c + parafoveal + peripheral, fixations on the full 13 x 13 lattice (wider).
-# Aggregation = MPC's mean over the crop latents in a pool.  Planner = MPC _plan_next_saccade, scored at lattice points.
+# MPC-style glimpses fed to the trained PC predictors, inference only; BP references get NO glimpses (user rule
+# 2026-10-27) -- just one augmented whole view, re-scored under the same image-space corruption.
+# Crop table: foveal (0.4) + parafoveal (0.6, centre-clipped) crops on a 13x13 lattice plus a peripheral whole-image
+# crop; 'grid4'/'fov1' differ in foveal layout/fixation range. Pooling = MPC's mean; planning = MPC's _plan_next_saccade.
 BACKBONE = "runs/bp_sigreg_etafix_s0"
 A_F, A_P = 0.4, 0.6
 S_F, S_P = float(np.sqrt(A_F)), float(np.sqrt(A_P))
@@ -31,11 +28,13 @@ PERI = NCROP - 1
 
 
 # ------------------------------------------------------------------ geometry
-def lat_index(a, b):                            # lattice offsets a, b in -6..6 -> crop row in the 13 x 13 table
+def lat_index(a, b):
+    """Maps lattice offsets a, b in -6..6 to the crop row in the 13 x 13 crop table."""
     return (a + 6) * 13 + (b + 6)
 
 
 def make_geom(name):
+    """Builds the 'grid4' or 'fov1' saccade geometry: fixation points, their crop-table rows, and pixel coords."""
     if name == "grid4":
         fx = [(a, b) for a in range(-4, 5) for b in range(-4, 5)]
         crops = [[lat_index(a - 2, b - 2), lat_index(a - 2, b + 2), lat_index(a + 2, b - 2), lat_index(a + 2, b + 2),
@@ -50,18 +49,21 @@ def make_geom(name):
             "py": (c[:, 0] + 1.0) * 0.5 * 68.0, "px": (c[:, 1] + 1.0) * 0.5 * 68.0, "L": len(fx)}
 
 
-def crop_specs():                               # (cy, cx, s) per crop-table row
+def crop_specs():
+    """Returns the (cy, cx, s) center/scale spec for every row of the crop table (foveal, parafoveal, peripheral)."""
     sp = [(a * H_STEP, b * H_STEP, S_F) for a in LAT for b in LAT]
     sp += [tuple(np.clip([a * H_STEP, b * H_STEP], -LIM_P, LIM_P)) + (S_P,) for a in LAT for b in LAT]
     return np.array(sp + [(0.0, 0.0, 1.0)], np.float32)
 
 
 def crop_tau(cy, cx, s):
+    """Returns the tau feature vector for an unrotated, unjittered crop centred at (cy, cx) with scale s."""
     return tau_features(np.array([cx, cy, s, s], np.float32), np.zeros(4, np.float32))
 
 
 # ------------------------------------------------------------------ rendering and encoding
 def _render(img, cy, cx, s, out):
+    """Renders an out x out crop of img centred at (cy, cx) with scale s via bilinear sampling, as data._one_view."""
     g = jnp.linspace(-1.0, 1.0, out)
     yy, xx = jnp.meshgrid(g, g, indexing="ij")
     H, W, C = img.shape
@@ -74,12 +76,15 @@ def _render(img, cy, cx, s, out):
 render = jax.jit(jax.vmap(_render, in_axes=(0, None, None, None, None)), static_argnums=4)
 
 
-class Encoder:                                  # one compiled forward, fixed chunk (review CORR F8)
+class Encoder:
+    """Wraps the trained encoder behind one compiled forward pass at a fixed chunk size (review CORR F8)."""
     def __init__(self, cfg, params, mu, sd, chunk=1024):
+        """Stores the encoder config/params and the latent mean/std used to normalise its output."""
         self.cfg, self.p, self.mu, self.sd, self.chunk = cfg, params, mu, sd, chunk
         self.f = eqx.filter_jit(lambda p, x: E.forward(p, x, cfg.enc)[0])
 
-    def __call__(self, pix):                    # pix (N, H, W, C) in [0, 1] -> normalised latents (N, d)
+    def __call__(self, pix):
+        """Encodes pix (N, H, W, C) in [0, 1] in fixed-size chunks and returns normalised latents (N, d)."""
         if self.cfg.data.grayscale and pix.shape[-1] == 3:
             pix = pix.mean(-1, keepdims=True)
         x = np.asarray(pix).reshape(len(pix), -1); out = []
@@ -91,7 +96,9 @@ class Encoder:                                  # one compiled forward, fixed ch
         return (np.concatenate(out) - self.mu) / self.sd
 
 
-def crop_table(X, enc, size, chunk=1024):        # (n, NCROP, d) latents, (NCROP, 9) taus
+def crop_table(X, enc, size, chunk=1024):
+    """Renders and encodes every crop-table entry for each image in X; returns (n, NCROP, d) latents and
+    (NCROP, 9) taus."""
     sp = crop_specs(); n = len(X); Z = np.zeros((n, NCROP, 128), np.float32)
     for i0 in range(0, n, chunk):
         xb = jnp.asarray(X[i0:i0 + chunk])
@@ -100,8 +107,9 @@ def crop_table(X, enc, size, chunk=1024):        # (n, NCROP, d) latents, (NCROP
     return Z, np.stack([crop_tau(*r) for r in sp]).astype(np.float32)
 
 
-# V whole views per image: 'aug' = the training augmentation; 'canon' = same crop range, no rotation/flip/jitter.
 def whole_views(X, enc, cfg, V, canon, key, chunk=500):
+    """Renders and encodes V whole views per image: 'aug' uses the training augmentation, 'canon' uses the
+    same crop range with no rotation/flip/jitter. Returns latents, taus, and raw crop boxes."""
     dd = cfg.data
     rot, flip, br, ct = (0.0, False, 0.0, 0.0) if canon else (dd.max_rotation, dd.hflip, dd.brightness, dd.contrast)
     one = jax.vmap(lambda k, im: D._one_view(k, im, dd.img_size, dd.crop_area[0], dd.crop_area[1], rot, flip, br, ct))
@@ -117,6 +125,8 @@ def whole_views(X, enc, cfg, V, canon, key, chunk=500):
 
 # ------------------------------------------------------------------ image-space corruption
 def corrupt_images(X, kind, seed=0):
+    """Applies Gaussian noise or a square occlusion to the images X and returns the corrupted images and,
+    for occlusion, the occluder boxes."""
     rng = np.random.default_rng(seed); X = X.copy(); n, Hh, Ww, _ = X.shape
     occ = None
     if kind == "noise":
@@ -130,7 +140,8 @@ def corrupt_images(X, kind, seed=0):
     return X, occ
 
 
-def occluded_frac(cy, cx, s, occ, Hh=69):       # fraction of a crop's footprint inside the occluder; cy, cx (n,) or scalar
+def occluded_frac(cy, cx, s, occ, Hh=69):
+    """Returns the fraction of a crop's footprint (centre cy, cx scalar or (n,), scale s) that lies inside occ."""
     lo_r, hi_r = (cy - s + 1) * 0.5 * (Hh - 1), (cy + s + 1) * 0.5 * (Hh - 1)
     lo_c, hi_c = (cx - s + 1) * 0.5 * (Hh - 1), (cx + s + 1) * 0.5 * (Hh - 1)
     ir = np.clip(np.minimum(hi_r, occ[:, 2] - 0.5) - np.maximum(lo_r, occ[:, 0] - 0.5), 0, None)
@@ -139,7 +150,9 @@ def occluded_frac(cy, cx, s, occ, Hh=69):       # fraction of a crop's footprint
 
 
 # ------------------------------------------------------------------ MPC planner
-def _bu_one(img_chw, sigma):                    # verbatim port of lgn_glimpser._get_bottom_up_salience
+def _bu_one(img_chw, sigma):
+    """Computes the bottom-up salience map of a CHW image by Gaussian-blurring its pixel energy (verbatim
+    port of lgn_glimpser._get_bottom_up_salience)."""
     energy = jnp.sum(jnp.abs(img_chw), axis=0)
     radius = int(sigma * 3)
     if radius % 2 == 0:
@@ -156,15 +169,16 @@ def _bu_one(img_chw, sigma):                    # verbatim port of lgn_glimpser.
 _bu = jax.jit(jax.vmap(lambda im: _bu_one(jnp.transpose(im, (2, 0, 1)), SIG_BU)))
 
 
-def bottom_up(X, geom, norm=True):              # S_BU at the geometry's lattice pixels, (n, L)
+def bottom_up(X, geom, norm=True):
+    """Returns S_BU sampled at the geometry's lattice pixels, shape (n, L), normalised to max 1 per image if norm."""
     m = np.concatenate([np.asarray(_bu(jnp.asarray(X[i:i + 250]))) for i in range(0, len(X), 250)])
     b = m[:, np.rint(geom["py"]).astype(int), np.rint(geom["px"]).astype(int)]
     return b / (b.max(1, keepdims=True) + 1e-12) if norm else b
 
 
-# Score map at lattice points.  norm=True scales S_TD to max 1 per image (S_BU is scaled in bottom_up): our error
-# units differ from MPC's nats, so a raw mix would set beta implicitly.  norm=False is MPC's raw formula (gated).
 def plan_scores(bu, hist_idx, hist_err, geom, beta=BETA, norm=True):
+    """Returns the planner's score map at lattice points, mixing bottom-up and top-down (error-weighted,
+    inhibition-of-return gated) terms; norm rescales S_TD to max 1 per image since our error units differ from MPC's nats."""
     if hist_idx.shape[1] == 0:
         return bu
     py, px = geom["py"], geom["px"]
@@ -177,6 +191,7 @@ def plan_scores(bu, hist_idx, hist_err, geom, beta=BETA, norm=True):
 
 
 def next_fixation(policy, k, bu, hist_idx, hist_err, geom, rng, perm, occ_score):
+    """Returns the next fixation index per image for the given saccade policy (random, epi, bu, ior, or oracle_occ)."""
     L = geom["L"]
     if policy == "random":
         return perm[:, k]
@@ -195,14 +210,17 @@ def next_fixation(policy, k, bu, hist_idx, hist_err, geom, rng, perm, occ_score)
 
 # ------------------------------------------------------------------ predictors
 def _cfg_from(d):
+    """Rebuilds a G.GCfg from a saved result dict's "cfg" field, keeping only fields GCfg still has."""
     names = {f.name for f in dc.fields(G.GCfg)}
     return G.GCfg(**{k: (tuple(v) if isinstance(v, list) else v) for k, v in d["cfg"].items() if k in names})
 
 
-class GPred:                                    # amortised generative PC-ALM: belief = mean amortiser output
+class GPred:
+    """Amortised generative PC-ALM predictor: belief = mean amortiser output over the pooled latents."""
     kind = "G"
 
     def __init__(self, depth, seed, root="pred_runs/tests_sep_fix"):
+        """Loads the trained generator, amortiser, and their recorded k=1 nmse for the given depth/seed."""
         base = f"{root}/gpc_sep_d{depth}_amort_hp16_a1_k1_amort_c1_T2200_bp_s{seed}"
         d = json.load(open(base + ".json")); self.cfg = _cfg_from(d); self.seed = seed
         self.p = eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), self.cfg))
@@ -213,36 +231,43 @@ class GPred:                                    # amortised generative PC-ALM: b
         self._d = eqx.filter_jit(lambda p, s, t: G.topdown(p, s, G.phi(t), H)[1])
         self.predict = G.make_predict(self.p, self.am, self.cfg)
 
-    def embed(self, z, t):                      # (n, m, d), (n, m, 9) -> (n, m, M)  (per-latent contribution)
+    def embed(self, z, t):
+        """Maps latents z (n, m, d) and taus t (n, m, 9) to their per-latent amortiser contribution (n, m, M)."""
         n, m = z.shape[:2]; x = np.concatenate([z, t], -1).reshape(n * m, -1)
         return np.concatenate([np.asarray(self._a(self.am, jnp.asarray(x[i:i + 8192]))) for i in range(0, len(x), 8192)]).reshape(n, m, -1)
 
-    def readout(self, s, t, batch=250):         # pooled embedding (n, M), target taus (n, m, 9) -> (n, m, d)
+    def readout(self, s, t, batch=250):
+        """Decodes pooled embedding s (n, M) at target taus t (n, m, 9) into predicted latents (n, m, d)."""
         return np.concatenate([np.asarray(self._d(self.p, jnp.asarray(s[i:i + batch]), jnp.asarray(t[i:i + batch]))) for i in range(0, len(s), batch)])
 
 
-class FPred:                                    # residual ff PC-ALM: prediction = mean of per-latent predictions
+class FPred:
+    """Residual feedforward PC-ALM predictor: prediction = mean of its per-latent predictions."""
     kind = "F"
 
     def __init__(self, seed):
+        """Loads the trained residual feedforward predictor for the given seed."""
         self.rc = RF.RCfg(arm="alm", depth=10, seed=seed, T=400, alpha=1.0, lr=0.01, rho=16.0); self.seed = seed
         self.params = RF.load_model(f"pred_runs/ffres_fix/ffres_almR16_d10_s{seed}.eqx", self.rc)
         self.px = RF.make_predict_x(self.params, self.rc)
         self.predict = RF.make_pair_predict(self.params, self.rc)
 
-    def f(self, z, ta, tb):                     # rows -> rows
+    def f(self, z, ta, tb):
+        """Predicts the target latent for each row given seen latent z and taus (ta, tb)."""
         return self.px(np.concatenate([z, ta, tb], -1))
 
 
 def metrics(P, zte):
+    """Returns pooled nmse/cos/retrieval metrics and the per-image squared error of predictions P against zte."""
     n = len(zte); img = np.repeat(np.arange(n), 4); tv = np.tile(np.arange(4), n)
     m = PE._metrics(P.reshape(-1, P.shape[-1]), zte.reshape(-1, zte.shape[-1]), img, tv, zte)
-    return m, np.mean(np.sum((P - zte) ** 2, -1), 1).astype(np.float32)       # per-image squared error over 4 targets
+    return m, np.mean(np.sum((P - zte) ** 2, -1), 1).astype(np.float32)
 
 
-# Pool state: per-kind sums of contributions (G: embeddings; F: predictions of the 4 targets) and counts.
 class Pool:
+    """Accumulates glimpse contributions (per-kind sums of G embeddings or F per-target predictions and counts)."""
     def __init__(self, model, Zc, Tc, tte):
+        """Initialises the pool from the peripheral (whole-image) crop and sets up per-kind accumulators."""
         self.m, self.Zc, self.Tc, self.tte = model, Zc, Tc, tte
         n = len(Zc); self.n = n
         zp, tp = Zc[:, PERI:PERI + 1], np.repeat(Tc[None, PERI:PERI + 1], n, 0)
@@ -250,7 +275,8 @@ class Pool:
         self.S = {"f": np.zeros_like(self.cp), "p": np.zeros_like(self.cp)}; self.N = {"f": 0, "p": 0}; self.k = 0
         self.seen_z, self.seen_t = [zp], [tp]                                  # for F surprise (peripheral first)
 
-    def contrib(self, z, t):                    # (n, m, d), (n, m, 9) -> G (n, m, M); F (n, m, 4, d)
+    def contrib(self, z, t):
+        """Maps latents z (n, m, d)/taus t (n, m, 9) to their pool contribution: G (n, m, M), F (n, m, 4, d)."""
         if self.m.kind == "G":
             return self.m.embed(z, t)
         n, mm = z.shape[:2]
@@ -258,6 +284,7 @@ class Pool:
         return np.stack(rows, 1).reshape(n, mm, 4, -1)
 
     def add(self, z, t, kinds):
+        """Adds the glimpse's crops (latents z, taus t, per-crop kinds) to the per-kind running sums."""
         c = self.contrib(z, t)
         for j, kd in enumerate(kinds):
             self.S[kd] = self.S[kd] + c[:, j]; self.N[kd] += 1
@@ -265,6 +292,7 @@ class Pool:
         self.seen_z.append(z); self.seen_t.append(t)
 
     def pooled(self, pool):
+        """Returns the averaged contribution for pool in {peri, full, noperi, fov, para}."""
         if pool == "peri":
             return self.cp
         if pool == "full":
@@ -274,11 +302,13 @@ class Pool:
         return self.S[{"fov": "f", "para": "p"}[pool]] / self.N[{"fov": "f", "para": "p"}[pool]]
 
     def predict(self, pool):
+        """Returns the target-view prediction from the given pool (decoded for G, averaged latent for F)."""
         s = self.pooled(pool)
         return self.m.readout(s, self.tte) if self.m.kind == "G" else s
 
-    # Surprise of the next glimpse's crops under the full pool held BEFORE it (k = 0: the peripheral latent alone).
     def surprise(self, z, t):
+        """Returns the prediction error of crops (z, t) under the full pool held BEFORE adding them (k=0:
+        just the peripheral latent)."""
         n, mm = z.shape[:2]
         if self.m.kind == "G":
             s = self.pooled("full") if self.k else self.cp
@@ -295,6 +325,8 @@ class Pool:
 
 
 def run_saccades(model, Zc, Tc, tte, zte, X, geom, policy, Kmax, occ, rng, save):
+    """Runs Kmax saccades under policy, pooling glimpses into model's predictor; returns per-(K,pool) metrics,
+    trajectory statistics, the fixation history, and (via save) per-image errors."""
     n, L, cr, kinds = len(zte), geom["L"], geom["crops"], geom["kinds"]
     bu = bottom_up(X, geom)
     perm = rng.permuted(np.tile(np.arange(L), (n, 1)), axis=1)
@@ -329,22 +361,25 @@ def run_saccades(model, Zc, Tc, tte, zte, X, geom, policy, Kmax, occ, rng, save)
     return out, stats, hist_idx.astype(np.int16), hist_err.astype(np.float32)
 
 
-class BPg:                                      # frozen BP auto-decoder G1: one whole view only
+class BPg:
+    """Frozen BP auto-decoder G1 reference: predicts from one whole view only, no glimpses."""
     kind = "BPg"
 
     def __init__(self, depth, seed):
+        """Loads the trained BP auto-decoder and its recorded k=1 nmse for the given depth/seed."""
         base = f"pred_runs/tests/gpc_bp_d{depth}_zero_bp_s{seed}"
         d = json.load(open(base + ".json")); cfg = _cfg_from(d)
         self.k1_stored = next(r["nmse"] for r in d["rows"] if r["test"] == "k_seen" and r.get("k") == 1)
         self.predict = G.make_predict(eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), cfg)), None, cfg)
 
 
-# Frozen residual BP d10, one whole view only.  Uses the GPU-fix retrain (frozen_bp_fix, job ab3c17c4): the original
-# frozen_bp weights score 0.351 only under the faulty GPU numerics they were trained with, 0.393 under correct numerics.
 class BPf:
+    """Frozen residual BP d10 reference (one whole view only), using the GPU-fix retrain (frozen_bp_fix, job
+    ab3c17c4) -- the original weights scored 0.351 only under the faulty GPU numerics, 0.393 under correct ones."""
     kind = "BPf"
 
     def __init__(self, seed):
+        """Loads the GPU-fix-retrained frozen BP predictor and its recorded k=1 nmse for the given seed."""
         rc = RF.RCfg(arm="bp", depth=10, seed=seed, lr=0.001); self.seed = seed
         self.predict = RF.make_pair_predict(RF.load_model(f"pred_runs/frozen_bp_fix/ffres_bp_d10_s{seed}.eqx", rc), rc)
         p = f"pred_runs/tests_ffres_bpfix/ffres_bp_d10_bp_s{seed}.json"
@@ -352,6 +387,7 @@ class BPf:
 
 
 def score_whole(model, Zv, Tv, tte, zte, ks, batch=250):
+    """Scores model's prediction from the first k whole views (averaged for non-G models) for each k in ks."""
     res = {}
     for k in ks:
         if model.kind in ("G", "BPg"):
@@ -366,6 +402,7 @@ def score_whole(model, Zv, Tv, tte, zte, ks, batch=250):
 
 
 def load_models(seeds, depths=(3, 10)):
+    """Loads the G, BPg (per depth), F, and BPf predictors for every seed and returns them keyed by name."""
     models = {}
     for s in seeds:
         for d in depths:
@@ -377,6 +414,8 @@ def load_models(seeds, depths=(3, 10)):
 
 
 def main():
+    """Runs the full saccade diagnostic (whole-view, peripheral, and saccade-policy scoring) across corruption
+    conditions and models, and writes the results and per-image errors to disk."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="pred_runs/diag_saccade.json"); ap.add_argument("--n", type=int, default=0)
     ap.add_argument("--kmax", type=int, default=32); ap.add_argument("--vmax", type=int, default=192)

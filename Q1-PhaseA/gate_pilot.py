@@ -1,3 +1,6 @@
+# Pairwise gate between a PC-ALM run and its matched BP run: checks for divergence, non-finite values,
+# encoder gradient clipping rate, activity-growth/active-fraction bounds, and (sparse arms) the case-D/E
+# deployed-sparsity, collapse, and solver-convergence bands. Exits 0 pass / 1 FAIL / 2 the gate itself crashed.
 import json
 import math
 import os
@@ -23,12 +26,14 @@ PR_MIN_RATIO = 0.5               # centred head-layer participation ratio >= 0.5
 
 
 def _load(run_dir):
+    """Loads a run's log.json and config.json from run_dir."""
     log = json.load(open(os.path.join(run_dir, "log.json")))
     cfg = json.load(open(os.path.join(run_dir, "config.json")))
     return log, cfg
 
 
 def _flat(d, prefix=""):
+    """Flattens a nested dict into a single-level dict with dotted keys."""
     out = {}
     for k, v in d.items():
         if isinstance(v, dict):
@@ -39,6 +44,8 @@ def _flat(d, prefix=""):
 
 
 def arm_report(run_dir, is_pc):
+    """Checks one run's log for divergence, clipping rate, and (PC) activity-growth/sparsity bounds.
+    Returns (failure reasons, summary info dict, config dict)."""
     log, cfg = _load(run_dir)
     clip = cfg["opt"]["grad_clip"]
     case = cfg.get("sparse", {}).get("case")
@@ -82,6 +89,8 @@ def arm_report(run_dir, is_pc):
 
 
 def _gate_D(log, info):
+    """Checks case-D/E sparse-head health (active fraction, supports, rank/scale collapse, solver
+    convergence, reconstruction R2) at the final eval row; appends summary fields to info."""
     ev = [r["eval"]["sparse"] for r in log if isinstance(r.get("eval"), dict) and "sparse" in r["eval"]]
     if len(ev) < 2:
         return ["fewer than two eval rows with case-D health"]
@@ -148,6 +157,8 @@ def _gate_D(log, info):
 
 
 def gate(pc_dir, bp_dir):
+    """Runs arm_report on a matched PC/BP run pair and checks that their configs differ only in `arm`.
+    Returns (passed, failure reasons, {"pc": info, "bp": info})."""
     r_pc, i_pc, c_pc = arm_report(pc_dir, is_pc=True)
     r_bp, i_bp, c_bp = arm_report(bp_dir, is_pc=False)
     reasons = [f"PC: {x}" for x in r_pc] + [f"BP: {x}" for x in r_bp]

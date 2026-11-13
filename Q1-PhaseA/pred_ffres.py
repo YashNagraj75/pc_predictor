@@ -12,6 +12,7 @@ WIDTH, ACT = 256, "relu"
 
 @dataclasses.dataclass
 class RCfg:
+    """Config for the residual feedforward predictor (E1): architecture, optimiser, and PC/ALM inference settings."""
     arm: str = "bp"             # bp | pc | alm
     depth: int = 10             # weight layers (jpc convention); interior layers 1..depth-2 carry skips
     seed: int = 0
@@ -29,28 +30,33 @@ class RCfg:
 
     @property
     def ptype(self):
+        """Returns the jpc parameterisation name used for this network."""
         return "mupc"
 
     @property
     def gamma(self):
+        """Returns the muPC output scaling, the same formula as encoder.gamma_for."""
         return 1.0 / math.sqrt(WIDTH) if self.ptype == "mupc" else None    # same output scaling as encoder.gamma_for
 
     @property
     def name(self):
+        """Returns a run name built from the arm, depth, lr, and (if non-default) rho."""
         return f"ffres_{self.arm}_d{self.depth}_lr{self.lr:g}" + (f"_rho{self.rho:g}" if self.rho != 1.0 else "")
 
 
 def make(key, din, dout, cfg):
+    """Builds a fresh (mlp, skip_model) parameter pair for the residual predictor at the given input/output dims."""
     return (jpc.make_mlp(key, din, WIDTH, cfg.depth, dout, ACT, use_bias=True, param_type=cfg.ptype),
             jpc.make_skip_model(cfg.depth))
 
 
 def scalings(params, x, cfg):
+    """Returns jpc's per-layer parameter scalings for params on input x."""
     return jpc._get_param_scalings(params[0], x, skip_model=params[1], param_type=cfg.ptype, gamma=cfg.gamma)
 
 
-# All activities of the forward pass [h_0 .. h_{L-2}, yhat], term for term as jpc (gated against a float64 reference).
 def activities(params, x, cfg):
+    """Returns all forward-pass activities [h_0 .. h_{L-2}, yhat], term for term as jpc (gated vs a float64 ref)."""
     a = scalings(params, x, cfg)
     acts, prev = [], x
     for l in range(len(params[0])):
@@ -59,31 +65,33 @@ def activities(params, x, cfg):
 
 
 def forward(params, x, cfg):
+    """Returns the network's output yhat for input x."""
     return activities(params, x, cfg)[-1]
 
 
 def bp_loss(params, x, y, cfg):
+    """Returns the mean squared BP loss of the forward pass on x against targets y."""
     return 0.5 * jnp.sum((y - forward(params, x, cfg)) ** 2) / x.shape[0]
 
 
-# f_l(prev) for layer l, term for term as jpc.pc_energy_fn (skip added on interior layers only).
 def layer_pred(params, l, prev, a):
+    """Returns f_l(prev) for layer l (term for term as jpc.pc_energy_fn), adding a skip on interior layers only."""
     model, skip = params
     out = a[l] * jax.vmap(model[l])(prev)
     return out + prev if skip[l] is not None else out
 
 
-# Hidden residuals r_l = h_l - f_l(h_{l-1}), l = 0..L-2 (h_{-1} = x).
 def residuals(params, h, x, a):
+    """Returns the hidden residuals r_l = h_l - f_l(h_{l-1}) for l = 0..L-2, with h_{-1} = x."""
     prev, r = x, []
     for l in range(len(h)):
         r.append(h[l] - layer_pred(params, l, prev, a)); prev = h[l]
     return r
 
 
-# PC-ALM energy, completing-the-square form with penalty rho, output clamped to y, batch mean like jpc.
-# lam = None gives the plain PC energy (gated against jpc.pc_energy_fn).  rho = 1 is the original E1 energy.
 def energy(params, h, x, y, lam, a, rho=1.0):
+    """Returns the PC-ALM energy (completing-the-square form, penalty rho, output clamped to y, batch mean);
+    lam=None gives the plain PC energy (gated against jpc.pc_energy_fn), rho=1 is the original E1 energy."""
     r = residuals(params, h, x, a)
     if lam is not None:
         r = [ri + li for ri, li in zip(r, lam)]
@@ -91,8 +99,8 @@ def energy(params, h, x, y, lam, a, rho=1.0):
     return 0.5 * (rho * sum(jnp.sum(ri ** 2) for ri in r) + jnp.sum(out ** 2)) / x.shape[0]
 
 
-# Spectral norm by power iteration from a fixed start (no SVD in the training step), 2% safety margin.
 def spec_norm(W, iters=20):
+    """Returns a 2%-safety-margin estimate of W's spectral norm by power iteration from a fixed start."""
     W = jax.lax.stop_gradient(W)
     v = jax.random.normal(jax.random.PRNGKey(17), (W.shape[1],), W.dtype)
     v = v / jnp.linalg.norm(v)
@@ -101,9 +109,9 @@ def spec_norm(W, iters=20):
     return 1.02 * jnp.linalg.norm(W @ v)
 
 
-# Activity step 0.9 / (1 + j)^2, j = max_l ||J_l|| bound (1 + a||W|| through a skip, a||W|| without; ReLU slope <= 1):
-# the energy Hessian is M^T M with M = I - (block-subdiagonal J), so ||H|| <= (1 + j)^2.  From the current weights.
 def step_size(params, a):
+    """Returns the activity step 0.9/(1+j)^2, j a bound on the per-layer Jacobian norm from the current weights
+    (so the energy Hessian satisfies ||H|| <= (1+j)^2)."""
     model, skip = params
     c = []
     for l in range(1, len(model)):
@@ -112,9 +120,9 @@ def step_size(params, a):
     return 0.9 / (1.0 + jnp.sqrt(jnp.max(jnp.stack(c)))) ** 2
 
 
-# T primal steps, each followed by lam += alpha * r (not after the last); weights from the energy at the final state.
-# alpha = 0 is plain PC.  Returns the weight gradient (and the final state if asked).
 def pc_alm_grads(params, x, y, cfg, return_state=False):
+    """Runs T primal relaxation steps with dual updates lam += alpha*r (alpha=0 is plain PC) and returns the
+    weight gradient at the final state (plus that state if return_state)."""
     a = scalings(params, x, cfg)
     alpha = cfg.alpha if cfg.arm == "alm" else 0.0
     h0 = activities(params, x, cfg)[:-1]
@@ -123,6 +131,7 @@ def pc_alm_grads(params, x, y, cfg, return_state=False):
     gfn = jax.grad(lambda h, lam: energy(params, h, x, y, lam, a, cfg.rho))
 
     def step(c, t):
+        """Takes one primal relaxation step and conditionally updates the dual variables lam."""
         h, lam = c
         h = [v - eta * B * g for v, g in zip(h, gfn(h, lam))]
         r = residuals(params, h, x, a)
@@ -136,20 +145,24 @@ def pc_alm_grads(params, x, y, cfg, return_state=False):
 
 
 def grads(params, x, y, cfg):
+    """Returns the weight gradient for cfg.arm: BP loss gradient for "bp", PC/ALM credit otherwise."""
     return eqx.filter_grad(bp_loss)(params, x, y, cfg) if cfg.arm == "bp" else pc_alm_grads(params, x, y, cfg)
 
 
 def weight_norms(params):
+    """Returns the spectral norm of each layer's weight matrix."""
     return [float(spec_norm(m.layers[1].weight)) for m in params[0]]
 
 
 def make_predict_x(params, cfg):
+    """Returns a chunked, jitted predict function mapping input rows X to the network's forward output."""
     f = eqx.filter_jit(lambda p, x: forward(p, x, cfg))
     return lambda X: np.concatenate([np.asarray(f(params, jnp.asarray(X[i:i + 8192]))) for i in range(0, len(X), 8192)])
 
 
-# Same metrics as pred_ff.evaluate.
 def evaluate(params, z, tau, cfg, n_retr=2000):
+    """Returns nmse and top-1 retrieval accuracy on the (seen, target) pairs built from latents z and taus tau,
+    the same metrics as pred_ff.evaluate."""
     X, Y, img, A, Bv = PF.pairs(z, tau, cfg.use_tau)
     P = make_predict_x(params, cfg)(X)
     nmse = float(np.mean(np.sum((P - Y) ** 2, -1)) / np.mean(np.sum(Y ** 2, -1)))
@@ -163,13 +176,15 @@ def evaluate(params, z, tau, cfg, n_retr=2000):
     return {"nmse": nmse, "retr1": float(np.mean(np.concatenate(hits)))}
 
 
-# pred_ff.optimiser with the warmup capped at a quarter of the run (identical for the 6000-step runs; smoke runs are short).
 def optimiser(cfg):
+    """Returns pred_ff's clipped AdamW optimiser, with the warmup capped at a quarter of the run."""
     sched = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, min(200, cfg.steps // 4), cfg.steps)
     return optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(sched, weight_decay=cfg.wd))
 
 
 def train(cfg, data_path, verbose=True, log_every=500):
+    """Trains the residual predictor per cfg, logging periodic diagnostics, and returns (params, log, test
+    metrics, finite) where finite is False if training or evaluation diverged."""
     ztr, ttr, zte, tte, _, _ = PF.load(data_path, cfg.backbone, cfg.layer)
     if cfg.holdout:
         nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
@@ -180,13 +195,16 @@ def train(cfg, data_path, verbose=True, log_every=500):
 
     @eqx.filter_jit
     def step(params, st, x, y):
+        """Takes one optimiser step and returns the updated params, optimiser state, grad norm, and bp loss."""
         g = grads(params, x, y, cfg)
         gn = optax.global_norm(eqx.filter(g, eqx.is_inexact_array))
         upd, st = opt.update(g, st, eqx.filter(params, eqx.is_inexact_array))
         return eqx.apply_updates(params, upd), st, gn, bp_loss(params, x, y, cfg)
 
     @eqx.filter_jit
-    def credit(params, x, y):                 # PC/ALM gradient vs BP's on the SAME network (diagnostic only)
+    def credit(params, x, y):
+        """Returns diagnostics comparing the PC/ALM credit to BP's gradient on the same network: overall and
+        per-layer cosine/ratio, and the relative hidden-residual norm."""
         ga, h, lam = pc_alm_grads(params, x, y, cfg, return_state=True)
         gb = eqx.filter_grad(bp_loss)(params, x, y, cfg)
         f = lambda t: jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
@@ -223,13 +241,15 @@ def train(cfg, data_path, verbose=True, log_every=500):
 
 
 def load_model(path, cfg, din=146, dout=128):
+    """Loads serialised params from path into a freshly initialised network of the given shape/cfg."""
     return eqx.tree_deserialise_leaves(path, make(jax.random.PRNGKey(cfg.seed), din, dout, cfg))
 
 
-# pred_eval-compatible predict for k = 1 (same contract as pred_ff.make_pair_predict).
 def make_pair_predict(params, cfg):
+    """Returns a pred_eval-compatible predict(Zs, Ts, Tt) function for k=1 seen view (as pred_ff.make_pair_predict)."""
     px = make_predict_x(params, cfg)
     def predict(Zs, Ts, Tt):
+        """Predicts the target latents Tt from the single seen latent Zs/tau Ts."""
         Zs, Ts, Tt = np.asarray(Zs), np.asarray(Ts), np.asarray(Tt)
         assert Zs.shape[1] == 1, "the feedforward predictor takes exactly one seen view"
         m = Tt.shape[1]
@@ -239,6 +259,7 @@ def make_pair_predict(params, cfg):
 
 
 def sha256(path):
+    """Returns the hex sha256 digest of the file at path."""
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 

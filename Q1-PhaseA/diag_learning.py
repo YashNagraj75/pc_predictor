@@ -1,3 +1,6 @@
+# CLI: for each trained run, measures per-layer weight displacement from its re-seeded init and the kNN/grad-norm
+# trajectory from log.json, flags layers frozen near the displacement floor, and writes the results to a CSV.
+
 import argparse
 import json
 import os
@@ -15,15 +18,14 @@ from run_probes import cfg_from_dict
 
 
 def _arrays(tree):
+    """Converts all inexact-array leaves of a pytree into a flat list of numpy arrays."""
     return [np.asarray(x) for x in
             jax.tree_util.tree_leaves(eqx.filter(tree, eqx.is_inexact_array))]
 
 
-# Returns (per_layer list, overall float, shapes list).
-# W_init is REBUILT from the run's recorded seed, not stored.
-# Works on any run that saved params.eqx + config.json,
-# including runs predating this diagnostic.
 def weight_displacement(run_dir):
+    """Computes relative weight displacement between initial and trained encoder layers (excludes case-C dict).
+    Returns per-layer ratios, overall relative norm, and layer shapes; stores dict displacement separately."""
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
     init = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     trained = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"), init)
@@ -43,9 +45,9 @@ def weight_displacement(run_dir):
     return per, num / den, [a.shape for a in A]
 
 
-# Returns dict from training log: first/best/last kNN and grad-norm scale.
-# best_minus_first is the key value: <= 0 means encoder never beat init.
 def probe_trajectory(run_dir):
+    """Builds a dict of first/best/last kNN accuracy and grad-norm stats from a run's log.json.
+    knn_best_minus_first <= 0 means the encoder never beat its initial embedding."""
     p = os.path.join(run_dir, "log.json")
     if not os.path.exists(p):
         return {}
@@ -69,6 +71,8 @@ def probe_trajectory(run_dir):
 
 
 def report(run_dir, verbose=True):
+    """Builds a summary row of weight displacement and probe trajectory stats for a run, optionally printing it.
+    Counts layers "frozen" as within 1.5x of the minimum displacement, since decay alone yields a small uniform shift."""
     per, overall, shapes = weight_displacement(run_dir)
     traj = probe_trajectory(run_dir)
     tag = os.path.basename(os.path.normpath(run_dir))
@@ -98,6 +102,8 @@ def report(run_dir, verbose=True):
 
 
 def main():
+    """Parses run directories from the command line and reports diagnostics for each one with a params.eqx file.
+    Writes the collected results to a CSV file specified by --csv."""
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--csv", default="diag_learning.csv")

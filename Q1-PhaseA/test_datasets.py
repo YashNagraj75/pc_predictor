@@ -11,11 +11,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def check(name, cond, info=""):
+    """Records a named pass/fail check (updates OK[0]) and prints the result with any info."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def _raw_test(name):                            # raw-file decode, independent of data.py: (image 0, all labels)
+    """Decodes the raw test-set file for name ('mnist' or 'cifar10'), returning (image0, labels)."""
     import gzip, pickle
     root = os.path.join(HERE, "..", "data")
     if name == "mnist":
@@ -29,6 +31,7 @@ def _raw_test(name):                            # raw-file decode, independent o
 
 
 def loaders():
+    """Checks dataset-loading shapes, balance, determinism, test-set independence, and view dims for mnist/cifar10."""
     for name, ntr, shape in (("mnist", 15675, (28, 28, 1)), ("cifar10", 15675, (32, 32, 3))):   # matched to Galaxy
         cfg = data_preset(name)
         Xtr, ytr, Xte, yte = D.load_dataset(cfg)
@@ -67,6 +70,7 @@ def loaders():
 
 
 def presets():
+    """Checks that the galaxy10/mnist/cifar10 presets match their expected configs and the stored Galaxy backbone."""
     check("galaxy10 preset == default DataCfg", data_preset("galaxy10") == DataCfg())
     p = os.path.join(HERE, "runs/bp_sigreg_etafix_s0/config.json")
     if os.path.exists(p):
@@ -81,6 +85,7 @@ def presets():
 
 
 def corruption():
+    """Checks occlusion/noise corruption fractions and that occluded_frac matches the measured black-pixel fraction."""
     for H, C in ((28, 1), (32, 3), (69, 3)):
         X = np.ones((200, H, H, C), np.float32)
         Xo, occ = S.corrupt_images(X, "occlude")
@@ -100,6 +105,7 @@ def corruption():
 
 
 def ds_dir():                                    # scripts run inside Q1-PhaseA/ds/<name>, data via the ds/data symlink
+    """Checks that a dataset loads correctly from inside a Q1-PhaseA/ds/<name> working directory."""
     with tempfile.TemporaryDirectory(dir=HERE) as t:
         os.makedirs(os.path.join(t, "x")); os.symlink(os.path.abspath(os.path.join(HERE, "..", "data")), os.path.join(t, "data"))
         cwd = os.getcwd(); os.chdir(os.path.join(t, "x"))
@@ -111,6 +117,7 @@ def ds_dir():                                    # scripts run inside Q1-PhaseA/
 
 
 def galaxy_reproduction():                      # dataset-generic test_views/encode on Galaxy == stored latents (DS-7b)
+    """Checks that re-encoding the Galaxy test views reproduces the stored latents within 1e-3 relative error."""
     import pred_eval as PE
     from run_probes import load_run
     cfg, p = load_run(os.path.join(HERE, S.BACKBONE))
@@ -127,6 +134,7 @@ def galaxy_reproduction():                      # dataset-generic test_views/enc
 
 
 def galaxy_regression():                         # the new whole-only path must reproduce findings/32 exactly on Galaxy
+    """Checks that the whole-only diag_saccade2 path reproduces the archived findings/32 results on Galaxy."""
     out = os.path.join(tempfile.mkdtemp(), "reg.json")
     r = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "diag_saccade2.py"), "--whole-only", "--depths", "10",
                         "--no-diag", "--require-all", "--seeds", "1", "--vmax", "6", "--out", out], cwd=HERE, capture_output=True, text=True)
@@ -146,6 +154,7 @@ def galaxy_regression():                         # the new whole-only path must 
 
 
 def main():
+    """Runs all dataset/corruption/regression checks and returns True iff every check passed."""
     presets(); loaders(); corruption(); ds_dir(); galaxy_reproduction(); galaxy_regression()
     print("ALL PASS" if OK[0] else "SOME FAIL")
     return OK[0]

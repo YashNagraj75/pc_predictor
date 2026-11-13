@@ -1,3 +1,6 @@
+# Measures the head-loss vs. task-loss gradient ratio for PC and BP arms at
+# given sparse-head depths K, and can rescale the PC head weights to match a
+# target ratio (writing an updated selection JSON).
 import argparse, copy, dataclasses, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jax, jax.numpy as jnp, numpy as np, equinox as eqx
@@ -8,6 +11,7 @@ W = lambda g, l: g[0][l].layers[1].weight
 
 
 def cfg_of(sel, K, ws=None):
+    """Builds a PC RunCfg with sparse-head settings from the selection JSON at depth K."""
     st = sel["sets"][str(K)]
     sp = SparseCfg(case="D", heads=tuple(st["heads"]), gammas=tuple(st["gammas"]),
                    head_ws=tuple(ws if ws is not None else st["head_ws"]), beta_g=sel["beta_g"],
@@ -16,6 +20,7 @@ def cfg_of(sel, K, ws=None):
 
 
 def ratios(params, cfg, Zin, A, kg):
+    """Returns per-layer and up-to-top-head gradient-norm ratios (with vs. without head loss) for PC and BP."""
     out = {}
     zero = dataclasses.replace(cfg, sparse=dataclasses.replace(cfg.sparse, head_ws=(0.0,) * len(cfg.sparse.heads)))
     for arm in ("pc", "bp"):
@@ -33,6 +38,7 @@ def ratios(params, cfg, Zin, A, kg):
 
 
 def main():
+    """Parses CLI args, measures gradient-dose ratios per K, optionally rescales and writes updated configs."""
     ap = argparse.ArgumentParser()
     ap.add_argument("sel"); ap.add_argument("--K", type=int, nargs="+", default=[1, 5])
     ap.add_argument("--n", type=int, default=256); ap.add_argument("--batch", type=int, default=256)

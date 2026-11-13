@@ -4,11 +4,10 @@ import numpy as np, jax, jax.numpy as jnp, equinox as eqx
 import pred_gpc as G, pred_ff as PF, pred_eval as PE
 
 # Inference-only follow-up to C2 (never trains).
-#  A: on every trained C2 decoder, test k=1 nmse with the belief s from (i) its own rule at T=400, (ii) its own rule at
-#     T=2000, (iii) exact auto-decoder inference on the same decoder (c=1, T=2000).  (iii) vs (i) separates belief
-#     inference from decoder quality.
-#  B: depth-10 multiplier-loop stability: dual rate alpha x primal steps per dual step k x step scale c, on trained
-#     depth-10 weights (PC-ALM checkpoints, no-multiplier and BP-trained decoders) and one depth-3 reference.
+#  A: on every trained C2 decoder, compares k=1 nmse using the belief s from its own rule at T=400 vs T=2000 vs exact
+#     auto-decoder inference (c=1, T=2000), to separate belief-inference error from decoder quality.
+#  B: depth-10 multiplier-loop stability over dual rate alpha, primal steps per dual step k, and step scale c, on
+#     trained PC-ALM / no-multiplier / BP-trained decoders plus one depth-3 reference.
 OUT = sys.argv[1] if len(sys.argv) > 1 else "pred_runs/diag_c3.json"
 ztr, ttr, zte, tte, *_ = PF.load("pred_latents.npz", "bp", "emb")
 FIELDS = {f.name for f in dc.fields(G.GCfg)}
@@ -17,6 +16,8 @@ t0 = time.time()
 
 
 def load(jpath):
+    """Loads a config from JSON, filtering keys to FIELDS, and deserializes matching equinox weights.
+    Returns (None, None) if the weight file does not exist."""
     d = json.load(open(jpath))
     cfg = G.GCfg(**{k: v for k, v in d["cfg"].items() if k in FIELDS})
     w = jpath[:-5] + ".eqx"
@@ -26,9 +27,13 @@ def load(jpath):
 
 
 def ad_predictor(p, cfg, T=2000):
+    """Returns a predictor closure that infers latent state via autodiff-based backprop inference and decodes it.
+    Uses backprop rule with c=1.0 for inference, then applies top-down decoding to the target input."""
     cb = dc.replace(cfg, rule="bp", c=1.0)
     @eqx.filter_jit
     def _p(p, Zs, Ts, Tt):
+        """Runs amortized inference to infer the latent state from source timestep Ts.
+        Returns the top-down prediction decoded at target timestep Tt."""
         s = G.ad_infer(p, jnp.zeros((Zs.shape[0], G.M)), Zs, G.phi(Ts), cb, T)[0]
         return G.topdown(p, s, G.phi(Tt), cfg.H)[1]
     return lambda Zs, Ts, Tt: _p(p, jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
@@ -66,13 +71,15 @@ nrm2 = lambda L: sum(jnp.sum(x ** 2) for x in L)
 
 
 def make_loop(p, cfg):
-    # Same update as G.alm_infer; alpha and c are traced, k_inner / T / freeze static (9 compiles per weight set);
-    # returns a per-step trace of the plain energy and the relative hidden residual.
+    """Builds a jitted ALM-relaxation loop matching G.alm_infer's update, with alpha and c traced but k_inner/T/freeze static.
+    Returns the scan's final carry plus a per-step trace of the plain energy and relative hidden residual norm."""
     H = cfg.H
     base = G.pc_etas(p, 1, dc.replace(cfg, c=1.0))
 
     @eqx.filter_jit
     def run(s0, xs0, lam0, Z, Ph, alpha, k_in, c, T_, freeze):
+        """Runs the augmented Lagrangian relaxation loop for state, latents, and multipliers over T_ steps.
+        Returns the scanned carry plus per-step energy and hidden-residual-to-latent-norm ratio."""
         etas = [c * e for e in base]
         k_s = Z.shape[1]
         etas[0] = c * 0.9 / (cfg.prior + 2.0 * cfg.hid_prec * k_s * G._sn(p["top"][0][:, :G.M]) ** 2)
@@ -80,6 +87,8 @@ def make_loop(p, cfg):
         gfn = jax.grad(lambda v, lam: Lf(v[0], v[1], lam))
 
         def step(carry, t):
+            """Updates state and latents via gradient descent, periodically ascending Lagrange multipliers by hidden residuals.
+            Returns the updated carry plus the free-energy value and residual-to-latent norm ratio per step."""
             (s, xs), lam = carry
             gs, gx = gfn((s, xs), lam)
             s = jnp.where(freeze, s, s - etas[0] * gs)
@@ -94,14 +103,19 @@ def make_loop(p, cfg):
 
 
 def ad_wg(p, s, cfg):
+    """Calls G.ad_wgrads with the given params, state, and config, using the module-level Zall and Pall.
+    Returns the resulting weight gradients."""
     return G.ad_wgrads(p, s, Zall, Pall, cfg)
 
 
 def flat(t):
+    """Flattens and concatenates all leaves of a pytree into a single 1D array."""
     return jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
 
 
 def cosv(a, b):
+    """Computes the cosine similarity between flattened vectors a and b.
+    Adds a small epsilon to the denominator to avoid division by zero."""
     a, b = flat(a), flat(b)
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30))
 

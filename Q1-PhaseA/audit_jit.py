@@ -13,6 +13,7 @@ flat = lambda t: jnp.concatenate([v.ravel().astype(jnp.float32) for v in jax.tre
 
 
 def cmp(a, b):
+    """Returns cosine similarity and relative max-abs difference between two gradient pytrees."""
     a, b = flat(a), flat(b)
     return {"cos": float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30)), "relmax": float(jnp.max(jnp.abs(a - b)) / (jnp.max(jnp.abs(b)) + 1e-30))}
 
@@ -22,6 +23,7 @@ res = {"env": {"TF32": os.environ.get("NVIDIA_TF32_OVERRIDE"), "XLA_FLAGS": os.e
 
 # fn takes the arrays as ARGUMENTS so the compiled call traces them (closed-over arrays would be baked in as constants).
 def case(name, fn, *args):
+    """Runs fn compiled (jit) and eager (disable_jit) on args, compares the gradients, and logs to OUT."""
     t0 = time.time()
     try:
         gj = eqx.filter_jit(fn)(*args)
@@ -44,11 +46,13 @@ perm = jnp.asarray(np.stack([rng.permutation(4) for _ in range(256)]))
 
 
 def gcfg(path):
+    """Loads a GCfg from a saved run's config.json, keeping only the fields GCfg defines."""
     d = json.load(open(path))["cfg"]
     return G.GCfg(**{f.name: d[f.name] for f in dc.fields(G.GCfg) if f.name in d})
 
 
 def gpc_grad(p, amort, Zall, Tall, perm, cfg, k=1):
+    """Computes the GLN weight gradient (and belief s) for k seen views, dispatching by cfg.rule."""
     ii = jnp.arange(Zall.shape[0])[:, None]; seen = perm[:, :k]
     Zs, Ts = Zall[ii, seen], Tall[ii, seen]; Ps, Pall = G.phi(Ts), G.phi(Tall)
     s0 = G.start_s(p, amort, Zs, Ts, cfg)
@@ -66,6 +70,7 @@ def gpc_grad(p, amort, Zall, Tall, perm, cfg, k=1):
 
 
 def gpc_case(name, base, amort_path=None):
+    """Loads a saved GLN run's weights (and amortiser, if any) and runs the jit-vs-eager gradient audit."""
     cfg = gcfg(base + ".json")
     p = eqx.tree_deserialise_leaves(base + ".eqx", G.init(jax.random.PRNGKey(0), cfg, Zall.shape[-1]))
     am = eqx.tree_deserialise_leaves(amort_path, G.init_amort(jax.random.PRNGKey(0), Zall.shape[-1])) if amort_path else None

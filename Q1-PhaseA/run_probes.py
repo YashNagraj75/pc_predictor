@@ -1,3 +1,7 @@
+# CLI: loads each saved run's params and config (cfg_from_dict), encodes train/test images (plain and augmented),
+# and runs the full probe suite (classification, regression, decode, kNN) on the resulting embeddings, writing
+# probes.json per run and an aggregate probes_summary.csv. Also accepts "random:<seed>" for an untrained-encoder floor.
+
 import argparse
 import json
 import os
@@ -16,10 +20,12 @@ import sparse as SP
 from config import DataCfg, EncoderCfg, OptCfg, PCCfg, RunCfg, SIGRegCfg, SparseCfg
 
 
-# Rebuild RunCfg from saved config.json (nested dataclasses).
-# to_json wrote tuples as lists; reconstruct them here.
 def cfg_from_dict(d):
+    """Rebuilds a RunCfg from a saved config dict, reconstructing nested dataclasses and list-to-tuple fields.
+    Falls back to an empty dict for "sparse" since older runs predate SparseCfg."""
     def mk(kls, sub):
+        """Builds a `kls` instance from `sub`, keeping only keys matching its dataclass fields.
+        Converts list values to tuples before passing them as keyword arguments."""
         fields = {f.name: f.type for f in kls.__dataclass_fields__.values()}
         kw = {}
         for k, v in sub.items():
@@ -36,6 +42,8 @@ def cfg_from_dict(d):
 
 
 def load_run(run_dir):
+    """Loads the config and reconstructs model parameters from a saved run directory.
+    Returns the config object and the deserialized equinox params."""
     cfg = cfg_from_dict(json.load(open(os.path.join(run_dir, "config.json"))))
     skeleton = SP.init_params(jax.random.PRNGKey(cfg.opt.seed), cfg, cfg.data.input_dim)
     params = eqx.tree_deserialise_leaves(os.path.join(run_dir, "params.eqx"),
@@ -43,11 +51,9 @@ def load_run(run_dir):
     return cfg, params
 
 
-# Deterministic centre view -> (Z, imgs_as_seen).
-# imgs_as_seen is the RESHAPED encoder input, not the raw dataset image.
-# Probe targets must be measured on pixels the encoder actually got,
-# including resize to cfg.data.img_size and any grayscaling.
 def embed_split(params, cfg, X, n, seed=0):
+    """Computes deterministic latent codes Z for a random subset of X via the deployed network.
+    Returns Z alongside the resized/grayscaled images actually fed to the encoder, plus the sampled indices."""
     idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
     xb = D.eval_batch(jax.numpy.asarray(X[idx]), cfg.data)
     z, _ = SP.forward(params, xb, cfg)      # deployed net; == E.forward for case none
@@ -56,12 +62,9 @@ def embed_split(params, cfg, X, n, seed=0):
     return np.asarray(z), imgs, idx
 
 
-# ONE augmented view per image -> (Z, boxes, aug_params).
-# Separate from embed_split: scene-quantity probes need deterministic centre view
-# (deployment condition); augmentation-invariance probes need aug views + params.
-# Keeps only first view per image so rows stay independent (no train/test leakage
-# since two views of same image share a target).
 def embed_augmented(params, cfg, X, n, seed=0):
+    """Embeds one augmented view per sampled image and returns its latent codes, boxes, and aug params.
+    Keeps only the first view per image so rows stay independent and avoid train/test leakage."""
     idx = np.random.default_rng(seed).choice(len(X), min(n, len(X)), replace=False)
     key = jax.random.PRNGKey(10_000 + seed)
     views, boxes, prms = D.make_views_labeled(
@@ -71,6 +74,8 @@ def embed_augmented(params, cfg, X, n, seed=0):
 
 
 def main():
+    """Runs probe suites on each checkpoint (or an untrained-encoder floor) and writes probes.json plus probes_summary.csv.
+    Includes a kNN probe for comparability with historical numbers; random floors use the ORIGINAL architecture only."""
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--n-train", type=int, default=6000,
@@ -91,12 +96,9 @@ def main():
             print(f"[skip] {run_dir}: no params.eqx", flush=True)
             continue
         if run_dir.startswith("random:"):
-            # Untrained-encoder reference.  Not a nicety: PC's trained kNN
-            # probe previously landed BELOW this floor, so "beats backprop"
-            # and "beats doing nothing" are different questions and both have
-            # to be on the table.  Computed under the same probes and the same
-            # split as every trained arm, since the existing 0.343 reference
-            # was kNN-only and the two probes disagree.
+            # Untrained-encoder reference: not a nicety, since PC's trained kNN probe once landed BELOW this floor, so
+            # "beats backprop" and "beats doing nothing" are different questions. Computed under the same probes and
+            # split as every trained arm -- the prior 0.343 reference was kNN-only and the two probes disagree.
             sd = int(run_dir.split(":", 1)[1])
             cfg = RunCfg(opt=OptCfg(seed=sd))
             # ORIGINAL architecture only.  Sparse arms (B/C) need their own floor

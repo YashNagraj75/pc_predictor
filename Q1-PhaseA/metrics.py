@@ -1,13 +1,13 @@
+# Representation-quality metrics shared by the Q1 probes: linear CKA and KS two-sample tests between two encoders'
+# representations, spectral diagnostics (eigenspectrum, effective rank, intrinsic dimension), k-NN accuracy, and
+# cheap collapse checks. Spectral metrics are only valid on hidden layers -- SIGReg pins the output embedding to N(0,I).
+
 import numpy as np
 
 
-# ============================================================== 1. CKA
-# Linear CKA between two representations of SAME inputs in SAME order.
-# X: (N, D1), Y: (N, D2). Returns scalar in [0, 1].
-# Invariant to rotation and isotropic rescaling; survives SIGReg.
-# Measures DIFFERENCE not superiority: low value = different reps, not worse.
-# Layer index where it dips shows WHERE the two arms diverge.
 def linear_cka(X, Y):
+    """Computes linear CKA between two representations X (N, D1) and Y (N, D2) of matched inputs.
+    Returns a scalar in [0, 1]; a low value means the reps differ, not that one is worse."""
     X = np.asarray(X, np.float64); Y = np.asarray(Y, np.float64)
     assert X.shape[0] == Y.shape[0], "CKA needs matched rows"
     X = X - X.mean(0, keepdims=True)
@@ -18,22 +18,18 @@ def linear_cka(X, Y):
     return float(num / den) if den > 0 else 0.0
 
 
-# ====================================================== 2. spectrum metrics
-# Covariance eigenvalues, descending.
-# Computed via SVD of the centered matrix (more stable than forming X^T X).
 def eig_spectrum(X):
+    """Computes covariance eigenvalues of X in descending order via SVD of the centered matrix.
+    Uses SVD instead of forming X^T X for numerical stability."""
     X = np.asarray(X, np.float64)
     Xc = X - X.mean(0, keepdims=True)
     s = np.linalg.svd(Xc, compute_uv=False)
     return np.maximum(s ** 2 / max(X.shape[0] - 1, 1), 0.0)
 
 
-# All spectral metrics from one eigendecomposition.
-# WHERE: hidden layers only. SIGReg forces embedding to N(0,I), so at output
-# layer these metrics measure the regulariser, not the representation.
-# Hidden layers are unconstrained; PC hidden activities pulled by output error
-# during relaxation vs BP purely bottom-up. At embedding, only valid as a
 def spectrum_report(X, var_frac=0.95, cond_tol=1e-10):
+    """Computes all spectral metrics from a single eigendecomposition of X.
+    Valid only on hidden layers, since SIGReg forces the output embedding toward N(0,I)."""
     e = eig_spectrum(X)
     tot = e.sum()
     if tot <= 0:
@@ -55,12 +51,9 @@ def spectrum_report(X, var_frac=0.95, cond_tol=1e-10):
     }
 
 
-# =========================================================== 3. kNN accuracy
-# k-NN classification accuracy. Headline task metric.
-# WHERE: every layer. No trained probe -> no capacity/weight-decay confound.
-# Sidesteps basis-dependence problem in LeJEPA's Lemma 2, which measures
-# variance of a coefficient VECTOR (coordinate-dependent quantity).
 def knn_accuracy(Z_tr, y_tr, Z_te, y_te, k=20, metric="cosine", chunk=512):
+    """Computes k-nearest-neighbor classification accuracy between train and test embeddings.
+    Processes test points in chunks and supports cosine or euclidean distance metrics."""
     Z_tr = np.asarray(Z_tr, np.float32); Z_te = np.asarray(Z_te, np.float32)
     y_tr = np.asarray(y_tr).ravel();     y_te = np.asarray(y_te).ravel()
     if metric == "cosine":
@@ -83,13 +76,9 @@ def knn_accuracy(Z_tr, y_tr, Z_te, y_te, k=20, metric="cosine", chunk=512):
     return float(correct / len(Z_te))
 
 
-# =================================================== 4. intrinsic dimension
-# TwoNN intrinsic dimension (Facco et al. 2017).
-# Manifold dimension complement to linear spectral metrics;
-# catches full-rank-but-curved low-dim manifolds.
-# Subsamples to max_n points (needs full pairwise dist matrix;
-# max_n=4000 -> ~64 MB).
 def twonn_dimension(X, discard_frac=0.1, max_n=4000, seed=0):
+    """Estimates intrinsic dimension via the TwoNN method (Facco et al. 2017), catching curved low-dim manifolds.
+    Subsamples to max_n points since it needs the full pairwise distance matrix."""
     X = np.asarray(X, np.float64)
     if len(X) > max_n:
         X = X[np.random.default_rng(seed).choice(len(X), max_n, replace=False)]
@@ -111,9 +100,9 @@ def twonn_dimension(X, discard_frac=0.1, max_n=4000, seed=0):
     return float((x @ y) / (x @ x))         # regression through the origin
 
 
-# ================================================== 5. two-sample test
-# Two-sample Kolmogorov-Smirnov statistic, self-contained implementation.
 def ks_two_sample(a, b):
+    """Computes the two-sample Kolmogorov-Smirnov statistic between arrays a and b.
+    Returns the maximum absolute difference between their empirical CDFs."""
     a = np.sort(np.asarray(a, np.float64)); b = np.sort(np.asarray(b, np.float64))
     v = np.concatenate([a, b])
     ca = np.searchsorted(a, v, side="right") / len(a)
@@ -121,11 +110,9 @@ def ks_two_sample(a, b):
     return float(np.abs(ca - cb).max())
 
 
-# Two-sample test between arms using SIGReg's projection machinery (not normality vs fixed target).
-# Z1, Z2 : (N1, K), (N2, K). A : (K, M) shared directions.
-# Returns max and mean of the per-direction KS statistic.
-# Projections cost one matmul; captures full 1-D shape (skew, heavy tails, multimodality), not just moments.
 def projected_two_sample(Z1, Z2, A):
+    """Projects Z1 and Z2 onto shared directions A and runs a per-direction KS two-sample test.
+    Returns the max, mean, and 90th percentile of the KS statistics across directions."""
     P1 = np.asarray(Z1) @ np.asarray(A)
     P2 = np.asarray(Z2) @ np.asarray(A)
     d = np.array([ks_two_sample(P1[:, m], P2[:, m]) for m in range(A.shape[1])])
@@ -133,10 +120,9 @@ def projected_two_sample(Z1, Z2, A):
             "ks_q90": float(np.quantile(d, 0.9))}
 
 
-# ================================================== collapse diagnostics
-# Cheap sanity numbers to detect a collapsed encoder before running costlier metrics above.
-# A collapsed arm has near-zero std and effective rank ~1.
 def collapse_report(Z):
+    """Computes cheap collapse diagnostics (mean, std, effective rank) to flag a collapsed encoder before costlier metrics.
+    A collapsed arm shows near-zero std and effective rank near 1."""
     Z = np.asarray(Z, np.float64)
     e = eig_spectrum(Z)
     p = e / e.sum() if e.sum() > 0 else e

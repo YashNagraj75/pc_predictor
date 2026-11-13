@@ -23,6 +23,7 @@ leaves = lambda g: [np.asarray(x, np.float64).ravel() for x in jax.tree_util.tre
 
 
 def compare(g, gb):
+    """Returns cosine similarity and norm-ratio diagnostics between gradient pytrees g and gb, overall and per-leaf."""
     a, b = leaves(g), leaves(gb); fa, fb = np.concatenate(a), np.concatenate(b)
     nb = np.array([np.linalg.norm(y) for y in b]); na = np.array([np.linalg.norm(x) for x in a])
     lc = np.array([x @ y / (np.linalg.norm(x) * np.linalg.norm(y) + 1e-300) for x, y in zip(a, b)])[nb > 1e-12]
@@ -33,7 +34,8 @@ def compare(g, gb):
             "leaf_ratio_first8": [float(x) for x in lr[:8]], "leaf_ratio_last8": [float(x) for x in lr[-8:]]}
 
 
-def node_profile(pred, rho, T, n=8):             # per-node |eps_j| / |eps_top| for n (image, block) pairs; node 0 = first
+def node_profile(pred, rho, T, n=8):
+    """Returns the median per-node relative residual norm |eps_j|/|eps_top| and energy ratio over n probe cases."""
     prof, er = [], []
     for b in range(n):
         h, u, en, r = P.spc_one(pred, ctx[b], ci[b], cv[b], ti[b, 0], tv[b, 0], Y[b, 0], jnp.asarray(rho, dt), 0.0, T)

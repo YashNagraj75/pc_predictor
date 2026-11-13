@@ -1,3 +1,5 @@
+# Audits numerical consistency of gradients (eager vs jit vs float64) across several PC/BP model
+# variants: trained ffres checkpoints, a plain sp/mupc MLP, a bare matmul chain, and a GPC auto-decoder.
 import sys, os, json, dataclasses as dc
 sys.path.insert(0, os.getcwd())
 import numpy as np, jax
@@ -12,10 +14,12 @@ load = lambda path, like: eqx.tree_deserialise_leaves(path, f32(like))
 f64 = lambda t: jax.tree_util.tree_map(lambda v: v.astype(jnp.float64) if eqx.is_inexact_array(v) else v, t)
 flat = lambda t: jnp.concatenate([v.ravel().astype(jnp.float64) for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
 def cmp(a, b):
+    """Returns cosine similarity and max relative error between flattened pytrees a and b."""
     a, b = flat(a), flat(b)
     return {"cos": round(float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-300)), 6), "relmax": float(jnp.max(jnp.abs(a - b)) / (jnp.max(jnp.abs(b)) + 1e-300))}
 out = {}
 def case(name, fn, *args):
+    """Evaluates fn under eager, jit, and float64 execution and records the pairwise comparisons under name."""
     ge = fn(*args); gj = eqx.filter_jit(fn)(*args); gr = fn(*[f64(a) for a in args])
     out[name] = {"jit_vs_eager": cmp(gj, ge), "eager_vs_f64": cmp(ge, gr), "jit_vs_f64": cmp(gj, gr)}
     print(name, out[name], flush=True)
@@ -34,6 +38,7 @@ cfg = R.RCfg(arm="alm", depth=10, seed=0, T=100, alpha=0.25, lr=0.01); p = load(
 case("ffres_alm_d10_pcalmgrad", lambda p, x, y: R.grads(p, x, y, cfg), p, x, y)
 # 2. plain sp MLP as pred_ff (jpc.make_mlp sp, depth 3), BP gradient, own forward
 def mlp_loss(m, x, y):
+    """Returns the mean squared error of MLP m's forward pass on inputs x against targets y."""
     h = x
     for l in m: h = jax.vmap(l)(h)
     return 0.5 * jnp.sum((y - h) ** 2) / x.shape[0]
@@ -44,6 +49,7 @@ case("mupc_mlp_d3_init_noscale_bpgrad", lambda m, x, y: eqx.filter_grad(mlp_loss
 # 3. bare matmul chain
 W = [jax.random.normal(jax.random.PRNGKey(i), (256 if i else 146, 256), jnp.float32) for i in range(4)]
 def chain(W, x):
+    """Applies a scaled ReLU matmul chain through weights W to input x and returns the result."""
     h = x
     for w in W: h = jax.nn.relu(h @ w) / 16.0
     return h

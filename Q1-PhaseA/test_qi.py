@@ -8,22 +8,25 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records whether cond holds under name, prints PASS/FAIL, and updates the overall OK flag."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def flat(t):
+    """Returns pytree t flattened into a single 1-D array."""
     return jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
 
 
-# Pre-change pc_infer and pc_wgrads, copied verbatim (commit 7129350).
 def ref_infer(p, s0, Z, Ph, cfg, T, freeze_s=False, xs0=None):
+    """Pre-change pc_infer, copied verbatim (commit 7129350); returns the final state and energy history."""
     xs0 = G.topdown(p, s0, Ph, cfg.H)[0] if xs0 is None else xs0
     etas = G.pc_etas(p, Z.shape[1], cfg)
     Ef = G._E(cfg)
     gfn = jax.grad(lambda v: Ef(p, v[0], v[1], Z, Ph))
 
     def step(v, _):
+        """Takes one gradient-descent step on (s, xs) and returns the new state and its energy."""
         gs, gx = gfn(v)
         s = v[0] if freeze_s else v[0] - etas[0] * gs
         xs = [x - e * g for x, g, e in zip(v[1], gx, etas[1:])]
@@ -33,6 +36,7 @@ def ref_infer(p, s0, Z, Ph, cfg, T, freeze_s=False, xs0=None):
 
 
 def ref_wgrads(p, s, xs, Z, Ph, cfg):
+    """Pre-change pc_wgrads, copied verbatim (commit 7129350); returns the averaged weight gradient at (s, xs)."""
     g = jax.grad(lambda q: G._E(cfg)(q, s, xs, Z, Ph))(p)
     return jax.tree_util.tree_map(lambda x: x / Z.shape[0], g)
 

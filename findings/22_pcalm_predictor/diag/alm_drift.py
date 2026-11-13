@@ -1,3 +1,7 @@
+# ALM-drift diagnostic: for feedforward models in dir D (sys.argv[1]), compares
+# PC-ALM gradients (across ALM step count T and primal-steps-per-dual k) against
+# BP gradients, by cosine similarity, norm ratio, and residual; writes a JSON.
+
 import os, sys, json, dataclasses
 sys.path.insert(0, os.path.join(os.environ["PCP_ROOT"], "Q1-PhaseA"))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx, jpc, pred_ff as PF
@@ -7,10 +11,12 @@ X, Y, *_ = PF.pairs(ztr[:4000], ttr[:4000], True)
 idx = np.random.default_rng(123).integers(0, len(X), 512); x, y = jnp.asarray(X[idx]), jnp.asarray(Y[idx])
 L = lambda g: jnp.concatenate([l.ravel() for l in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array))])
 cos = lambda a, b: float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
-def lcos(ga, gb): return [round(cos(L(ga[i]), L(gb[i])), 3) for i in range(3)]
+def lcos(ga, gb):
+    """Returns the cosine similarity between ga and gb for each of the first 3 gradient groups."""
+    return [round(cos(L(ga[i]), L(gb[i])), 3) for i in range(3)]
 
 def alm_k(m, cfg, k):
-    # PC-ALM with k primal steps per dual step (k=1 is the training rule)
+    """Runs PC-ALM (k primal steps per dual step) and returns (param grad, residual, dual-update history, eta)."""
     acts = list(jpc.init_activities_with_ffwd(m, x, param_type="sp")); B = x.shape[0]
     sq = [jnp.linalg.norm(l.layers[1].weight if hasattr(l, "layers") else l.weight, 2) ** 2 for l in m[1:]]
     eta = 0.9 / (1.0 + 2.0 * jnp.max(jnp.stack(sq)))

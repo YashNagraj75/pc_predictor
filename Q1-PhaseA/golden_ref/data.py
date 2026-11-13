@@ -1,22 +1,7 @@
-"""Dataset loading and multi-view generation for Phase A.
-
-Two datasets:
-  galaxy10 -- Galaxy10 SDSS (astroNN), 69x69x3, 10 morphology classes.
-              Full rotation is a VALID augmentation: galaxy images have no
-              canonical orientation.
-  mnist    -- already unpacked in ../data/MNIST/raw.  Useful as a fast smoke
-              dataset and because the muPC notebook is calibrated on it.
-              Set max_rotation=0.0: digits DO have a canonical orientation.
-
-View generation uses a single affine sampling grid per view per sample, so
-random-resized-crop + arbitrary-angle rotation + flip are one bilinear
-resample rather than three.  Fully vmap-able and jit-able.
-
-`make_views` also returns the crop bounding box for every view.  Phase A does
-not use it; Phase B's position-conditioned predictor does (position = the
-crop's box, since a fully-connected encoder has no patch tokens).  Returning
-it here costs nothing and avoids re-deriving the augmentation later.
-"""
+# Dataset loading and multi-view generation for Phase A. Two datasets: galaxy10 (Galaxy10 SDSS/DECaLS,
+# 69x69x3, rotation-invariant) and mnist (28x28x1, max_rotation=0.0 since digits have a canonical orientation).
+# View generation uses one affine sampling grid per view (crop + rotation + flip in a single bilinear
+# resample, vmap/jit-able). make_views also returns each view's crop box, used by Phase B's predictor.
 import os, struct, gzip
 from functools import partial
 import numpy as np
@@ -28,22 +13,8 @@ from jax.scipy.ndimage import map_coordinates
 # ------------------------------------------------------------------ loading
 def load_galaxy10(root="../data", n_train=-1, n_test=2000, seed=0,
                   size=69, chunk=512):
-    """-> (Xtr, ytr, Xte, yte) with X float32 (N,size,size,3) in [0,1].
-
-    astroNN no longer serves the 69x69 SDSS Galaxy10; the only files it hosts
-    now are the DECaLS variants at 256x256x3.  We use the de-duplicated one
-    (Galaxy10_DECals_NoDuplicated.h5) because the original DECaLS release
-    repeats galaxies, and a duplicate straddling the train/test split would
-    inflate the k-NN probe.
-
-    The raw array is 3.5 GB uint8 / 14 GB as float32, so it is read in chunks
-    and bilinearly downsampled on the way in.  `size=69` reproduces the old
-    SDSS resolution and leaves crop headroom above the 32x32 the encoder sees.
-
-    Reading + resampling the h5 takes ~60 s, so the downsampled array is
-    cached alongside it as an .npz (~3.9 s to reload).  Delete the .npz to
-    force a re-read.
-    """
+    """Loads and splits Galaxy10 as (Xtr, ytr, Xte, yte), X float32 (N,size,size,3) in [0,1], caching
+    the downsampled de-duplicated DECaLS array as an .npz to avoid re-reading the raw h5."""
     cache = os.path.join(root, "galaxy10", f"g10_{size}.npz")
     if os.path.exists(cache):
         z = np.load(cache)
@@ -63,6 +34,7 @@ def load_galaxy10(root="../data", n_train=-1, n_test=2000, seed=0,
 
 
 def _read_galaxy10_h5(root, size, chunk):
+    """Reads and bilinearly downsamples the raw Galaxy10 DECaLS h5 file in chunks of `chunk` images."""
     import h5py
     path = os.path.join(root, "galaxy10", "Galaxy10_DECals_NoDuplicated.h5")
     with h5py.File(path, "r") as f:
@@ -80,6 +52,7 @@ def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
     """-> (Xtr, ytr, Xte, yte) with X float32 (N,28,28,1) in [0,1]."""
     d = os.path.join(root, "MNIST", "raw")
     def rd(name):
+        """Reads one IDX-format MNIST file (gzipped or not) and returns it as a numpy array."""
         p = os.path.join(d, name)
         p = p if os.path.exists(p) else p + ".gz"
         op = gzip.open if p.endswith(".gz") else open
@@ -101,6 +74,7 @@ def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
 
 
 def load_dataset(cfg):
+    """Dispatches to load_galaxy10 or load_mnist based on cfg.dataset; raises ValueError otherwise."""
     if cfg.dataset == "galaxy10":
         return load_galaxy10(cfg.root, cfg.n_train, cfg.n_test, cfg.seed)
     if cfg.dataset == "mnist":
@@ -112,12 +86,8 @@ def load_dataset(cfg):
 @partial(jax.jit, static_argnames=("out_size", "hflip"))
 def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
               hflip, brightness, contrast):
-    """One augmented view of one image via a single affine sampling grid.
-
-    Returns (view (out,out,C), box (4,), params (4,)) where box = (cx, cy, w, h)
-    with the
-    centre in [-1,1] and w,h the crop's linear fraction of the image.
-    """
+    """Produces one augmented view of one image via a single affine sampling grid (crop, rotation, flip, jitter).
+    Returns (view (out,out,C), box (cx, cy, w, h) with centre in [-1,1], params (theta, flipped, brightness, contrast))."""
     H, W, C = img.shape
     k = jax.random.split(key, 6)
     area = jax.random.uniform(k[0], (), minval=area_lo, maxval=area_hi)
@@ -147,19 +117,8 @@ def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
 
 
 def make_views_labeled(key, imgs, cfg):
-    """imgs: (B,H,W,C) float32 in [0,1].
-
-    Returns
-      Zin   : (V, B, input_dim) flattened augmented views, for the encoder
-      boxes : (V, B, 4) crop boxes (cx, cy, w, h) -- unused in Phase A, needed
-              for Phase B position conditioning
-      params: (V, B, 4) (theta, flipped, brightness, contrast_delta) -- only
-              probes.py reads these
-
-    `make_views` is the two-value training-path wrapper around this; keep the
-    training call sites on that one so the augmentation bookkeeping stays out
-    of the hot loop's signature.
-    """
+    """Generates cfg.n_views augmented views of imgs (B,H,W,C) and returns (Zin, boxes, params) stacked over views.
+    make_views is the two-value training-path wrapper around this."""
     B = imgs.shape[0]
     keys = jax.random.split(key, cfg.n_views * B).reshape(cfg.n_views, B, 2)
     fn = jax.vmap(lambda kk, im: _one_view(

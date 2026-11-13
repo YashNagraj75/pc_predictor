@@ -1,3 +1,6 @@
+# Dataset loaders (Galaxy10, MNIST, CIFAR-10) and augmentation: random affine
+# crop/flip/jitter views for multi-view self-supervised training, plus a
+# deterministic centre view for evaluation and a shuffled batch iterator.
 import os, struct, gzip
 from functools import partial
 import numpy as np
@@ -13,6 +16,7 @@ from jax.scipy.ndimage import map_coordinates
 # H5 read+resample ~60s; downsampled array cached as .npz (~3.9s reload). Delete .npz to force re-read.
 def load_galaxy10(root="../data", n_train=-1, n_test=2000, seed=0,
                   size=69, chunk=512):
+    """Returns (Xtr, ytr, Xte, yte) float32 Galaxy10 images in [0,1], downsampled and cached as .npz."""
     cache = os.path.join(root, "galaxy10", f"g10_{size}.npz")
     if os.path.exists(cache):
         z = np.load(cache)
@@ -32,6 +36,7 @@ def load_galaxy10(root="../data", n_train=-1, n_test=2000, seed=0,
 
 
 def _read_galaxy10_h5(root, size, chunk):
+    """Reads and bilinear-downsamples the raw Galaxy10 HDF5 file in chunks, returning (X, labs)."""
     import h5py
     path = os.path.join(root, "galaxy10", "Galaxy10_DECals_NoDuplicated.h5")
     with h5py.File(path, "r") as f:
@@ -45,10 +50,11 @@ def _read_galaxy10_h5(root, size, chunk):
     return X, labs
 
 
-# Returns (Xtr, ytr, Xte, yte); X float32 shape (N,28,28,1), scaled to [0,1]
 def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
+    """Returns (Xtr, ytr, Xte, yte); X float32 shape (N,28,28,1), scaled to [0,1]."""
     d = os.path.join(root, "MNIST", "raw")
     def rd(name):
+        """Reads and returns one IDX-format MNIST file (image or label set) as a numpy array."""
         p = os.path.join(d, name)
         p = p if os.path.exists(p) else p + ".gz"
         op = gzip.open if p.endswith(".gz") else open
@@ -67,6 +73,7 @@ def load_mnist(root="../data", n_train=-1, n_test=2000, seed=0):
 
 # Seeded random subsets (as load_galaxy10): the first 5000 MNIST test digits are the easier half (review DS-5).
 def _subsets(Xtr, ytr, Xte, yte, n_train, n_test, seed):
+    """Returns seeded random train/test subsets of the given sizes from Xtr/ytr/Xte/yte."""
     rng = np.random.default_rng(seed)
     pte, ptr = rng.permutation(len(Xte)), rng.permutation(len(Xtr))
     pte = pte[:n_test] if n_test > 0 else pte
@@ -77,9 +84,11 @@ def _subsets(Xtr, ytr, Xte, yte, n_train, n_test, seed):
 # CIFAR-10 python batches (cifar-10-batches-py/) -> (N, 32, 32, 3) float32 in [0, 1].  Test = first n_test of the
 # official test batch, both as seeded random subsets (_subsets).
 def load_cifar10(root="../data", n_train=-1, n_test=2000, seed=0):
+    """Returns (Xtr, ytr, Xte, yte) float32 CIFAR-10 images in [0,1] as seeded random subsets."""
     import pickle
     d = os.path.join(root, "cifar10", "cifar-10-batches-py")
     def rd(name):
+        """Reads one CIFAR-10 pickled batch file, returning (images, labels)."""
         with open(os.path.join(d, name), "rb") as f:
             b = pickle.load(f, encoding="bytes")
         X = np.asarray(b[b"data"], np.uint8).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
@@ -91,6 +100,7 @@ def load_cifar10(root="../data", n_train=-1, n_test=2000, seed=0):
 
 
 def load_dataset(cfg):
+    """Dispatches to the loader matching cfg.dataset and returns (Xtr, ytr, Xte, yte)."""
     if cfg.dataset == "galaxy10":
         return load_galaxy10(cfg.root, cfg.n_train, cfg.n_test, cfg.seed)
     if cfg.dataset == "mnist":
@@ -107,6 +117,7 @@ def load_dataset(cfg):
 @partial(jax.jit, static_argnames=("out_size", "hflip"))
 def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
               hflip, brightness, contrast):
+    """Samples one random affine crop/flip/color-jitter view of img and returns (view, box, params)."""
     H, W, C = img.shape
     k = jax.random.split(key, 6)
     area = jax.random.uniform(k[0], (), minval=area_lo, maxval=area_hi)
@@ -141,6 +152,7 @@ def _one_view(key, img, out_size, area_lo, area_hi, max_rot,
 # params: (V,B,4) (theta, flipped, brightness, contrast_delta) -- only probes.py reads these
 # make_views is the 2-value training wrapper; keep training call sites on that one
 def make_views_labeled(key, imgs, cfg):
+    """Returns cfg.n_views augmented views of imgs, flattened, with their crop boxes and augmentation params."""
     B = imgs.shape[0]
     keys = jax.random.split(key, cfg.n_views * B).reshape(cfg.n_views, B, 2)
     fn = jax.vmap(lambda kk, im: _one_view(
@@ -160,6 +172,7 @@ def make_views_labeled(key, imgs, cfg):
 # Training-path view generation.
 # Returns (Zin, boxes). See make_views_labeled.
 def make_views(key, imgs, cfg):
+    """Returns (Zin, boxes): the training-path augmented views and their crop boxes."""
     views, boxes, _ = make_views_labeled(key, imgs, cfg)
     return views, boxes
 
@@ -168,6 +181,7 @@ def make_views(key, imgs, cfg):
 # Avoids contaminating probe metrics with augmentation noise.
 # Output shape: (B, input_dim).
 def eval_batch(imgs, cfg):
+    """Returns a flattened, unaugmented centre-resized evaluation batch, shape (B, input_dim)."""
     x = jax.image.resize(imgs, (imgs.shape[0], cfg.img_size, cfg.img_size,
                                 imgs.shape[-1]), method="bilinear")
     if cfg.grayscale and x.shape[-1] == 3:
@@ -177,6 +191,7 @@ def eval_batch(imgs, cfg):
 
 # Infinite shuffled batch iterator (numpy indexing, cheap).
 def batches(key, X, y, batch_size, n_steps):
+    """Yields (step, X_batch, y_batch) tuples of randomly sampled batches for n_steps."""
     n = len(X)
     for i in range(n_steps):
         key, sub = jax.random.split(key)

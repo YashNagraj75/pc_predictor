@@ -12,6 +12,7 @@ import data as D
 
 @dc.dataclass(frozen=True)              # frozen: hashable, so it can be a static jit argument
 class VCfg:
+    """Hyperparameters for the I-JEPA encoder/predictor model, masking, and training schedule."""
     img: int = 32
     patch: int = 4
     dim: int = 192
@@ -41,14 +42,17 @@ class VCfg:
 
     @property
     def grid(self):
+        """Returns the number of patches per side."""
         return self.img // self.patch
 
     @property
     def ntok(self):
+        """Returns the total number of patch tokens per image."""
         return self.grid ** 2
 
     @property
     def pin(self):
+        """Returns the flattened patch input dimension (patch*patch*3 channels)."""
         return self.patch * self.patch * 3
 
 
@@ -59,33 +63,42 @@ CIFAR_STD = np.array([0.2470, 0.2435, 0.2616], np.float32)
 
 # ------------------------------------------------------------------ layers
 def _w(key, o, i):
+    """Returns a truncated-normal-initialised (o, i) weight matrix."""
     return 0.02 * jax.random.truncated_normal(key, -2.0, 2.0, (o, i))
 
 
 class Lin(eqx.Module):
+    """A linear layer with weight W and bias b."""
     W: jax.Array
     b: jax.Array
 
     def __init__(self, key, i, o):
+        """Initialises a Lin layer mapping i inputs to o outputs."""
         self.W, self.b = _w(key, o, i), jnp.zeros(o)
 
     def __call__(self, x):
+        """Returns x @ W^T + b."""
         return x @ self.W.T + self.b
 
 
 class LN(eqx.Module):
+    """A LayerNorm with learned scale g and shift b."""
     g: jax.Array
     b: jax.Array
 
     def __init__(self, d):
+        """Initialises LayerNorm parameters (unit scale, zero shift) for dimension d."""
         self.g, self.b = jnp.ones(d), jnp.zeros(d)
 
     def __call__(self, x):
+        """Returns the normalised, scaled and shifted x."""
         return _ln(x) * self.g + self.b
 
 
 def sincos_2d(g, d):                             # fixed 2D sin-cos table (I-JEPA / MAE), (1, g*g, d)
+    """Returns the fixed 2D sin-cos positional embedding table for a g x g grid and dimension d."""
     def one(pos, dd):
+        """Returns the 1D sin-cos embedding of pos at dimension dd."""
         om = 1.0 / 10000 ** (np.arange(dd // 2) / (dd / 2.0))
         o = np.outer(pos.ravel(), om)
         return np.concatenate([np.sin(o), np.cos(o)], 1)
@@ -94,12 +107,14 @@ def sincos_2d(g, d):                             # fixed 2D sin-cos table (I-JEP
 
 
 def _ln(x, eps=1e-6):
+    """Returns x normalised to zero mean and unit variance over the last axis."""
     mu = x.mean(-1, keepdims=True)
     return (x - mu) / jnp.sqrt(((x - mu) ** 2).mean(-1, keepdims=True) + eps)
 
 
 # Pre-LN transformer block, split into its two residual sublayers (attention, MLP) so ePC can put a node after each.
 class Block(eqx.Module):
+    """A pre-LN transformer block split into attention and MLP residual sublayers."""
     ln1: LN
     qkv: Lin
     proj: Lin
@@ -109,12 +124,14 @@ class Block(eqx.Module):
     heads: int = eqx.field(static=True)
 
     def __init__(self, key, d, heads, mlp):
+        """Initialises the attention and MLP sublayer parameters for dimension d."""
         k = jax.random.split(key, 4)
         self.ln1, self.qkv, self.proj = LN(d), Lin(k[0], d, 3 * d), Lin(k[1], d, d)
         self.ln2, self.fc1, self.fc2 = LN(d), Lin(k[2], d, mlp), Lin(k[3], mlp, d)
         self.heads = heads
 
     def attn(self, x, kvalid):                   # x (N, d) one sample; kvalid (N,) which tokens may be attended to
+        """Returns the masked multi-head self-attention output for one sample x."""
         N, d = x.shape
         q, k, v = jnp.split(self.qkv(self.ln1(x)), 3, -1)
         sh = lambda t: t.reshape(N, self.heads, d // self.heads)
@@ -124,29 +141,35 @@ class Block(eqx.Module):
         return self.proj(jnp.einsum("hnm,mhe->nhe", jax.nn.softmax(s, -1), v).reshape(N, d))
 
     def mlp(self, x):
+        """Returns the GELU MLP sublayer output for x."""
         return self.fc2(jax.nn.gelu(self.fc1(self.ln2(x)), approximate=False))
 
     def sub(self, j, x, kvalid):                 # sublayer j in {0: attention, 1: MLP}
+        """Returns the output of sublayer j (0 = attention, 1 = MLP) applied to x."""
         return self.attn(x, kvalid) if j == 0 else self.mlp(x)
 
 
 def patchify(img, p):                            # (H, W, 3) -> (H/p * W/p, p*p*3), row-major token order
+    """Returns img split into flattened p x p patches in row-major token order."""
     H, W, C = img.shape
     return img.reshape(H // p, p, W // p, p, C).transpose(0, 2, 1, 3, 4).reshape((H // p) * (W // p), p * p * C)
 
 
 def unpatchify(t, p, H, W):
+    """Reassembles patchify's flattened p x p patches back into an (H, W, C) image."""
     C = t.shape[-1] // (p * p)
     return t.reshape(H // p, W // p, p, p, C).transpose(0, 2, 1, 3, 4).reshape(H, W, C)
 
 
 class Encoder(eqx.Module):
+    """The ViT context/target encoder: patch embedding, sin-cos positions, transformer blocks, final LayerNorm."""
     embed: Lin
     pos: jax.Array
     blocks: list
     norm: LN
 
     def __init__(self, key, cfg):
+        """Initialises the patch embedding, positional table, transformer blocks, and final norm from cfg."""
         k = jax.random.split(key, cfg.depth + 2)
         lim = math.sqrt(6.0 / (cfg.pin + cfg.dim))   # xavier-uniform patch embedding, as MAE / I-JEPA (rev 7)
         self.embed = eqx.tree_at(lambda l: l.W, Lin(k[0], cfg.pin, cfg.dim), jax.random.uniform(k[0], (cfg.dim, cfg.pin), minval=-lim, maxval=lim))
@@ -155,6 +178,7 @@ class Encoder(eqx.Module):
         self.norm = LN(cfg.dim)
 
     def __call__(self, img, idx, valid, p):      # one image; tokens idx (N,), valid (N,) -> (N, dim)
+        """Encodes one image's selected, valid-masked tokens and returns their final-layer features."""
         x = (self.embed(patchify(img, p)) + jax.lax.stop_gradient(self.pos[0]))[idx]
         for b in self.blocks:
             x = x + b.attn(x, valid)
@@ -163,6 +187,7 @@ class Encoder(eqx.Module):
 
 
 class Predictor(eqx.Module):
+    """The I-JEPA predictor: mask-token transformer predicting target features from context."""
     inp: Lin
     pos: jax.Array
     mask_tok: jax.Array
@@ -172,6 +197,7 @@ class Predictor(eqx.Module):
     scale: float = eqx.field(static=True)
 
     def __init__(self, key, cfg, depth=None, width=None, heads=None, mlp=None, scaled=None):
+        """Initialises the predictor's input/output projections, position table, mask token, and blocks."""
         depth, width = depth or cfg.pdepth, width or cfg.pdim
         heads, mlp = heads or cfg.pheads, mlp or cfg.pmlp
         scaled = cfg.pscale if scaled is None else scaled
@@ -185,22 +211,27 @@ class Predictor(eqx.Module):
 
     @property
     def n_sub(self):
+        """Returns the number of residual sublayers (2 per block)."""
         return 2 * len(self.blocks)
 
     # The predictor as embed -> 2L residual sublayers -> head, for ePC: h_j = h_{j-1} + scale * f_j(h_{j-1}).
     def embed_(self, ctx, cidx, tidx):
+        """Returns the concatenated context and mask-token embeddings, each with their positional codes."""
         pos = jax.lax.stop_gradient(self.pos[0])
         xc = self.inp(ctx) + pos[cidx]
         xt = self.mask_tok[None] + pos[tidx]
         return jnp.concatenate([xc, xt], 0)
 
     def f(self, j, h, kvalid):
+        """Returns sublayer j's (attention or MLP) output on state h."""
         return self.blocks[j // 2].sub(j % 2, h, kvalid)
 
     def head(self, h, nt):
+        """Returns the predicted target features from the final nt rows of state h."""
         return self.out(self.norm(h[-nt:]))
 
     def __call__(self, ctx, cidx, cvalid, tidx, tvalid):
+        """Runs the full residual-sublayer stack on embedded context+targets and returns target predictions."""
         kvalid = jnp.concatenate([cvalid, tvalid])
         h = self.embed_(ctx, cidx, tidx)
         for j in range(self.n_sub):
@@ -210,6 +241,7 @@ class Predictor(eqx.Module):
 
 # ------------------------------------------------------------------ masks (numpy, per batch)
 def _block(rng, g, scale, aspect):
+    """Samples a random (height, width) block shape on a g x g grid from the given scale/aspect ranges."""
     s = rng.uniform(*scale); a = math.exp(rng.uniform(math.log(aspect[0]), math.log(aspect[1])))
     h = int(round(math.sqrt(s * g * g * a))); w = int(round(math.sqrt(s * g * g / a)))
     return min(max(h, 1), g), min(max(w, 1), g)
@@ -219,6 +251,7 @@ def _block(rng, g, scale, aspect):
 # per image, n_targets target blocks and one context block at random positions; context = context block minus all
 # targets.  Returns padded index arrays and validity flags: cidx/cvalid (B, ntok), tidx/tvalid (B, K, NT_MAX).
 def sample_masks(rng, B, cfg):
+    """Samples I-JEPA multi-block context/target masks and returns padded (cidx, cvalid, tidx, tvalid)."""
     g, K = cfg.grid, cfg.n_targets
     while True:
         th, tw = _block(rng, g, cfg.t_scale, cfg.t_aspect)
@@ -245,38 +278,46 @@ def sample_masks(rng, B, cfg):
 
 # ------------------------------------------------------------------ loss, EMA, training
 def targets_of(tenc, imgs, tidx, cfg):           # layer-normed target-encoder features at the target tokens (B, K, NT, dim)
+    """Returns layer-normed target-encoder features at the target token indices, shape (B, K, NT, dim)."""
     allidx = jnp.arange(cfg.ntok); allv = jnp.ones(cfg.ntok, bool)   # imgs are already standardised
     t = _ln(jax.vmap(lambda im: tenc(im, allidx, allv, cfg.patch))(imgs))
     return jax.vmap(lambda tb, ib: tb[ib])(t, tidx)
 
 
 def predict_all(enc, pred, imgs, cidx, cvalid, tidx, tvalid, cfg):
+    """Encodes context then predicts all target blocks for a batch of images, vmapped over batch and blocks."""
     def one(im, ci, cv, ti, tv):
+        """Encodes one image's context and predicts its target blocks."""
         z = enc(im, ci, cv, cfg.patch)
         return jax.vmap(lambda a, b: pred(z, ci, cv, a, b))(ti, tv)
     return jax.vmap(one)(imgs, cidx, cvalid, tidx, tvalid)
 
 
 def masked_mse(P, Y, tvalid):                    # 0.5 x mean squared error over valid target tokens and feature dims
+    """Returns 0.5 x mean squared error between P and Y over valid target tokens and feature dims."""
     m = tvalid[..., None].astype(P.dtype)
     return 0.5 * jnp.sum(m * (P - Y) ** 2) / (jnp.sum(m) * P.shape[-1])
 
 
 def loss_fn(trainable, tenc, imgs, cidx, cvalid, tidx, tvalid, cfg):
+    """Returns the masked MSE loss between predicted and (stop-gradient) target-encoder features."""
     enc, pred = trainable
     Y = jax.lax.stop_gradient(targets_of(tenc, imgs, tidx, cfg))
     return masked_mse(predict_all(enc, pred, imgs, cidx, cvalid, tidx, tvalid, cfg), Y, tvalid)
 
 
 def ema_update(tenc, enc, m):
+    """Returns the target encoder updated by exponential moving average toward the context encoder at rate m."""
     return jax.tree_util.tree_map(lambda t, c: m * t + (1.0 - m) * c, tenc, enc)
 
 
 def wd_mask(tree):                               # weight decay on weight matrices only
+    """Returns a pytree of booleans marking which leaves (weight matrices) get weight decay."""
     return jax.tree_util.tree_map(lambda x: x.ndim == 2, tree)
 
 
 def optimiser(cfg, steps_per_epoch):
+    """Returns (optax optimiser, total steps) for a clipped AdamW with warmup-cosine schedule."""
     total = cfg.epochs * steps_per_epoch
     sch = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, max(1, cfg.warmup * steps_per_epoch), total, cfg.lr * 1e-3)
     return optax.chain(optax.clip_by_global_norm(cfg.clip), optax.adamw(sch, weight_decay=cfg.wd, mask=wd_mask)), total
@@ -284,27 +325,33 @@ def optimiser(cfg, steps_per_epoch):
 
 @jax.jit
 def _augment(key, X):                            # area crop 0.3-1 (square), flip, bilinear to 32 px (data._one_view)
+    """Applies a random crop/flip augmented view to each image in X."""
     ks = jax.random.split(key, X.shape[0])
     return jax.vmap(lambda k, im: D._one_view(k, im, im.shape[0], 0.3, 1.0, 0.0, True, 0.0, 0.0)[0])(ks, X)
 
 
 def augment(rng, X):
+    """Returns an augmented view of numpy batch X, keyed from a numpy RNG."""
     return _augment(jax.random.PRNGKey(int(rng.integers(0, 2 ** 31 - 1))), jnp.asarray(X))
 
 
 def standardise(X):
+    """Returns X normalised by the CIFAR-10 per-channel mean and std."""
     return (X - CIFAR_MEAN) / CIFAR_STD
 
 
 def init(cfg):
+    """Returns freshly initialised (context encoder, predictor, target encoder) for cfg."""
     k1, k2 = jax.random.split(jax.random.PRNGKey(cfg.seed))
     enc = Encoder(k1, cfg)
     return enc, Predictor(k2, cfg), enc          # context encoder, predictor, target encoder (= copy at init)
 
 
 def make_step(cfg, opt):
+    """Returns a jitted step() function performing one gradient update plus EMA target update."""
     @eqx.filter_jit
     def step(trainable, tenc, ost, imgs, cidx, cvalid, tidx, tvalid, m):
+        """Computes the loss and gradient, updates (enc, pred), and EMA-updates the target encoder."""
         loss, g = eqx.filter_value_and_grad(loss_fn)(trainable, tenc, imgs, cidx, cvalid, tidx, tvalid, cfg)
         upd, ost = opt.update(g, ost, eqx.filter(trainable, eqx.is_inexact_array))
         trainable = eqx.apply_updates(trainable, upd)
@@ -315,32 +362,38 @@ def make_step(cfg, opt):
 # ------------------------------------------------------------------ evaluation
 @eqx.filter_jit
 def _feat(e, x, ntok, patch):
+    """Returns mean-pooled full-image encoder features for a batch x."""
     idx, v = jnp.arange(ntok), jnp.ones(ntok, bool)
     return jax.vmap(lambda im: e(im, idx, v, patch).mean(0))(x)
 
 
 def features(enc, X, cfg, chunk=500):            # mean-pooled encoder features of whole (standardised) images
+    """Returns mean-pooled encoder features of standardised images X, computed in chunks."""
     return np.concatenate([np.asarray(_feat(enc, jnp.asarray(standardise(X[i:i + chunk])), cfg.ntok, cfg.patch))
                            for i in range(0, len(X), chunk)])
 
 
 @eqx.filter_jit
 def _tokfeat(e, x, ntok, patch):
+    """Returns layer-normed per-token encoder features for a batch x."""
     idx, v = jnp.arange(ntok), jnp.ones(ntok, bool)
     return jax.vmap(lambda im: _ln(e(im, idx, v, patch)))(x)
 
 
 def pos_share(enc, X, cfg):                      # share of (layer-normed) token-feature variance explained by position alone
+    """Returns the share of token-feature variance explained by position alone."""
     T = np.asarray(_tokfeat(enc, jnp.asarray(standardise(X)), cfg.ntok, cfg.patch))      # (B, ntok, dim)
     return float(np.var(T.mean(0), axis=0).sum() / np.var(T.reshape(-1, T.shape[-1]), axis=0).sum())
 
 
 def eff_rank(F):
+    """Returns the effective rank (exponential of the participation-ratio entropy) of feature matrix F."""
     s = np.linalg.svd(F - F.mean(0), compute_uv=False); pr = s ** 2 / np.sum(s ** 2)
     return float(np.exp(-np.sum(pr * np.log(pr + 1e-12))))
 
 
 def knn_both(Ftr, ytr, Fte, yte):                # cosine kNN on raw and on train-mean-centred features (review F3)
+    """Returns cosine-kNN accuracy on raw and on train-mean-centred features."""
     import metrics as MT
     mu = Ftr.mean(0)
     return {"knn": MT.knn_accuracy(Ftr, ytr, Fte, yte, k=20), "knn_centred": MT.knn_accuracy(Ftr - mu, ytr, Fte - mu, yte, k=20)}
@@ -350,6 +403,7 @@ def knn_both(Ftr, ytr, Fte, yte):                # cosine kNN on raw and on trai
 # must beat the best of 3 random inits and raw pixels by >= 0.05 on centred kNN and on a linear probe, reach an absolute
 # linear-probe floor of 0.55, and show no collapse (effective rank >= 0.1 dim, min/median dimension std >= 0.05).
 def gate_report(tenc, cfg, Xtr, ytr, Xte, yte):
+    """Evaluates the trained target encoder against random-init/raw-pixel baselines and returns the V0 gate report."""
     import probes as PR
     out = {"n_train": int(len(Xtr)), "n_test": int(len(Xte))}
     encs = [("trained", tenc)] + [(f"random_init_{r}", Encoder(jax.random.PRNGKey(cfg.seed + 1000 + r), cfg)) for r in range(3)]
@@ -371,12 +425,14 @@ def gate_report(tenc, cfg, Xtr, ytr, Xte, yte):
 
 # ------------------------------------------------------------------ main
 def _fsync_replace(tmp, path):
+    """Fsyncs tmp to disk then atomically renames it to path."""
     with open(tmp, "rb") as f:
         os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
 def save_ckpt(path, state, step):                # step lives inside the pytree; previous checkpoint kept (review N5)
+    """Checkpoints state and step to path after verifying all weights are finite, keeping the previous checkpoint."""
     leaves = [x for x in jax.tree_util.tree_leaves(eqx.filter(state, eqx.is_inexact_array))]
     assert all(bool(jnp.all(jnp.isfinite(x))) for x in leaves), "refusing to checkpoint non-finite weights"
     tmp = path + ".tmp"; eqx.tree_serialise_leaves(tmp, (state, jnp.int32(step))); 
@@ -386,10 +442,12 @@ def save_ckpt(path, state, step):                # step lives inside the pytree;
 
 
 def save_json(path, obj):
+    """Writes obj as JSON to path via a fsynced temp-file rename."""
     tmp = path + ".tmp"; json.dump(obj, open(tmp, "w"), indent=1); _fsync_replace(tmp, path)
 
 
 def train(cfg, out_dir, log_every=200, ckpt_every_epochs=5, knn_every_epochs=25):
+    """Trains the I-JEPA encoder/predictor, checkpointing and logging to out_dir; returns the final gate report."""
     os.makedirs(out_dir, exist_ok=True)
     Xtr, ytr, Xte, yte = D.load_cifar10(n_train=cfg.n_train, n_test=-1, seed=0)
     spe = len(Xtr) // cfg.batch

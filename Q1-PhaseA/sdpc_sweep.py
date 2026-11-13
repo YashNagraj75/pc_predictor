@@ -1,3 +1,4 @@
+# Grid sweep (lambda, beta, decay) for the sparse-dictionary PC predictor on the frozen BP latents; appends to pred_runs/sdpc_sweep.json.
 import sys, json, itertools, time; sys.path.insert(0, ".")
 import numpy as np, pred_ff as PF, pred_sdpc as S, pred_eval as PE
 ztr, ttr, *_ = PF.load("pred_latents.npz", "bp", "emb")

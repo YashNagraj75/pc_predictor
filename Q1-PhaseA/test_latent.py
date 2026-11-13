@@ -11,22 +11,27 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records cond into OK and prints a PASS/FAIL line for the named gate."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 class Lin:                                       # linear stub: per-view prediction A z, mean-pooled (known answers)
+    """Linear stub model used for known-answer tests: predicts A @ z per view."""
     kind = "F"
 
     def __init__(self, A):
+        """Stores the linear weight matrix A."""
         self.A = A
 
 
 def stub_contrib(m, Z, T, tte):
+    """Returns the Lin stub's per-view contributions A @ Z, broadcast over tte's target views."""
     return np.repeat((Z @ m.A.T)[:, :, None], tte.shape[1], 2)
 
 
 def known_answers():
+    """Runs known-answer checks for the geometry, shift, gain, influence, CKA and eff_rank statistics."""
     rng = np.random.default_rng(0); n, K, d = 400, 6, 16
     z = rng.standard_normal((n, 4, d)); P0 = z + 0.3 * rng.standard_normal(z.shape)
     g = LA.geometry(2 * P0, z); g0 = LA.geometry(P0, z)
@@ -61,6 +66,7 @@ def known_answers():
 
 
 def main(backbone, seeds, ref_json):
+    """Runs all latent_analysis gates against a backbone run and returns whether all checks passed."""
     known_answers()
     L_ = np.load("pred_latents.npz")
     raw = L_["bp_emb_tr"]; mu, sd = raw.reshape(-1, 128).mean(0), raw.reshape(-1, 128).std(0) + 1e-6

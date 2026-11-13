@@ -9,15 +9,18 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records cond into OK and prints a PASS/FAIL line for the named gate."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def flat(t):
+    """Flattens a pytree's inexact-array leaves into a single 1D array."""
     return jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
 
 
 def cos(a, b):
+    """Returns the cosine similarity between two pytrees' flattened parameters."""
     a, b = flat(a), flat(b)
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30))
 
@@ -63,6 +66,7 @@ x1, y1 = x[:1], y[:1]; a1 = R.scalings(params, x1, cp)
 h1 = R.activities(params, x1, cp)[:-1]
 fl = jnp.concatenate([v.ravel() for v in h1])
 def e_flat(v):
+    """Reshapes a flat vector v back into activity list h1 and returns the PC energy."""
     out, i = [], 0
     for u in h1:
         out.append(v[i:i + u.size].reshape(u.shape)); i += u.size

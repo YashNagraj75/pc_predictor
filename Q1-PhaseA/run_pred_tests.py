@@ -1,3 +1,5 @@
+# Trains or loads a latent predictor (sdpc, bpset, ff, ffres, or a mean-copy baseline), evaluates it on clean,
+# k-seen, T_inf-sweep, and corruption-robustness test cases, and writes the results to a JSON file.
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
@@ -6,9 +8,8 @@ import pred_ff as PF, pred_eval as PE, pred_sdpc as S, pred_bpset as B, pred_ffr
 CORR = [("noise", 0.1), ("noise", 0.2), ("occlude", 0.25)]
 
 
-# Re-encode test views with the first seen view corrupted.
-# Standardise like pred_ff.load.
 def corrupted_latents(backbone, zstats, seen_first, seed=0):
+    """Re-encodes test views with the first seen view corrupted, standardised the same way as pred_ff.load."""
     import data as D, encoder as E
     from run_probes import load_run
     d0 = np.load("pred_latents.npz")
@@ -28,6 +29,7 @@ def corrupted_latents(backbone, zstats, seen_first, seed=0):
 
 
 def main():
+    """Parses CLI args, trains/loads the chosen predictor, runs the test suite, and saves results to JSON."""
     ap = argparse.ArgumentParser()
     ap.add_argument("method", choices=["sdpc", "bpset", "ff", "ffres", "copy"])
     ap.add_argument("--backbone", default="bp"); ap.add_argument("--seed", type=int, default=0)

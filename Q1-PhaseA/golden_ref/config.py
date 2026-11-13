@@ -1,10 +1,6 @@
-"""Phase A configuration.  Every knob for both arms lives here; nothing else
-   should hard-code a hyperparameter.
-
-Defaults for the SIGReg block are taken from LeJEPA Algorithm 1 and Table 1(a).
-Defaults for the encoder block mirror the mu_pc.ipynb notebook so the existing
-muPC machinery transfers unchanged.
-"""
+# Phase A configuration. Every knob for both arms lives here; nothing else should hard-code a hyperparameter.
+# Defaults for the SIGReg block are taken from LeJEPA Algorithm 1 and Table 1(a); encoder defaults mirror
+# mu_pc.ipynb so the existing muPC machinery transfers unchanged.
 from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional, Tuple
 import json
@@ -12,6 +8,7 @@ import json
 
 @dataclass(frozen=True)
 class DataCfg:
+    """Data loading and view-augmentation settings for Phase A (dataset, image size, crop/color augmentation)."""
     dataset: Literal["galaxy10", "mnist"] = "galaxy10"
     root: str = "../data"
     img_size: int = 32              # all views resized to this; FC encoder needs fixed dim
@@ -36,6 +33,7 @@ class DataCfg:
 
     @property
     def input_dim(self) -> int:
+        """Returns the flattened pixel dimension for the configured image size and channel count."""
         c = 1 if self.grayscale else 3
         return self.img_size * self.img_size * c
 
@@ -66,14 +64,11 @@ class SIGRegCfg:
 @dataclass(frozen=True)
 class PCCfg:
     """Predictive-coding inference (relaxation) settings."""
-    T: int = 16                     # inference steps per weight update.
-                                    # THE independent variable of this study.
-    # PER-SAMPLE activity step (the paper's eta_h).  Replaces the old
-    # `activity_lr`, which was applied straight to jpc's BATCH-MEAN energy
-    # gradient and so realised eta_h/B per sample: at activity_lr=0.5,
-    # batch_size=256 the realised step was 0.002 against a stable optimum near
-    # 0.25, and the relaxation never left its initialisation.  pcalm.relax
-    # multiplies this by the batch size.  Set it from diag_inference.py.
+    T: int = 16                     # inference steps per weight update; THE independent variable of this study.
+    # Per-sample activity step (paper's eta_h), replacing the old activity_lr (applied to jpc's batch-mean
+    # energy gradient, so realised eta_h/B per sample: at activity_lr=0.5, batch=256 that was 0.002 against
+    # a stable optimum near 0.25, and relaxation never left init). pcalm.relax multiplies this by batch size.
+    # Set it from diag_inference.py.
     eta_h: float = 0.25
     # --- augmented Lagrangian (PC-ALM) ---------------------------------
     # alpha = 0 is plain PC: the duals stay zero and the energy collapses to
@@ -85,19 +80,16 @@ class PCCfg:
                                         # output_energy_scaling); None == 1
     weight_credit_timing: Literal["pre_dual", "post_dual"] = "pre_dual"
     init: Literal["feedforward", "zeros"] = "feedforward"
-    # How the output node is driven when the loss is not a per-sample target.
-    #   "coupled" : eps_out = dL/dz_out recomputed every relaxation step from the
-    #               current batch.  Exact, but couples samples -> the energy is
-    #               no longer a sum of per-sample energies.
-    #   "frozen"  : eps_out = dL/dz_out computed ONCE from the feedforward
-    #               embeddings and held fixed for all T steps.  Factorises over
-    #               the batch.  Direct analogue of the `fixed_prediction`
-    #               assumption.  <-- build and test BOTH.
+    # How the output node is driven when the loss isn't a per-sample target: "coupled" recomputes eps_out =
+    # dL/dz_out from the current batch each step (exact, but couples samples so the energy is no longer a
+    # per-sample sum); "frozen" computes it once from the feedforward embeddings and holds it fixed for all
+    # T steps (factorises over the batch, like fixed_prediction). Build and test both.
     output_drive: Literal["coupled", "frozen"] = "coupled"
 
 
 @dataclass(frozen=True)
 class OptCfg:
+    """Optimizer and training-schedule settings: Adam LR, batch size, step count, warmup, and weight decay."""
     param_lr: float = 1e-3
     batch_size: int = 256           # Table 1(c): 256-512 best
     n_steps: int = 2000
@@ -114,6 +106,7 @@ class OptCfg:
 
 @dataclass(frozen=True)
 class RunCfg:
+    """Top-level config for one Phase A run: arm, SIGReg/projector toggles, and the nested sub-configs."""
     arm: Literal["bp", "pc"] = "pc"
     use_sigreg: bool = True         # False -> invariance only (collapse control)
     # "bn": parameterless BatchNorm over the pooled (V*B) axis before BOTH
@@ -130,6 +123,7 @@ class RunCfg:
 
     @property
     def name(self) -> str:
+        """Returns a run name built from the arm, SIGReg toggle, and (for pc) the T/output_drive settings."""
         bits = [self.arm, "sigreg" if self.use_sigreg else "nosigreg"]
         if self.arm == "pc":
             bits += [f"T{self.pc.T}", self.pc.output_drive]
@@ -138,15 +132,15 @@ class RunCfg:
         return "_".join(bits)
 
     def to_json(self, path=None):
+        """Serialises this config to a JSON string, optionally writing it to path, and returns that string."""
         s = json.dumps(asdict(self), indent=2, default=str)
         if path:
             open(path, "w").write(s)
         return s
 
 
-# The 2x2 (x2) grid Q1 actually needs.
 def q1_grid(**overrides):
-    """arm x use_sigreg -> the four Phase A runs.  See README section 'The runs'."""
+    """Returns the 2x2 arm x use_sigreg grid of Phase A runs, the four runs Q1 needs; see README 'The runs'."""
     out = []
     for arm in ("bp", "pc"):
         for use_sigreg in (True, False):

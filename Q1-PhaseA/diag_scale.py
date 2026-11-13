@@ -16,6 +16,7 @@ RUNS = ["runs/bp_sigreg_etafix_s0", "runs/bp_sigreg_e400"]
 
 
 def pick_backbone(Xte, raw_te):
+    """Finds a run whose backbone re-encodes the stored latents exactly; returns (run, cfg, params, rel_err)."""
     for r in RUNS:
         if not os.path.exists(r):
             continue
@@ -30,6 +31,7 @@ def pick_backbone(Xte, raw_te):
 
 
 def crops(cfg, X, area, key, chunk=500):
+    """Renders a random crop of the given area for each image and returns flattened pixels and tau features."""
     one = jax.vmap(lambda k, im: D._one_view(k, im, cfg.data.img_size, area, area, 0.0, False, 0.0, 0.0))
     pix, tau = [], []
     for i in range(0, len(X), chunk):
@@ -42,6 +44,7 @@ def crops(cfg, X, area, key, chunk=500):
 
 
 def load_G(depth, seed):
+    """Loads a trained amortised generative PC-ALM predictor (G) of the given depth and seed, with its eval rows."""
     base = f"pred_runs/tests_sep_fix/gpc_sep_d{depth}_amort_hp16_a1_k1_amort_c1_T2200_bp_s{seed}"
     d = json.load(open(base + ".json"))
     names = {f.name for f in dc.fields(G.GCfg)}
@@ -52,12 +55,14 @@ def load_G(depth, seed):
 
 
 def load_F(seed):
+    """Loads a trained residual feedforward PC-ALM predictor (F, depth 10, rho 16) for the given seed."""
     rc = RF.RCfg(arm="alm", depth=10, seed=seed, T=400, alpha=1.0, lr=0.01, rho=16.0)
     path = f"pred_runs/ffres_fix/ffres_almR16_d10_s{seed}.eqx"
     return RF.make_pair_predict(RF.load_model(path, rc), rc)
 
 
 def nmse_all_targets(predict, zc, tc, zte, tte, batch=500):
+    """Predicts all 4 target views from a crop latent and returns the NMSE-style metrics against them."""
     n = len(zte); P = []
     for i in range(0, n, batch):
         P.append(np.asarray(predict(zc[i:i + batch, None], tc[i:i + batch, None], tte[i:i + batch])))
@@ -67,6 +72,7 @@ def nmse_all_targets(predict, zc, tc, zte, tte, batch=500):
 
 
 def knn(ztr, ytr, z, y, k=20):
+    """Classifies z by cosine k-nearest-neighbour vote against (ztr, ytr) and returns accuracy against y."""
     a = ztr / np.linalg.norm(ztr, axis=1, keepdims=True); b = z / np.linalg.norm(z, axis=1, keepdims=True)
     pred = []
     for i in range(0, len(b), 500):
@@ -76,6 +82,7 @@ def knn(ztr, ytr, z, y, k=20):
 
 
 def main():
+    """Runs the crop-area scale sweep, evaluating OOD distance, kNN accuracy and predictor NMSE; writes OUT."""
     L = np.load("pred_latents.npz")
     raw_tr, raw_te = L["bp_emb_tr"], L["bp_emb_te"]
     ytr, yte = L["ytr"], L["yte"]

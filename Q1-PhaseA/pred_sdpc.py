@@ -1,3 +1,6 @@
+# Sparse deep predictive-coding (SDPC) dictionary predictor: a stack of
+# non-negative sparse-coded layers trained by alternating proximal-gradient
+# inference and dictionary updates.
 import argparse, dataclasses, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -8,6 +11,7 @@ SIZES = (256, 256, 256, 256, 128)
 
 @dataclasses.dataclass
 class SCfg:
+    """Hyperparameters for the sparse deep predictive-coding (SDPC) dictionary model."""
     backbone: str = "bp"
     seed: int = 0
     beta: float = 1.0
@@ -21,10 +25,12 @@ class SCfg:
 
 
 def phi(tau):
+    """Returns tau with a constant-1 feature appended along the last axis."""
     return jnp.concatenate([tau, jnp.ones(tau.shape[:-1] + (1,), tau.dtype)], -1)
 
 
 def init(key, d, sizes=SIZES):
+    """Returns a random, column-normalised dictionary stack of the given layer sizes."""
     ks = jax.random.split(key, len(sizes))
     D1 = jax.random.normal(ks[0], (d, sizes[0], 10))
     Ds = [D1] + [jax.random.normal(ks[l], (sizes[l - 1], sizes[l])) for l in range(1, len(sizes))]
@@ -32,18 +38,21 @@ def init(key, d, sizes=SIZES):
 
 
 def normalise(Ds):
+    """Returns Ds with every dictionary layer's columns rescaled to unit norm."""
     D1 = Ds[0] / (jnp.linalg.norm(Ds[0], axis=0, keepdims=True) + 1e-12)      # unit (d,) column per (k, p)
     return [D1] + [D / (jnp.linalg.norm(D, axis=0, keepdims=True) + 1e-12) for D in Ds[1:]]
 
 
 # a1 (b, n1), ph (b, m, 10) -> (b, m, d)
 def bottom(D1, a1, ph):
+    """Returns the predicted bottom-layer observation from code a1 and view params ph."""
     return jnp.einsum("dkp,bk,bmp->bmd", D1, a1, ph)
 
 
 # Per-image smooth energy, summed over the batch.
 # Z (b, k, d), Ph (b, k, 10); mask (b, k) of observed views.
 def smooth_energy(Ds, codes, Z, Ph, beta, mask=None):
+    """Returns the total smooth (non-sparsity) energy of codes against observations Z, summed over the batch."""
     eps = Z - bottom(Ds[0], codes[0], Ph)
     e = 0.5 * jnp.sum(eps ** 2, -1)
     if mask is not None:
@@ -57,6 +66,7 @@ def smooth_energy(Ds, codes, Z, Ph, beta, mask=None):
 # Gershgorin bound G_l per image for layer l, shape (b,) or scalar
 # step size = 0.9 / G_l
 def steps_per_layer(Ds, Ph, beta, mask=None):
+    """Returns the per-layer prox step sizes (0.9 / Gershgorin bound) for proximal gradient inference."""
     M = jnp.einsum("dkp,bmp->bmdk", Ds[0], Ph)                          # (b, m, d, n1) per-view bottom maps
     sq = jnp.sum(M ** 2, axis=(2, 3))                                    # Frobenius^2 >= spectral^2 (cheap, safe)
     if mask is not None:
@@ -75,6 +85,7 @@ def steps_per_layer(Ds, Ph, beta, mask=None):
 
 
 def infer(Ds, Z, Ph, cfg, mask=None, T=None, return_hist=False):
+    """Runs T proximal-gradient steps of sparse code inference and returns the final codes (and energy history)."""
     T = cfg.T_inf if T is None else T
     b = Z.shape[0]
     codes = [jnp.zeros((b, n)) for n in [Ds[0].shape[1]] + [D.shape[1] for D in Ds[1:]]]
@@ -83,9 +94,11 @@ def infer(Ds, Z, Ph, cfg, mask=None, T=None, return_hist=False):
     gfn = jax.grad(lambda c: smooth_energy(Ds, c, Z, Ph, cfg.beta, mask))
 
     def total(c):
+        """Returns the full objective (smooth energy plus L1 sparsity penalty) for codes c."""
         return smooth_energy(Ds, c, Z, Ph, cfg.beta, mask) + sum(lm * jnp.sum(jnp.abs(x)) for lm, x in zip(lams, c))
 
     def step(c, _):
+        """Applies one proximal gradient step to codes c and returns (new codes, objective value)."""
         g = gfn(c)
         c = [jnp.maximum(0.0, x - e[:, None] * gx - e[:, None] * lm) for x, gx, e, lm in zip(c, g, etas, lams)]
         return c, total(c)
@@ -96,12 +109,14 @@ def infer(Ds, Z, Ph, cfg, mask=None, T=None, return_hist=False):
 
 # Gradient of E w.r.t. the dictionaries at FIXED codes, batch mean.
 def dict_grads(Ds, codes, Z, Ph, cfg, mask=None):
+    """Returns dE/dD, the gradient of the smooth energy w.r.t. the dictionaries at fixed codes."""
     return jax.grad(lambda D: smooth_energy(D, codes, Z, Ph, cfg.beta, mask))(Ds)
 
 
 # Same computation, written as explicit local outer products.
 # Used as gate test target.
 def local_dict_grads(Ds, codes, Z, Ph, cfg):
+    """Returns dE/dD via explicit local outer products, matching dict_grads at fixed codes."""
     eps = Z - bottom(Ds[0], codes[0], Ph)                                # (b, k, d)
     g = [-jnp.einsum("bmd,bk,bmp->dkp", eps, codes[0], Ph)]
     for l in range(1, len(Ds)):
@@ -111,20 +126,24 @@ def local_dict_grads(Ds, codes, Z, Ph, cfg):
 
 
 def make_predict(Ds, cfg, T=None):
+    """Returns a predict(Zs, Ts, Tt) closure that infers codes from seen views and predicts target views."""
     @jax.jit
     def _p(Zs, Ts, Tt):
+        """Infers codes from seen views (Zs, Ts) and returns the predicted target-view observations."""
         codes = infer(Ds, Zs, phi(Ts), cfg, T=T)
         return bottom(Ds[0], codes[0], phi(Tt))
     return lambda Zs, Ts, Tt: _p(jnp.asarray(Zs), jnp.asarray(Ts), jnp.asarray(Tt))
 
 
 def train(cfg, ztr, ttr, verbose=True, eval_fn=None):
+    """Trains the SDPC dictionaries by alternating code inference and dictionary updates; returns (Ds, log)."""
     Ds = init(jax.random.PRNGKey(cfg.seed), ztr.shape[-1])
     opt = optax.adamw(optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 200, cfg.steps), weight_decay=cfg.wd)
     st = opt.init(Ds)
 
     @jax.jit
     def step(Ds, st, Z, T):
+        """Infers codes, updates the dictionaries by one optimiser step, and returns the new state and diagnostics."""
         Ph = phi(T)
         codes, hist = infer(Ds, Z, Ph, cfg, return_hist=True)
         g = [x / Z.shape[0] for x in dict_grads(Ds, codes, Z, Ph, cfg)]
@@ -149,4 +168,5 @@ def train(cfg, ztr, ttr, verbose=True, eval_fn=None):
 
 
 def n_params(Ds):
+    """Returns the total number of scalar parameters across all dictionary layers."""
     return int(sum(np.prod(D.shape) for D in Ds))

@@ -1,3 +1,6 @@
+# Trains sparse PC/BP configs over a sweep of cases/arms and logs health
+# diagnostics (support counts, embedding spread, relaxation movement) per step
+# to track representation collapse.
 import argparse
 import dataclasses
 import json
@@ -21,6 +24,7 @@ _FIXED = {}
 
 
 def _spread(v):
+    """Returns 1 minus the median cosine similarity of rows of v to their mean, as a spread measure."""
     v = np.asarray(v, np.float64)
     m = v.mean(0)
     c = (v @ m) / (np.linalg.norm(v, axis=1) * np.linalg.norm(m) + 1e-12)
@@ -28,6 +32,7 @@ def _spread(v):
 
 
 def _fixed_batch(cfg, B):
+    """Returns a cached fixed batch of views, sigreg directions, and key, building it on first call."""
     if "Zin" not in _FIXED:
         Xtr = D.load_dataset(cfg.data)[0]
         skey = jax.random.fold_in(jax.random.PRNGKey(cfg.opt.seed + 1), 0)
@@ -40,7 +45,9 @@ def _fixed_batch(cfg, B):
 
 
 def make_health(B_relax):
+    """Returns a health() function wrapping sparse.health with collapse diagnostics (spread, relax movement)."""
     def health(params, x, cfg):
+        """Returns the base health dict extended with sparsity/spread/relaxation-movement diagnostics."""
         out = dict(_health(params, x, cfg))
         if not SP.active(cfg):
             return out
@@ -82,6 +89,7 @@ def make_health(B_relax):
 
 
 def main():
+    """Parses CLI args, trains each case/arm combination, and logs health diagnostics to JSON."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--eval-every", type=int, default=10)

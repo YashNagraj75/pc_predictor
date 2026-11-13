@@ -5,12 +5,11 @@ jax.config.update("jax_default_matmul_precision", "highest")
 import diag_saccade as S, pred_gpc as G
 from diag_saccade import D, load_run
 
-# Follow-up to findings/31, inference only (user 2026-10-28), rev 2 after 3 reviews.  On the grid4 front end it adds
-#  - kNN class probe of the predicted target latents (cosine, k = 20, vs training backbone latents) for every row;
-#  - precision-weighted pools, weight w_i / (delta_i + LAM median delta): delta by leave-one-latent-out ('pw') and by
-#    leave-one-GLIMPSE-out ('pwg', siblings removed), plus shuffled-precision and occlusion-oracle controls;
-#  - planner 'ig' (each glimpse: unexplained error x fraction removed by later evidence) with ig_shuf / ior controls;
-#  - frozen BP on 1..192 whole views (same weights), and the PC-G weights under BP's own inference ('map').
+# Follow-up to findings/31 (inference only; rev 2 after 3 reviews). Adds to the
+# grid4 front end: a kNN class probe (cosine, k=20) on predicted latents; precision
+# -weighted pools (leave-one-latent/-glimpse-out 'pw'/'pwg', + shuffled/oracle
+# controls); planner 'ig' (unexplained error x evidence removed later, ig_shuf/ior);
+# frozen BP on 1..192 whole views, and PC-G weights under BP's own inference ('map').
 KS = [1, 2, 4, 8, 16, 32]
 KV = [1, 3, 6, 12, 24, 48, 96, 192]
 POLICIES = ["random", "epi", "epi_shuf", "ig", "ig_shuf", "ior", "bu"]
@@ -21,7 +20,9 @@ ROWS = 65536                                   # multiple of 8192 (make_predict_
 
 
 class KNN:
+    """k-NN classifier (cosine similarity, k=20) against flattened training latents, used to score predictions."""
     def __init__(self, ztr, ytr, k=20):
+        """Builds the k-NN index from training latents ztr/ytr (flattened across views)."""
         assert int(ytr.max()) < 10
         a = ztr.reshape(-1, ztr.shape[-1]).astype(np.float32)
         self.a = jnp.asarray(a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-12))
@@ -30,19 +31,23 @@ class KNN:
             (b / (jnp.linalg.norm(b, axis=1, keepdims=True) + 1e-12)) @ a.T, k)[1]], 10).sum(1), 1))
 
     def predict(self, Q, ch=512):
+        """Predicts labels for Q by cosine k-NN vote, batching and zero-padding to avoid recompiles."""
         Q = np.asarray(Q, np.float32); n = len(Q); pad = (-n) % ch
         Q = np.concatenate([Q, np.zeros((pad, Q.shape[1]), np.float32)])
         return np.concatenate([np.asarray(self._f(jnp.asarray(Q[i:i + ch]), self.a, self.y)) for i in range(0, len(Q), ch)])[:n]
 
     def correct(self, P, yte):                  # (n, 4, d) -> (n, 4) bool, plus predicted labels
+        """Returns per-(image, target-view) correctness against yte, and the predicted labels."""
         lab = self.predict(P.reshape(-1, P.shape[-1])).reshape(P.shape[0], -1)
         return lab == yte[:, None], lab
 
     def __call__(self, P, yte):
+        """Returns the mean k-NN accuracy of predictions P against labels yte."""
         return float(np.mean(self.correct(P, yte)[0]))
 
 
 def ff(model, z, ta, tb):                       # F on every (latent a, target tau b) pair: (n,a,d),(n,a,9),(n,b,9) -> (n,a,b,d)
+    """Evaluates model F on every (latent, target tau) pair and returns predictions shaped (n, A, B, d)."""
     n, A, B = z.shape[0], z.shape[1], tb.shape[1]
     zr = np.repeat(z[:, :, None], B, 2).reshape(-1, z.shape[-1]); tar = np.repeat(ta[:, :, None], B, 2).reshape(-1, 9)
     tbr = np.repeat(tb[:, None], A, 1).reshape(-1, 9)
@@ -55,27 +60,28 @@ def ff(model, z, ta, tb):                       # F on every (latent a, target t
     return out.reshape(n, A, B, -1)
 
 
-# A set of seen latents with multiplicities w_i (peripheral counted once per glimpse, as in MPC), group ids g_i
-# (glimpse index; whole views and the peripheral latent are their own groups), and occluded fractions o_i.
-# Per latent: contribution c_i (G: amortiser embedding; F: predictions of the 4 targets); for F also
-# R_i = sum_{j != i} w_j f(z_j, tau_j, tau_i) and I_i (same-group part), so leave-out errors cost O(new x all).
 class LPool:
+    """Pools seen latents (with multiplicities/group ids/occlusion and cached leave-one-out sums) and predicts from them."""
     def __init__(self, model, tte):
+        """Initializes an empty latent pool for the given model and test-time target taus tte."""
         self.m, self.tte, self.n = model, tte, len(tte)
         self.Z = self.T = self.C = self.R = self.I = self.Fp = None
         self.w = np.zeros(0); self.g = np.zeros(0, int); self.o = np.zeros((self.n, 0)); self.peri = None
 
     def pred_at(self, t):                       # current pooled prediction of latents at taus t; F also returns pairs
+        """Returns the current pooled prediction at target taus t (F also returns the per-latent pair predictions)."""
         if self.m.kind == "G":
             return self.m.readout(self.mean_c(), t), None
         o2n = ff(self.m, self.Z, self.T, t)
         return np.einsum("j,njbd->nbd", self.w, o2n) / self.w.sum(), o2n
 
     def mean_c(self, wts=None):
+        """Returns the per-image weighted mean of latent contributions C under weights wts (defaults to self.w)."""
         wts = np.broadcast_to(self.w, (self.n, len(self.w))) if wts is None else wts
         return np.einsum("nj,nj...->n...", wts, self.C) / wts.sum(1).reshape((-1,) + (1,) * (self.C.ndim - 2))
 
     def add(self, z, t, gid, occ=None, o2n=None):
+        """Adds m new latents (z, t) to the pool under group id gid, updating the cached leave-one-out sums for 'F' models."""
         m = z.shape[1]
         c = self.m.embed(z, t) if self.m.kind == "G" else ff(self.m, z, t, self.tte)
         if self.m.kind == "F":
@@ -98,19 +104,23 @@ class LPool:
         self.o = np.concatenate([self.o, np.zeros((self.n, m)) if occ is None else occ], 1)
 
     def set_peri(self, idx):
+        """Marks index idx as the peripheral latent and caches its leave-it-out contribution for 'F' models."""
         self.peri = idx
         if self.m.kind == "F":
             self.Fp = ff(self.m, self.Z[:, idx:idx + 1], self.T[:, idx:idx + 1], self.T)[:, 0]; self.Fp[:, idx] = 0.0
 
     def bump_peri(self):
+        """Doubles the peripheral latent's weight after the first glimpse, updating the cached 'F' sum."""
         self.w[self.peri] += 1
         if self.m.kind == "F":
             self.R = self.R + self.Fp
 
     def _err(self, zh, idx):
+        """Returns the per-image squared error between predicted zh and the stored latents at idx."""
         return np.sum((zh - self.Z[:, idx]) ** 2, -1)
 
     def loo(self):                              # leave-one-latent-out squared error, (n, N)
+        """Returns the leave-one-latent-out squared prediction error for every latent, shape (n, N)."""
         W = self.w.sum()
         if self.m.kind == "G":
             S_ = np.einsum("j,njm->nm", self.w, self.C)
@@ -121,6 +131,7 @@ class LPool:
         return self._err(zh, slice(None))
 
     def loo_group(self):                        # leave-one-GROUP-out error of every latent, (n, N)
+        """Returns the leave-one-group-out squared prediction error for every latent, shape (n, N)."""
         W = self.w.sum(); out = np.zeros((self.n, len(self.w)))
         if self.m.kind == "G":
             S_ = np.einsum("j,njm->nm", self.w, self.C)
@@ -135,6 +146,7 @@ class LPool:
         return out
 
     def glimpse_err(self, gid):                 # mean leave-glimpse-out error of glimpse gid, (n,)
+        """Returns the mean leave-this-glimpse-out squared error for glimpse gid, shape (n,)."""
         idx = np.where(self.g == gid)[0]; W = self.w.sum() - self.w[idx].sum()
         if self.m.kind == "G":
             S_ = np.einsum("j,njm->nm", self.w, self.C) - np.einsum("j,njm->nm", self.w[idx], self.C[:, idx])
@@ -144,6 +156,7 @@ class LPool:
         return np.mean(self._err(zh, idx), 1)
 
     def weights(self, mode, rng=None):          # per-image pooling weights (n, N), multiplicities included
+        """Returns per-image pooling weights (n, N) for mode ('mean'/'oracle'/'pw'/'pwg'/'pwg_shuf')."""
         if mode == "mean" or len(self.w) < 2:
             return np.broadcast_to(self.w, (self.n, len(self.w))).copy()
         if mode == "oracle":
@@ -155,14 +168,13 @@ class LPool:
         return self.w[None] * p
 
     def predict(self, mode="mean", rng=None):
+        """Returns the pooled prediction at tte under the given weighting mode, and the weights used."""
         wts = self.weights(mode, rng); c = self.mean_c(wts)
         return (self.m.readout(c, self.tte) if self.m.kind == "G" else c), wts
 
 
-# ig: glimpse j gets (unexplained error e_j, whole glimpse left out) x (fraction of its arrival error removed by
-# later evidence, r_j).  The newest glimpse has no later evidence: it gets the image's mean r over older glimpses,
-# so all glimpses are on one scale (review DESIGN F3).
 def ig_weights(dpre, pool, k):
+    """Returns the 'ig' planner score per glimpse: unexplained error x fraction removed by later evidence."""
     e = np.stack([pool.glimpse_err(j) for j in range(k)], 1)
     r = np.clip(1.0 - e / (dpre[:, :k] + 1e-12), 0.0, 1.0)
     r[:, k - 1] = r[:, :k - 1].mean(1)
@@ -170,10 +182,12 @@ def ig_weights(dpre, pool, k):
 
 
 def finite(P):
+    """Returns True iff every value in P is finite."""
     return bool(np.all(np.isfinite(P)))
 
 
 def score(P, zte, yte, knn, per=None, key=None):
+    """Scores predictions P against zte/yte (NMSE, kNN accuracy at latent and image-majority level)."""
     if not finite(P):
         return {"nmse": None, "knn": None, "n_nonfinite": int(np.sum(~np.isfinite(P)))}
     m, sq = S.metrics(P, zte); ok, lab = knn.correct(P, yte)
@@ -185,6 +199,7 @@ def score(P, zte, yte, knn, per=None, key=None):
 
 
 def wdiag(wts, pool, occ_on):                   # weight diagnostics: ESS fraction, peripheral share, occluded mass
+    """Returns weight diagnostics: effective-sample-size fraction, peripheral share, and occluded mass."""
     w = wts / wts.sum(1, keepdims=True)
     out = {"ess_frac": float(np.mean(1.0 / np.sum(w ** 2, 1) / w.shape[1]))}
     if pool.peri is not None:
@@ -196,6 +211,7 @@ def wdiag(wts, pool, occ_on):                   # weight diagnostics: ESS fracti
 
 
 def run_saccades(model, Zc, Tc, tte, zte, yte, X, geom, policy, Kmax, occ, rng, knn, ks=None, per=None, key=""):
+    """Runs one saccade policy for Kmax glimpses, pooling predictions under several weighting modes and scoring them."""
     ks = ks or KS
     n, L, cr = len(zte), geom["L"], geom["crops"]
     bu = S.bottom_up(X, geom); sp = S.crop_specs()
@@ -250,6 +266,7 @@ def run_saccades(model, Zc, Tc, tte, zte, yte, X, geom, policy, Kmax, occ, rng, 
 
 
 def whole_pools(model, Zv, Tv, Bv, tte, zte, yte, knn, ks, occ, per=None, key=""):
+    """Pools whole-view latents up to max(ks) views and scores the pooled prediction under several weighting modes."""
     pool = LPool(model, tte); out = {}; prng = np.random.default_rng(11)
     modes = ["mean", "pw", "pwg_shuf"] + (["oracle"] if occ is not None else [])
     for v in range(max(ks)):
@@ -263,15 +280,18 @@ def whole_pools(model, Zv, Tv, Bv, tte, zte, yte, knn, ks, occ, per=None, key=""
 
 
 class GMap:                                     # PC-trained G weights under BP's own inference (review DESIGN F5)
+    """Wraps PC-trained G weights to run under BP's own ('map') inference."""
     kind = "Gmap"
 
     def __init__(self, g):
+        """Builds a BP-inference predictor from a PC-trained generator g's weights."""
         self.cfg = dc.replace(g.cfg, rule="bp", start="zero", belief="pc")
         self.p, self.seed = g.p, g.seed
         self.predict = G.make_predict(self.p, None, self.cfg)
 
 
 def attach_bpg(m, name):
+    """Loads and attaches the BP-trained config/weights for model name onto m (for the T-vs-4T convergence check)."""
     import equinox as eqx
     d, s = int(name.split("_d")[1].split("_")[0]), int(name.rsplit("_s", 1)[1])
     base = f"pred_runs/tests/gpc_bp_d{d}_zero_bp_s{s}"
@@ -281,6 +301,7 @@ def attach_bpg(m, name):
 
 
 def _bp_predict(m, Zv, Tv, tte, k, batch=250, T=None):
+    """Predicts targets from k views via the model's own inference ('BPg'/'Gmap') or mean of per-view predictions ('BPf')."""
     if m.kind in ("BPg", "Gmap"):               # own inference (joint MAP over the k views)
         pr = m.predict if T is None else G.make_predict(m.p, None, m.cfg, T)
         return np.concatenate([np.asarray(pr(Zv[i:i + batch, :k], Tv[i:i + batch, :k], tte[i:i + batch])) for i in range(0, len(tte), batch)])
@@ -291,6 +312,7 @@ def _bp_predict(m, Zv, Tv, tte, k, batch=250, T=None):
 
 
 def clean_json(x):
+    """Recursively replaces non-finite floats with None so the result is JSON-serialisable with allow_nan=False."""
     if isinstance(x, float):
         return x if math.isfinite(x) else None
     if isinstance(x, dict):
@@ -301,10 +323,12 @@ def clean_json(x):
 
 
 def dump(res, path):
+    """Writes res to path as JSON atomically (writes to a temp file, then replaces)."""
     tmp = path + ".tmp"; json.dump(clean_json(res), open(tmp, "w"), indent=1, allow_nan=False); os.replace(tmp, path)
 
 
 def main():
+    """Runs the saccade/whole-view diagnostic across corruption conditions and models, scoring and dumping to --out."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="pred_runs/diag_saccade2.json"); ap.add_argument("--n", type=int, default=0)
     ap.add_argument("--kmax", type=int, default=32); ap.add_argument("--vmax", type=int, default=192)

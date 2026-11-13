@@ -16,15 +16,18 @@ LAB = dict(MODELS)
 
 
 def runs(depth, arm):
+    """Returns the loaded run records for a given depth and arm, sorted by seed."""
     return sorted([r for r in L.values() if r["depth"] == depth and r["arm"] == arm], key=lambda r: r["seed"])
 
 
 def val(depth, arm, fn):                       # mean, min, max over seeds (BP: 5 seeds; others: 1)
+    """Applies fn to each matching run and returns the across-seed mean, min, and max."""
     v = np.array([fn(r) for r in runs(depth, arm)], dtype=float)
     return v.mean(0), v.min(0), v.max(0)
 
 
 def save(fig, name):
+    """Saves a figure as both PNG and PDF under the findings directory."""
     fig.savefig(f"{HERE}/{name}.png", dpi=300, bbox_inches="tight"); fig.savefig(f"{HERE}/{name}.pdf", bbox_inches="tight")
 
 
@@ -121,6 +124,7 @@ ax.set_title("PC loses most in the\nfine directions (depth 10)", loc="left"); pa
 ax.legend(loc="upper left", fontsize=6, handlelength=1.2, bbox_to_anchor=(-0.02, 1.02))
 ax = axs[1]; ev = np.load(RAW + "/target_basis.npz")["ev"]
 def smooth(x, k=9):
+    """Returns a length-191-truncated moving average of x with window k."""
     x = np.asarray(x[:191]); return np.convolve(np.pad(x, k // 2, mode="edge"), np.ones(k) / k, mode="valid")
 b0, blo, bhi = val(10, "bp", lambda r: smooth(r["conds"]["clean"]["per_comp"]["slope"]))
 ax.fill_between(np.arange(1, 192), blo - b0, bhi - b0, color=COL["bp"], alpha=0.25, lw=0)
@@ -151,6 +155,7 @@ save(fig, "fig3_error_directions"); plt.close(fig)
 # ---------------------------------------------------------------- Figure 4: internal solution and class information
 fig, axs = plt.subplots(1, 3, figsize=(7.6, 2.7), gridspec_kw={"width_ratios": [1, 1.4, 1], "wspace": 0.42})
 def pair(ck, a, b):
+    """Returns the CKA value for run pair (a, b) regardless of stored key order."""
     return ck["pairs"].get(f"{a}|{b}") or ck["pairs"].get(f"{b}|{a}")
 for ax, depth, letter in ((axs[0], 6, "a"), (axs[1], 10, "b")):
     ck = CK[depth]; bps = [r["run"] for r in runs(depth, "bp")]

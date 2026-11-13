@@ -1,3 +1,6 @@
+# Feedforward (non-recurrent) predictor baselines over per-view latents: a BP-trained MLP, a plain-PC-trained MLP,
+# and a PC-ALM-trained MLP, all mapping a seen view's latent (+ time code) to a target view's latent. Includes the
+# pre-registered target-layer selection check and the PC/BP-equivalence gates.
 import argparse, dataclasses, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -12,6 +15,7 @@ PAIRS = [(a, b) for a in range(4) for b in range(4) if a != b]
 
 @dataclasses.dataclass
 class Cfg:
+    """Configuration for a feedforward predictor run: backbone/layer source, training rule (arm), and hyperparameters."""
     backbone: str = "bp"
     layer: str = "emb"
     arm: str = "bp"
@@ -30,6 +34,7 @@ class Cfg:
 
 # ------------------------------------------------------------------ data
 def load(path, backbone, layer):
+    """Loads and z-normalizes (by the train split) the per-view latents and time codes for one backbone/layer."""
     d = np.load(path)
     ztr, zte = d[f"{backbone}_{layer}_tr"].astype(np.float32), d[f"{backbone}_{layer}_te"].astype(np.float32)
     mu, sd = ztr.reshape(-1, ztr.shape[-1]).mean(0), ztr.reshape(-1, ztr.shape[-1]).std(0) + 1e-6
@@ -37,8 +42,8 @@ def load(path, backbone, layer):
             d["ytr"], d["yte"])
 
 
-# Returns X (N*12, in), Y (N*12, d), and (img, a, b) index arrays.
 def pairs(z, tau, use_tau=True):
+    """Builds all ordered (seen, target) view pairs per image as flat (X, Y) arrays, with image/view index arrays."""
     A = np.array([p[0] for p in PAIRS]); Bv = np.array([p[1] for p in PAIRS])
     za, zb = z[:, A], z[:, Bv]                                   # (N, 12, d)
     parts = [za] + ([tau[:, A], tau[:, Bv]] if use_tau else [])
@@ -50,10 +55,12 @@ def pairs(z, tau, use_tau=True):
 
 # ------------------------------------------------------------------ model
 def make(key, din, dout):
+    """Builds a feedforward MLP of the configured width/depth/activation mapping din to dout features."""
     return jpc.make_mlp(key, din, WIDTH, DEPTH, dout, ACT, use_bias=True, param_type="sp")
 
 
 def forward(model, x):
+    """Runs the batched forward pass of model on inputs x."""
     h = x
     for i, layer in enumerate(model):
         h = jax.vmap(layer)(h)
@@ -61,14 +68,18 @@ def forward(model, x):
 
 
 def bp_loss(model, x, y):
+    """Computes the mean squared prediction error of model on (x, y)."""
     return 0.5 * jnp.sum((y - forward(model, x)) ** 2) / x.shape[0]
 
 
 def bp_grads(model, x, y, cfg):
+    """Returns the backprop weight gradient of bp_loss on (x, y)."""
     return eqx.filter_grad(bp_loss)(model, x, y)
 
 
 def pc_grads(model, x, y, cfg, return_acts=False):
+    """Runs plain-PC activity relaxation for cfg.T steps and returns the resulting weight gradient.
+    Optionally also returns the relaxed activities and the energy history."""
     params = (model, None)
     acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
     B = x.shape[0]
@@ -82,6 +93,7 @@ def pc_grads(model, x, y, cfg, return_acts=False):
         eta = 0.9 / (1.0 + 2.0 * jnp.max(jnp.stack(sq)))
 
     def step(acts, _):
+        """Performs one PC activity-relaxation step on all but the clamped output layer."""
         g = list(jpc.compute_pc_activity_grad(params, acts, y, x=x, param_type="sp")[1])   # -> (energy, grads)
         new = [a - eta * B * ga for a, ga in zip(acts[:-1], g[:-1])] + [acts[-1]]
         return new, jpc.pc_energy_fn(params, new, y, x=x, param_type="sp")
@@ -91,17 +103,14 @@ def pc_grads(model, x, y, cfg, return_acts=False):
     return (g, acts, F) if return_acts else g
 
 
-# f_l(z_{l-1}) for every layer, same order as acts
-# jpc 'sp' mode: no scalings, no skips
 def _layer_preds(model, acts, x):
+    """Returns f_l(z_{l-1}) for every layer l, in the same order as acts."""
     return [jax.vmap(model[l])(x if l == 0 else acts[l - 1]) for l in range(len(model))]
 
 
-# PC-ALM augmented Lagrangian, completing-the-square form (pcalm.al_energy, rho=1), batch mean like jpc:
-# L = 1/(2B) [ sum_{l<L} ||r_l + lam_l||^2 + ||y - f_L(z_{L-1})||^2 ],  r_l = z_l - f_l(z_{l-1}).
-# Output clamped to target y, carries no multiplier (supervised PC-ALM, SakanaAI Algorithm 1).
-# duals = None or all zero reproduces jpc.pc_energy_fn exactly (gated).
 def alm_energy(model, acts, x, y, duals):
+    """Computes the PC-ALM augmented Lagrangian, with multipliers duals added to the hidden-layer residuals.
+    The output layer is clamped to y with no multiplier; duals=None (or zero) reproduces jpc.pc_energy_fn."""
     preds = _layer_preds(model, acts, x)
     r = [a - f for a, f in zip(acts[:-1], preds[:-1])] + [y - preds[-1]]
     if duals is not None:
@@ -109,11 +118,9 @@ def alm_energy(model, acts, x, y, duals):
     return 0.5 * sum(jnp.sum(ri ** 2) for ri in r) / x.shape[0]
 
 
-# PC-ALM weight gradient: T primal steps on L (same curvature-tracking step as plain-PC arm),
-# each followed by dual step lam_l += alpha * r_l, except after the last step.
-# Weights taken from L at the final state.
-# alpha = 0 reduces exactly to plain PC (pc_grads).
 def alm_grads(model, x, y, cfg, return_acts=False):
+    """Runs T PC-ALM primal/dual steps and returns the weight gradient at the final state (alpha=0 is pc_grads).
+    Optionally also returns the relaxed activities, energy history, and final multipliers."""
     acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
     B = x.shape[0]
     sq = [jnp.linalg.norm(jax.lax.stop_gradient(l.layers[1].weight if hasattr(l, "layers") else l.weight), 2) ** 2
@@ -123,6 +130,7 @@ def alm_grads(model, x, y, cfg, return_acts=False):
     gfn = jax.grad(lambda h, lam: alm_energy(model, h + [acts[-1]], x, y, lam))
 
     def step(carry, t):
+        """Performs one primal update, then a dual update except on the last step; scanned over t."""
         h, lam = carry
         g = gfn(h, lam)
         h = [a - eta * B * ga for a, ga in zip(h, g)]
@@ -138,16 +146,19 @@ def alm_grads(model, x, y, cfg, return_acts=False):
 
 
 def optimiser(cfg):
+    """Builds the Adam-with-warmup-cosine-decay optimiser used for training."""
     sched = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 200, cfg.steps)
     return optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(sched, weight_decay=cfg.wd))
 
 
 def _flat(g):
+    """Flattens a gradient pytree's inexact-array leaves into a single 1-D vector."""
     return jnp.concatenate([l.ravel() for l in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array))])
 
 
 # ------------------------------------------------------------------ eval
 def evaluate(model, z, tau, use_tau=True, copy=False, n_retr=2000):
+    """Evaluates a model (or the copy-view-A baseline) by nmse, cosine similarity, and view retrieval@1."""
     X, Y, img, A, Bv = pairs(z, tau, use_tau)
     if copy:
         P = X[:, :z.shape[-1]]
@@ -169,6 +180,7 @@ def evaluate(model, z, tau, use_tau=True, copy=False, n_retr=2000):
 
 # ------------------------------------------------------------------ train
 def train(cfg, data_path, verbose=True):
+    """Trains a feedforward predictor under cfg via minibatch SGD; returns (model, log, test metrics)."""
     ztr, ttr, zte, tte, _, _ = load(data_path, cfg.backbone, cfg.layer)
     if cfg.holdout:                                       # selection on held-out TRAIN images, never the test set
         nv = int(0.9 * len(ztr)); zte, tte, ztr, ttr = ztr[nv:], ttr[nv:], ztr[:nv], ttr[:nv]
@@ -181,6 +193,7 @@ def train(cfg, data_path, verbose=True):
 
     @eqx.filter_jit
     def step(model, st, x, y):
+        """Runs one BP/PC/PC-ALM training step; returns the updated model, optimiser state, grad norm, and loss."""
         g = gfn(model, x, y, cfg)
         gn = optax.global_norm(eqx.filter(g, eqx.is_inexact_array))
         upd, st = opt.update(g, st, eqx.filter(model, eqx.is_inexact_array))
@@ -212,6 +225,7 @@ def train(cfg, data_path, verbose=True):
 
 # ------------------------------------------------------------------ check
 def check(data_path, out="pred_target_check.json", steps=4000):
+    """Runs the pre-registered target-layer selection check across backbones/layers and writes the result JSON."""
     rows = []
     for bb in ("bp", "rand"):
         for layer in ("emb", "h7", "h3"):
@@ -240,6 +254,7 @@ def check(data_path, out="pred_target_check.json", steps=4000):
 
 # ------------------------------------------------------------------ gates
 def gates():
+    """Runs the PC/BP-equivalence sanity gates (small-error limit, zero-error fixed point, batch invariance)."""
     ok = True
     key = jax.random.PRNGKey(0)
     x = jax.random.normal(key, (64, 20)); y = jax.random.normal(jax.random.PRNGKey(1), (64, 8))
@@ -279,6 +294,7 @@ def gates():
 
 
 def alm_gates(model, x, y, leaves):
+    """Runs the PC-ALM sanity gates: equivalence to plain PC at alpha=0, and BP-matching at large output error."""
     ok = True
     cos = lambda a, b: float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
     acts = list(jpc.init_activities_with_ffwd(model, x, param_type="sp"))
@@ -336,13 +352,15 @@ if __name__ == "__main__":
 
 
 def load_model(path, din=146, dout=128, seed=0):
+    """Loads a saved feedforward model's weights into a freshly initialized model of the given shape."""
     return eqx.tree_deserialise_leaves(path, make(jax.random.PRNGKey(seed), din, dout))
 
 
-# pred_eval-compatible predict for k=1: zhat_t = g(z_A, tau_A, tau_t) for every target t.
 def make_pair_predict(model):
+    """Builds a pred_eval-compatible k=1 predict function: zhat_t = model(z_seen, tau_seen, tau_t) for each t."""
     f = eqx.filter_jit(lambda x: forward(model, x))
     def predict(Zs, Ts, Tt):
+        """Predicts every target view's latent from the single seen view (Zs, Ts) and the target times Tt."""
         Zs, Ts, Tt = np.asarray(Zs), np.asarray(Ts), np.asarray(Tt)
         assert Zs.shape[1] == 1, "the feedforward predictor takes exactly one seen view"
         m = Tt.shape[1]

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Rerun of the residual feedforward PC-ALM predictor at depth 10 with the GPU numerics fix (E1 trained on wrong
-# compiled gradients, findings/27).  User decision 2026-10-25: pre-registered selection + a separate rho = 16 arm.
-#   A  (pre-registered): alpha {0.25, 1} x T {20, 100} x lr {1e-3, 3e-3, 1e-2}, rho 1, on the 90/10 holdout; 3 seeds of the winner
-#   R16 (new arm, from the credit check): rho 16, alpha 1, T 400, lr {1e-3, 3e-3, 1e-2} on the holdout; 3 seeds of the winner
-# No BP is trained (frozen-reference rule); the old residual BP reference is invalid, so no same-network BP comparison.
+# compiled gradients, findings/27). Decision 2026-10-25: pre-registered selection (arm A: alpha/T/lr grid, rho 1)
+# plus a new rho=16 arm (R16: alpha 1, T 400, lr grid); each arm picks a holdout-nmse winner, trained for 3 seeds.
+# No BP is trained (frozen-reference rule); the old residual BP reference is invalid.
 #   bash job_ffres_alm_fix.sh <project_root> <job_dir>
 set -uo pipefail
 P="$1"; JOBDIR=$(readlink -f "$2"); cd "$P/Q1-PhaseA" || exit 2
@@ -11,7 +10,9 @@ PY=../.venv/bin/python
 export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.12
 export NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_autotune_level=0
 PAR=${PAR:-2}; ST=ffresfix_status.txt; FS=pred_runs/ffres_fix_sel; FR=pred_runs/ffres_fix; TF=pred_runs/tests_ffres_fix; LG=pred_runs/logs_ffresfix
+# Appends a timestamped status line to $ST.
 note() { echo "$(date +%m-%d_%H:%M) $*" | tee -a $ST; }
+# Tars the job outputs (excluding .eqx checkpoints) into $JOBDIR; registered to run on EXIT.
 collect() { tar czf "$JOBDIR/q1_ffresfix.tar.gz" --exclude='*.eqx' $ST $FS $FR $TF $LG ffresfix_audit.json ffresfix_gates.log 2>/dev/null || true; }
 trap collect EXIT
 mkdir -p $FS $FR $TF $LG
@@ -22,6 +23,7 @@ python3 -c "
 import json,sys; c=json.load(open('ffresfix_audit.json'))['cases']; print({k:round(v.get('cos',-1),5) for k,v in c.items()})
 sys.exit(1 if any('error' in v or v['cos']<0.999 for v in c.values()) else 0)" >> $ST || { note "AUDIT GATE FAILED"; exit 4; }
 note "gates and audit passed"
+# Builds a shell command string that runs pred_ffres.py with args $1, logging its exit code and $2 to $ST.
 ff() { echo "$PY -W ignore pred_ffres.py $1 > $LG/$(basename $2 .json).log 2>&1; rc=\$?; echo \$(date +%m-%d_%H:%M) rc=\$rc $2 >> $ST"; }
 { for lr in 0.001 0.003 0.01; do
     for T in 20 100; do for A in 0.25 1.0; do o=$FS/A_T${T}_a${A}_lr$lr.json; [ -f $o ] || ff "--arm alm --depth 10 --T $T --alpha $A --lr $lr --holdout --out $o" $o; done; done
@@ -41,6 +43,7 @@ json.dump(out, open("pred_runs/ffres_fix_sel/selected.json", "w"), indent=1)
 print({k: (v["T"], v["alpha"], v["lr"], v["rho"], round(v["val_nmse"], 4)) for k, v in out.items()})
 PYEOF
 note "selected: $(python3 -c "import json;d=json.load(open('$FS/selected.json'));print({k:(v['T'],v['alpha'],v['lr'],v['rho'],round(v['val_nmse'],4),v['edge_lr']) for k,v in d.items()})")"
+# Prints the python expression $1 evaluated against the selected.json dict.
 jg() { python3 -c "import json;print(json.load(open('$FS/selected.json'))$1)"; }
 { for arm in A R16; do T=$(jg "['$arm']['T']"); A=$(jg "['$arm']['alpha']"); L=$(jg "['$arm']['lr']"); RH=$(jg "['$arm']['rho']")
     for s in 0 1 2; do o=$FR/ffres_alm${arm}_d10_s$s.json; [ -f $o ] || ff "--arm alm --depth 10 --seed $s --T $T --alpha $A --lr $L --rho $RH --save --out $o" $o; done; done; } > $LG/runs.txt

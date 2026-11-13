@@ -9,30 +9,36 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records a named pass/fail check (updates OK[0]) and prints the result with any info."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
 def flat(t):
+    """Flattens all inexact-array leaves of a pytree into one 1-D array."""
     return jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
 
 
 def cos(a, b):
+    """Returns the cosine similarity between two pytrees' flattened leaves."""
     a, b = flat(a), flat(b); return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30))
 
 
 def rel(a, b):
+    """Returns the relative L2 difference between a and b, flattening pytrees as needed."""
     a, b = flat(a) if not isinstance(a, jax.Array) else a.ravel(), flat(b) if not isinstance(b, jax.Array) else b.ravel()
     return float(jnp.linalg.norm(a - b) / (jnp.linalg.norm(b) + 1e-30))
 
 
 def batch(cfg, B, seed=0):
+    """Samples a random image batch and view context/target masks for the given ViT config."""
     rng = np.random.default_rng(seed)
     X = jnp.asarray(rng.random((B, cfg.img, cfg.img, 3), dtype=np.float32))
     return X, tuple(jnp.asarray(a) for a in V.sample_masks(rng, B, cfg))
 
 
 def masks(cfg):
+    """Checks that sampled context/target masks are disjoint, in range, rectangular, and respect min_ctx."""
     rng = np.random.default_rng(1); bad = []
     for it in range(200):
         cidx, cvalid, tidx, tvalid = V.sample_masks(rng, 8, cfg)
@@ -48,6 +54,7 @@ def masks(cfg):
 
 
 def attention(cfg):
+    """Checks that Block.attn matches a per-head softmax-attention reference with masked (padded) keys."""
     blk = V.Block(jax.random.PRNGKey(0), 32, 4, 64)
     x = jax.random.normal(jax.random.PRNGKey(1), (10, 32)); kv = jnp.arange(10) < 7
     y = blk.attn(x, kv)
@@ -63,6 +70,7 @@ def attention(cfg):
 
 
 def patches(cfg):
+    """Checks that patchify/unpatchify round-trip exactly and that token 0 is the top-left patch."""
     X, _ = batch(cfg, 2)
     t = V.patchify(X[0], cfg.patch)
     check("patchify / unpatchify round trip exact; token 0 is the top-left patch",
@@ -70,6 +78,7 @@ def patches(cfg):
 
 
 def padding_and_ema(cfg):
+    """Checks that padded indices don't affect encoder/predictor outputs, and that EMA/masked_mse are correct."""
     enc, pred, tenc = V.init(cfg); X, (ci, cv, ti, tv) = batch(cfg, 4)
     z = enc(X[0], ci[0], cv[0], cfg.patch)
     ci2 = jnp.where(cv[0], ci[0], (ci[0] + 13) % cfg.ntok)
@@ -89,6 +98,7 @@ def padding_and_ema(cfg):
 
 
 def init_scale(cfg):                             # rev 7: content, not position, must dominate the target features at init
+    """Checks that the patch embedding is Xavier-scaled and position explains <50% of target-feature variance at init."""
     rng = np.random.default_rng(0)
     X = rng.random((256, cfg.img, cfg.img, 3), dtype=np.float32)
     enc, _, _ = V.init(cfg)
@@ -99,6 +109,7 @@ def init_scale(cfg):                             # rev 7: content, not position,
 
 
 def train_smoke(cfg):
+    """Checks that a short training run lowers the loss and that compiled and eager loss gradients agree."""
     enc, pred, tenc = V.init(cfg); X, (ci, cv, ti, tv) = batch(cfg, 32, seed=5)
     opt, _ = V.optimiser(dc.replace(cfg, warmup=0, epochs=1), 100)
     ost = opt.init(eqx.filter((enc, pred), eqx.is_inexact_array)); step = V.make_step(cfg, opt)
@@ -114,6 +125,7 @@ def train_smoke(cfg):
 
 
 def leafwise(g, gb):                             # per-leaf cosine and norm ratio over array leaves (review EPC F2)
+    """Returns (min per-leaf cosine, max per-leaf |norm ratio - 1|) between two gradient pytrees' array leaves."""
     out = []
     for a, b in zip(jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array)), jax.tree_util.tree_leaves(eqx.filter(gb, eqx.is_inexact_array))):
         nb = float(jnp.linalg.norm(b))
@@ -124,6 +136,7 @@ def leafwise(g, gb):                             # per-leaf cosine and norm rati
 
 
 def setup(pc, B=4, seed=7, trained=0):
+    """Builds a predictor, encoder context, and targets for the ePC gates, optionally BP-training the predictor first."""
     enc, pred, _ = V.init(pc); X, (ci, cv, ti, tv) = batch(pc, B, seed=seed)
     ctx = jax.vmap(lambda im, a, b: enc(im, a, b, pc.patch))(X, ci, cv)
     Y = V._ln(jax.random.normal(jax.random.PRNGKey(9), ti.shape + (pc.dim,)))
@@ -132,6 +145,7 @@ def setup(pc, B=4, seed=7, trained=0):
         opt = optax.adam(3e-3); st = opt.init(eqx.filter(pred, eqx.is_inexact_array))
         @eqx.filter_jit
         def stp(q, st):
+            """Takes one BP optimiser step on the predictor and returns the updated predictor and optimiser state."""
             g = P.grads(q, ctx, ci, cv, ti, tv, Y, "bp")[0]
             u, st = opt.update(g, st, eqx.filter(q, eqx.is_inexact_array)); return eqx.apply_updates(q, u), st
         for _ in range(trained):
@@ -140,6 +154,7 @@ def setup(pc, B=4, seed=7, trained=0):
 
 
 def epc_gates(cfg):
+    """Runs the ePC/sPC/ePC-ALM correctness gates (energy, stationarity, gradient agreement with BP) across configs."""
     for tag, pc, trained in (("depth 2, init", dc.replace(cfg, pdepth=2, pdim=64, pmlp=128, pheads=4, pscale=True), 0),
                              ("depth 6, trained 150 BP steps", dc.replace(cfg, pdepth=6, pdim=64, pmlp=128, pheads=4, pscale=True), 150)):
         pred, ctx, ci, cv, ti, tv, Y = setup(pc, trained=trained)
@@ -229,6 +244,7 @@ def epc_gates(cfg):
 
 
 def scale(cfg):                                  # real batch: memory and time per step (review N3/N4)
+    """Measures per-step time and peak memory for BP vs ePC gradients at training-scale batch size and depth."""
     cap = jax.devices()[0].memory_stats().get("bytes_limit", 0) if jax.devices()[0].platform == "gpu" else 0
     for depth in (6, 10):
         pc = dc.replace(cfg, pdepth=depth, pdim=192, pmlp=768, pheads=3, pscale=True)
@@ -248,6 +264,7 @@ def scale(cfg):                                  # real batch: memory and time p
 
 
 def main():
+    """Runs all ViT/ePC gates and returns True iff every check passed."""
     cfg = V.VCfg()
     masks(cfg); attention(cfg); patches(cfg); padding_and_ema(cfg); init_scale(cfg); train_smoke(cfg); epc_gates(cfg); scale(cfg)
     print("ALL PASS" if OK[0] else "SOME FAIL")

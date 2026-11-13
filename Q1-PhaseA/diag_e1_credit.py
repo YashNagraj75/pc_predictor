@@ -15,21 +15,27 @@ CKPTS = [("alm", 10, 0), ("alm", 10, 1), ("alm", 10, 2), ("pc", 10, 0), ("alm", 
 
 
 def flat(t):
+    """Flattens and concatenates all inexact array leaves of a pytree into a single 1D array."""
     return jnp.concatenate([v.ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
 
 
 def cos(u, v):
+    """Computes cosine similarity between two flattened arrays, with a small epsilon to avoid division by zero."""
     u, v = flat(u), flat(v)
     return float(u @ v / (jnp.linalg.norm(u) * jnp.linalg.norm(v) + 1e-30))
 
 
 def energy(params, h, x, y, u, a, rho):
+    """Computes the predictive-coding energy as a weighted sum of squared residual+dual terms plus output error.
+    Normalizes the result by batch size (x.shape[0])."""
     r = R.residuals(params, h, x, a)
     out = y - R.layer_pred(params, len(h), h[-1], a)
     return 0.5 * (rho * sum(jnp.sum((ri + ui) ** 2) for ri, ui in zip(r, u)) + jnp.sum(out ** 2)) / x.shape[0]
 
 
 def run(params, x, y, cfg, T, rho, alpha):
+    """Runs T steps of PC relaxation with dual-variable updates, then returns the stop-gradient params gradient.
+    Also returns the final activities, duals, residuals, and output error."""
     a = R.scalings(params, x, cfg)
     h0 = R.activities(params, x, cfg)[:-1]
     u0 = [jnp.zeros_like(v) for v in h0]
@@ -37,6 +43,8 @@ def run(params, x, y, cfg, T, rho, alpha):
     gfn = jax.grad(lambda h, u: energy(params, h, x, y, u, a, rho))
 
     def step(c, t):
+        """Updates the latent states h with a gradient step scaled by eta and B, then updates u with alpha-scaled residuals.
+        Leaves u unchanged on the final iteration (t == T - 1) and returns the new carry with no scan output."""
         h, u = c
         h = [v - eta * B * g for v, g in zip(h, gfn(h, u))]
         r = R.residuals(params, h, x, a)
@@ -51,23 +59,27 @@ def run(params, x, y, cfg, T, rho, alpha):
     return g, h, u, r, out
 
 
-# Run eagerly (the scan body is still compiled): under an outer eqx.filter_jit on the host GPU this function gave a
-# different state from the identical eager code (activities moved ~12x further; dbg 2026-10-25).
 def make_run(cfg):
+    """Builds a closure that runs the PC relaxation with fixed config, params, inputs, and schedule.
+    Call eagerly rather than under an outer jit: that previously made activities drift ~12x further."""
     return lambda params, x, y, T, rho, alpha: run(params, x, y, cfg, T, rho, alpha)
 
 
-# Does an outer filter_jit change the TRAINING gradient?  Same function, same inputs, compiled vs eager.
 def jit_check(params, x, y, cfg):
+    """Compares training gradients computed eagerly versus under an outer filter_jit, same inputs.
+    Returns the relative max difference and cosine similarity between the two gradients."""
     ge = R.grads(params, x, y, cfg)
     gj = eqx.filter_jit(lambda p, a, b: R.grads(p, a, b, cfg))(params, x, y)
     return {"rel_maxdiff": float(jnp.max(jnp.abs(flat(ge) - flat(gj))) / (jnp.max(jnp.abs(flat(ge))) + 1e-30)), "cos": cos(ge, gj)}
 
 
-# BP's error at each hidden activity: delta_l = dL_BP/dh_l, via additive perturbations of the forward pass.
 def bp_deltas(params, x, y, cfg):
+    """Computes BP's error signal delta_l = dL/dh_l at each hidden activity.
+    Uses additive perturbations of the forward pass and autodiff to obtain the gradient."""
     a = R.scalings(params, x, cfg)
     def loss(eps):
+        """Computes the sum-of-squares loss between target `y` and the prediction after adding `eps` perturbations at each layer.
+        Normalizes the result by the batch size `x.shape[0]`."""
         prev = x
         for l in range(len(params[0])):
             prev = R.layer_pred(params, l, prev, a) + (eps[l] if l < len(eps) else 0.0)
@@ -77,6 +89,8 @@ def bp_deltas(params, x, y, cfg):
 
 
 def main():
+    """Runs gate checks comparing BP gradients against PC-ALM relaxation across checkpoints and settings.
+    Logs per-row cosine/ratio/credit diagnostics over a (setting, rho, T) grid and saves results to OUT."""
     ztr, ttr, *_ = PF.load("pred_latents.npz", "bp", "emb")
     X, Y, *_ = PF.pairs(ztr, ttr, True)
     pidx = np.random.default_rng(999).integers(0, len(X), 512)       # the training run's fixed probe batch

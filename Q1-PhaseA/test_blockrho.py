@@ -9,27 +9,40 @@ import data as D, vit_ijepa as V, vit_epc as P, train_pred_vit as A
 # k) the per-block arm trains.  The decision is written to <out json> and to blockrho_decision.json next to it.
 ROOT, OLD, OUT = sys.argv[1:4]; OK = [True]; res = {"gates": [], "kappa": [], "screen": []}
 def check(n, c, info=""):
+    """Records a named gate result (pass/fail) and prints it."""
     OK[0] &= bool(c); res["gates"].append({"name": n, "pass": bool(c), "info": info}); print(f"  [{'PASS' if c else 'FAIL'}] {n}  {info}", flush=True)
-def leaves(t): return jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))
-def flat(t): return jnp.concatenate([v.ravel() for v in leaves(t)])
-def cos(a, b): a, b = flat(a), flat(b); return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
-def rel(a, b): a, b = flat(a), flat(b); return float(jnp.linalg.norm(a - b) / jnp.linalg.norm(b))
+def leaves(t):
+    """Returns the inexact-array leaves of pytree t."""
+    return jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))
+def flat(t):
+    """Returns a single flat vector of all inexact-array leaves of t."""
+    return jnp.concatenate([v.ravel() for v in leaves(t)])
+def cos(a, b):
+    """Returns the cosine similarity between flattened a and b."""
+    a, b = flat(a), flat(b); return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
+def rel(a, b):
+    """Returns the relative L2 error of a against b (flattened)."""
+    a, b = flat(a), flat(b); return float(jnp.linalg.norm(a - b) / jnp.linalg.norm(b))
 def leafcos(a, b):
+    """Returns the (min, median) per-leaf cosine similarity between a and b, skipping near-zero leaves of b."""
     cs = [float(jnp.sum(x * y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y) + 1e-30)) for x, y in zip(leaves(a), leaves(b)) if float(jnp.linalg.norm(y)) > 1e-12]
     return min(cs), float(np.median(cs))
 vc, enc, tenc, _ = A.load_encoders(os.path.join(ROOT, "Q1-PhaseA/runs_vit/v0_d6_s0"))
 SA = os.path.join(ROOT, "Q1-PhaseA/runs_vit/stageA")
 def load_pred(run):
+    """Loads and returns the saved epc_alm_k4 depth-10 predictor checkpoint for a given run name."""
     return eqx.tree_deserialise_leaves(os.path.join(SA, run, "predictor.eqx"), A.make_predictor(vc, A.ACfg(arm="epc_alm_k4", depth=10)))
 CK = {"alm_final": load_pred("epc_alm_k4_d10_lr3e-3_e25_full_s0_T10g4"), "bp_final": load_pred("bp_d10_lr3e-3_e25_full_s0")}
 pred = CK["alm_final"]
 Xtr, _, _, _ = D.load_cifar10(root=os.path.join(ROOT, "data"), n_train=-1, n_test=2000, seed=0)
 def batch(B, seed, X0=45000):
+    """Builds and returns a context/target batch (ctx, masks, targets Y) of size B from CIFAR-10."""
     rng = np.random.default_rng(seed); X = Xtr[X0:X0 + B]
     ci, cv, ti, tv = (jnp.asarray(x) for x in V.sample_masks(rng, B, vc))
     im = jnp.asarray(V.standardise(X)); ctx, Y = A.encode(enc, tenc, im, im, ci, cv, ti, vc)
     return ctx, ci, cv, ti, tv, Y
 def gains(p, b, it, chunk=8):                    # chunked over images (the GPU is shared with a training job)
+    """Returns the per-(image, block) Gauss-Newton gain estimate after it iterations, computed in chunks."""
     f = eqx.filter_jit(lambda q, *x: jax.vmap(lambda a, c1, v1, t1, w1: jax.vmap(lambda t2, w2: P.gain(q, a, c1, v1, t2, w2, gn_iters=it))(t1, w1))(*x))
     n = b[0].shape[0]; return jnp.concatenate([f(p, *(x[i:i + chunk] for x in b[:5])) for i in range(0, n, chunk)])
 
@@ -97,6 +110,7 @@ import pandas as pd
 S = pd.DataFrame(res["screen"]); M = S.groupby(["ckpt", "mode"])[["cos", "ratio", "min_leaf", "frac_energy_rise"]].mean()
 res["screen_mean"] = {f"{a}|{b}": v for (a, b), v in M.round(4).to_dict("index").items()}
 def passes(mode):
+    """Returns True iff mode clears the cos/ratio/min_leaf/energy-rise gates and beats the median rule by >= 0.05 cos."""
     ok = all(M.loc[(c, mode), "cos"] >= 0.9 and 0.8 <= M.loc[(c, mode), "ratio"] <= 1.2 and M.loc[(c, mode), "min_leaf"] > 0 and M.loc[(c, mode), "frac_energy_rise"] <= 0.01 for c in CK)
     d = S[(S.ckpt == "alm_final") & (S["mode"] == mode)].set_index("draw").cos - S[(S.ckpt == "alm_final") & (S["mode"] == "median")].set_index("draw").cos
     return ok and bool((d >= 0.05).all())

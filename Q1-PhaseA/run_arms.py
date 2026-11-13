@@ -1,3 +1,6 @@
+# CLI driver for Q1-PhaseA runs: parses arm/seed/sparse-case settings into one RunCfg per (seed, arm) pair,
+# refuses to overwrite existing run weights without --force, and trains each planned run in turn
+# (or, with --init-only, writes initial weights and config only, for the untrained-floor baseline).
 import argparse
 import os
 import sys
@@ -10,6 +13,7 @@ from train import train
 
 
 def main():
+    """Parses CLI args into a RunCfg per (seed, arm), then trains (or, with --init-only, just initializes) each."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=17200,
                     help="17200 = the 400-epoch budget the e400 rows used")

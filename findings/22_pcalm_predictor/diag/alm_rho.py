@@ -1,3 +1,5 @@
+# Compares ALM-vs-BP predictor gradients: runs ALM inference at several rho/T/k
+# settings and reports cosine similarity to the true BP gradient plus residual.
 import os, sys, json
 sys.path.insert(0, os.path.join(os.environ["PCP_ROOT"], "Q1-PhaseA"))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx, jpc, pred_ff as PF
@@ -8,10 +10,12 @@ idx = np.random.default_rng(123).integers(0, len(X), 512); x, y = jnp.asarray(X[
 L = lambda g: jnp.concatenate([l.ravel() for l in jax.tree_util.tree_leaves(eqx.filter(g, eqx.is_inexact_array))])
 cos = lambda a, b: float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
 def energy(m, acts, lam, rho):
+    """Returns the ALM augmented-Lagrangian energy for the given activities and multipliers."""
     preds = PF._layer_preds(m, acts, x)
     r = [a - f for a, f in zip(acts[:-1], preds[:-1])]
     return 0.5 * (rho * sum(jnp.sum((ri + li) ** 2) for ri, li in zip(r, lam)) + jnp.sum((y - preds[-1]) ** 2)) / x.shape[0]
 def run(m, rho, T, k):
+    """Runs T steps of ALM inference (dual update every k steps) and returns the BP-style gradient and residual."""
     acts = list(jpc.init_activities_with_ffwd(m, x, param_type="sp")); B = x.shape[0]; yl = acts[-1]
     sq = [jnp.linalg.norm(l.layers[1].weight if hasattr(l, "layers") else l.weight, 2) ** 2 for l in m[1:]]
     eta = 0.9 / (rho + 2.0 * max(rho, 1.0) * jnp.max(jnp.stack(sq)))

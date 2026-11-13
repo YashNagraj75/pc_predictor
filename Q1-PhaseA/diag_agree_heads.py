@@ -1,3 +1,7 @@
+# Diagnostic: compares PC vs BP gradients (cosine, magnitude ratio) on the
+# encoder, side-dictionary heads, and generative heads of sparse-case-D runs,
+# and reports the head-vs-task gradient-magnitude ratio on the encoder.
+
 import argparse
 import dataclasses
 import json
@@ -18,15 +22,18 @@ from run_probes import load_run
 
 
 def _cos(a, b):
+    """Returns the cosine similarity between two flattened arrays."""
     a, b = np.ravel(np.asarray(a)), np.ravel(np.asarray(b))
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
 
 
 def _n(x):
+    """Returns the L2 norm of x."""
     return float(jnp.linalg.norm(x))
 
 
 def batch(cfg, Xtr, step=0):
+    """Samples one batch of views, SIGReg sample directions, and a PRNG key for grad computation."""
     skey = jax.random.fold_in(jax.random.PRNGKey(cfg.opt.seed + 1), step)
     kb, kv, ka, kg = jax.random.split(skey, 4)
     idx = jax.random.choice(kb, len(Xtr), (cfg.opt.batch_size,), replace=False)
@@ -36,6 +43,7 @@ def batch(cfg, Xtr, step=0):
 
 
 def compare(params, cfg, Zin, A, kg):
+    """Compares PC vs BP gradients (cosine, norm ratio) on the encoder, dict heads, and generative heads."""
     cp, cb = dataclasses.replace(cfg, arm="pc"), dataclasses.replace(cfg, arm="bp")
     gp, aux = PA.grads(params, Zin, A, cp, kg)
     gb, _ = TR.bp_grads(params, Zin, A, cb)
@@ -53,6 +61,7 @@ def compare(params, cfg, Zin, A, kg):
 
 
 def analyse(run_dir, init=False, step=0):
+    """Loads a case-D run and compares PC vs BP gradients on the task and heads-only objectives."""
     cfg, params = load_run(run_dir)
     assert cfg.sparse.case == "D", run_dir
     if init:
@@ -78,6 +87,7 @@ def analyse(run_dir, init=False, step=0):
 
 
 def main():
+    """Runs analyse on each given run directory, prints a summary, and writes the results to JSON."""
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--init", action="store_true")

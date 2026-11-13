@@ -26,6 +26,7 @@ rng = np.random.default_rng(7); X = Xtr[45000:45256]
 ci, cv, ti, tv = (jnp.asarray(x) for x in V.sample_masks(rng, 256, vc))
 imgs = jnp.asarray(V.standardise(X)); ctxT, YT = A.encode(enc, tenc, imgs, imgs, ci, cv, ti, vc)
 def timed(f, *args):
+    """Times a function call, warming up once, and returns the median runtime over three trials."""
     jax.block_until_ready(f(*args)); ts = []
     for _ in range(3):
         t0 = time.time(); jax.block_until_ready(f(*args)); ts.append(time.time() - t0)

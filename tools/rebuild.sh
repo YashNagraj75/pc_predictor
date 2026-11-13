@@ -1,4 +1,5 @@
 #!/bin/bash
+# Rebuilds the project .venv from scratch under $PCP_ROOT with pinned JAX/equinox/optax/jpc versions.
 set -x
 ROOT=${PCP_ROOT:?set PCP_ROOT, see .env.example}
 case "$ROOT" in *pc_predictor) ;; *) echo "GUARD: refusing, unexpected ROOT"; exit 1;; esac

@@ -1,3 +1,8 @@
+# Gate suite for the sparse-layer arms (sparse.py / pcalm.py): case "none" must reproduce the pre-sparsity golden
+# reference bit for bit, then cases B (soft-threshold), C (LASSO dictionary), D (side heads) and E (reconstruction
+# anchor) are checked against their closed-form optima, batch invariance, and their BP controls. Run as a script
+# to execute every test and exit nonzero on any failure.
+
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def check(name, ok, detail=""):
+    """Prints a PASS or FAIL line for a named check, appending optional detail text.
+    Records the check in FAILED when it does not pass."""
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
     if not ok:
         FAILED.append(name)
@@ -34,15 +41,17 @@ _X = {}
 
 
 def _data():
+    """Loads and caches a 64-sample slice of the dataset in a module-level dict.
+    Returns the cached data on subsequent calls."""
     if "X" not in _X:
         _X["X"] = D.load_dataset(DataCfg())[0][:64]
     return _X["X"]
 
 
-# Tiny encoder: depth 4 -> L = 6 layers, width 16, on real images.
 def small(case="none", s=2, alpha=1.0, T=3, B=8, use_sigreg=True, projector="bn",
           beta=0.3, gamma=0.05, beta_g=1.0, eta=0.0625, below_hard=True, seed=0,
           normalise_fs=True, s_step=0.5):
+    """Builds a tiny 6-layer, width-16 encoder config and returns its params, input views, directions, and run config."""
     enc = EncoderCfg(depth=4, width=16, embed_dim=16)
     sp = SparseCfg(case=case, layer=s, beta=beta, gamma=gamma, beta_g=beta_g,
                    T_test=8, below_hard=below_hard, normalise_fs=normalise_fs,
@@ -58,21 +67,22 @@ def small(case="none", s=2, alpha=1.0, T=3, B=8, use_sigreg=True, projector="bn"
 
 
 def leaves(t):
+    """Converts the inexact-array leaves of a pytree into a list of numpy arrays."""
     return [np.asarray(x) for x in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))]
 
 
 def maxrel(a, b):
+    """Computes the maximum relative error between two arrays, using b as the reference.
+    Adds a small epsilon to the denominator to avoid division by zero."""
     a, b = np.asarray(a), np.asarray(b)
     return float(np.max(np.abs(a - b)) / (np.max(np.abs(b)) + 1e-30))
 
 
 # ------------------------------------------------ 1. original path unchanged
 
-# Checks case 'none' reproduces PRE-EDIT pcalm.relax/pcalm.grads bit for bit.
-# Reference regenerated on THIS machine via _golden_pcalm.py vs golden_ref/ (pre-sparsity pcalm/encoder/config).
-# Cross-machine refs are NOT bit-identical: CPU diffs appear in 7th sig digit (335.496826 vs 335.496857),
-# which failed the first GPU job's gates. Compare runs on the same machine to keep test strict.
 def test_golden_case_none():
+    """Verifies case 'none' reproduces pre-edit pcalm.relax/pcalm.grads bit for bit for alpha in (0.0, 1.0).
+    Regenerates the reference on this machine via _golden_pcalm.py since cross-machine refs differ in the 7th digit."""
     import subprocess, tempfile
     import _golden_pcalm as G
     with tempfile.TemporaryDirectory() as d:
@@ -94,6 +104,7 @@ def test_golden_case_none():
 
 
 def test_init_none_is_E_init():
+    """Checks that SP.init_params with no case falls back to E.init and produces identical parameter trees."""
     cfg = RunCfg()
     a = SP.init_params(jax.random.PRNGKey(3), cfg, cfg.data.input_dim)
     b = E.init(jax.random.PRNGKey(3), cfg.enc, cfg.data.input_dim)
@@ -103,6 +114,7 @@ def test_init_none_is_E_init():
 
 
 def test_old_config_json_loads_as_case_none():
+    """Tests that a config.json missing the "sparse" block loads with sparse.case set to "none"."""
     from run_probes import cfg_from_dict
     import json
     d = json.loads(RunCfg().to_json())
@@ -114,6 +126,8 @@ def test_old_config_json_loads_as_case_none():
 # --------------------------------------------- 2. architecture change vs jpc
 
 def test_architecture_change():
+    """Checks that case B/C removes the skip at the sparse layer and rescales its weight by sqrt(L), leaving other layers unchanged.
+    Verifies that the sparse layer's activation norm is now O(1) relative to the previous layer's, not suppressed by sqrt(L)."""
     params, Zin, A, cfg = small(case="B")
     base = E.init(jax.random.PRNGKey(0), cfg.enc, cfg.data.input_dim)
     s, L = cfg.sparse.layer, len(params[0])
@@ -133,8 +147,9 @@ def test_architecture_change():
     check("variance match: ||z_s|| / ||z_{s-1}|| is O(1)", 0.2 < r < 5.0, f"ratio={r:.3f}")
 
 
-# Residuals must equal jpc's energy evaluated on the modified net with skip[s]=None.
 def test_al_energy_matches_jpc_with_missing_skip():
+    """Checks that al_energy with skip=None matches jpc's energy function on the same activations.
+    Asserts the two values agree within a relative tolerance of 1e-5."""
     params, Zin, A, cfg = small(case="B")
     x = Zin[0]
     z, hs = E.forward(params, x, cfg.enc)
@@ -148,6 +163,8 @@ def test_al_energy_matches_jpc_with_missing_skip():
 
 
 def test_deploy_reduces_to_jpc_forward():
+    """Checks that SP.deploy matches E.forward when beta=0 or the beta_g dial is set to 0.
+    Verifies this holds for both case "B" and case "C" within a 1e-6 relative error tolerance."""
     for case, kw in (("B", dict(beta=0.0)), ("C", dict(beta_g=1.0))):
         params, Zin, A, cfg = small(case=case, normalise_fs=False, **kw)   # jpc has no norm
         z_j, hs_j = E.forward(params, Zin[0], cfg.enc)
@@ -164,6 +181,8 @@ def test_deploy_reduces_to_jpc_forward():
 # ---------------------------------------------------------- 3. case B maths
 
 def test_B_deploy_is_threshold():
+    """Tests that deployed activations at the sparse layer equal the soft threshold of f_s by beta/rho.
+    Checks the resulting active fraction matches this threshold relationship."""
     params, Zin, A, cfg = small(case="B", beta=0.3)
     acts, ex = SP.deploy(params, Zin[0], cfg)
     s = cfg.sparse.layer
@@ -173,9 +192,9 @@ def test_B_deploy_is_threshold():
           f"active frac={frac:.3f}")
 
 
-# Test-time fixed point with g_s = 0: iterating PC-B update on z_s alone
-# (gradient on rho/2||z - f||^2, then prox) must reach S_{beta/rho}(f).
 def test_B_prox_iteration_converges_to_closed_form():
+    """Iterates the PC-B gradient-then-prox update on z_s alone with g_s = 0.
+    Checks the fixed point converges to the closed-form soft-threshold S_{beta/rho}(f_s)."""
     params, Zin, A, cfg = small(case="B", beta=0.3)
     _, ex = SP.deploy(params, Zin[0], cfg)
     f = ex["f_s"]
@@ -187,11 +206,9 @@ def test_B_prox_iteration_converges_to_closed_form():
           f"rel err={err:.2e}")
 
 
-# beta=0, alpha=0: case B reduces to original PC relaxation on modified network
-# prox is identity and no multipliers exist in this case
 def test_B_beta0_equals_plain_relax():
-    # normalisation off and the layer-s step equal to eta_h: then case B is
-    # literally the old relaxation on the modified net
+    """Checks that case B relax with beta=0, alpha=0 matches the original PC relaxation on the same network.
+    Confirms the prox is identity and no multipliers arise, within a 1e-5 relative error tolerance."""
     params, Zin, A, cfg = small(case="B", beta=0.0, alpha=0.0, normalise_fs=False,
                                 s_step=0.0625)
     acts_b, _, hb = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -203,6 +220,8 @@ def test_B_beta0_equals_plain_relax():
 
 
 def test_layer_alphas():
+    """Tests that layer_alphas zeroes layer s for "hard" sparsity and all layers below s for "soft".
+    Verifies "none" sparsity mode leaves all layer alphas unchanged."""
     _, _, _, cfg = small(case="B", alpha=1.0)
     a = SP.layer_alphas(cfg, 6)
     _, _, _, cfg2 = small(case="B", alpha=1.0, below_hard=False)
@@ -215,6 +234,8 @@ def test_layer_alphas():
 
 
 def test_B_dual_at_s_stays_zero():
+    """Checks that dual variable lambda_s remains exactly zero at the sparse layer during relaxation.
+    Verifies that the dual at the next layer, lambda_{s+1}, grows nonzero as expected."""
     params, Zin, A, cfg = small(case="B", alpha=1.0, T=5)
     _, duals, _ = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
     s = cfg.sparse.layer
@@ -227,6 +248,8 @@ def test_B_dual_at_s_stays_zero():
 # ---------------------------------------------------------- 4. case C maths
 
 def test_ista_vs_fista_and_kkt():
+    """Checks that ISTA energy decreases monotonically with iteration count.
+    Verifies ISTA(5000) converges to the same energy as FISTA(3000) and that FISTA satisfies the KKT condition."""
     params, Zin, A, cfg = small(case="C", gamma=0.05)
     _, ex = SP.deploy(params, Zin[0], cfg)
     f, Dm, mu, g = ex["f_s"], SP.get_D(params), SP.lasso_mu(cfg), cfg.sparse.gamma
@@ -245,6 +268,8 @@ def test_ista_vs_fista_and_kkt():
 
 
 def test_ista_t0_is_one_step_from_zero():
+    """Checks that ista at step 0 matches one explicit ISTA step starting from a zero initial code.
+    Asserts the two results are numerically close within tolerance."""
     params, Zin, A, cfg = small(case="C")
     _, ex = SP.deploy(params, Zin[0], cfg)
     f, Dm, mu, g = ex["f_s"], SP.get_D(params), SP.lasso_mu(cfg), cfg.sparse.gamma
@@ -255,6 +280,8 @@ def test_ista_t0_is_one_step_from_zero():
 
 
 def test_blend_is_the_z_minimiser():
+    """Checks that the deployed z_s is the stationary point minimizing the blended quadratic energy.
+    Verifies the minimum equals the LASSO form with mu = rho*beta_g / (rho + beta_g)."""
     params, Zin, A, cfg = small(case="C")
     acts, ex = SP.deploy(params, Zin[0], cfg)
     s, Dm, rho, bg = cfg.sparse.layer, SP.get_D(params), cfg.pc.rho, cfg.sparse.beta_g
@@ -270,8 +297,9 @@ def test_blend_is_the_z_minimiser():
           f"{lhs:.6f} vs {rhs:.6f}")
 
 
-# alpha=0 removes dual ascent; with coupled output drive, F+L must not increase over relaxation (small step).
 def test_C_relax_descends_at_alpha0():
+    """Checks that with alpha=0 (no dual ascent), F+L is non-increasing across relaxation steps.
+    Asserts monotonic descent holds under coupled output drive with a small step size."""
     params, Zin, A, cfg = small(case="C", alpha=0.0, T=12, eta=0.02, use_sigreg=False,
                                 projector="none")
     _, _, h = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -282,6 +310,8 @@ def test_C_relax_descends_at_alpha0():
 
 
 def test_C_D_gradient_matches_analytic():
+    """Checks that the gradient w.r.t. D matches the analytic formula beta_g (D a - z_s) a^T / B, summed over views.
+    Fails the check if the relative error exceeds 1e-4."""
     params, Zin, A, cfg = small(case="C", alpha=1.0, T=3)
     g, aux = pcalm.grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
     acts, _, hist = pcalm.relax(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -294,6 +324,8 @@ def test_C_D_gradient_matches_analytic():
 
 
 def test_project_and_serialise():
+    """Tests that project() renormalizes dictionary columns to unit norm after scaling.
+    Tests that params serialize and deserialize via eqx round-trip to identical values."""
     params, Zin, A, cfg = small(case="C")
     p2 = SP.project((params[0], params[1], params[2] * 3.0), cfg)
     norms = jnp.linalg.norm(p2[2], axis=0)
@@ -309,10 +341,9 @@ def test_project_and_serialise():
 
 # ---------------------------------------------- 5. batch-size bookkeeping
 
-# Per-sample objective (SIGReg and BN projector off): sample 0's settled z_s and code
-# must not depend on batch size B.
-# Catches an eta_h * B leaking into a prox threshold or a code step.
 def test_batch_invariance():
+    """Checks that sample 0's settled sparse variable is invariant to batch size B.
+    Guards against an eta_h * B leak into a prox threshold or code step."""
     sizes = (2, 8, 32)
     for case in ("B", "C"):
         params, Zin_full, A, cfg = small(case=case, alpha=1.0, T=6, B=max(sizes),
@@ -332,6 +363,8 @@ def test_batch_invariance():
 # ------------------------------------------------------------ 6. controls
 
 def test_bp_controls():
+    """Tests that backprop gradients through the deployed network are finite and reach the sparse weight.
+    Checks dictionary gradients and head energy for case C, matching checks C1-B and C2."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, alpha=1.0)
         cfg = dataclasses.replace(cfg, arm="bp")
@@ -352,6 +385,8 @@ def test_bp_controls():
 
 
 def test_pc_grads_finite_and_logged():
+    """Checks that PC weight gradients are finite for cases B and C.
+    Verifies that aux dict logs F_first, active_frac, and act_growth."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, alpha=1.0, T=4)
         g, aux = TR.pc_grads(params, Zin, A, cfg, jax.random.PRNGKey(0))
@@ -362,9 +397,9 @@ def test_pc_grads_finite_and_logged():
               f"active={float(aux['active_frac']):.3f} act_growth={float(aux['act_growth']):.3f}")
 
 
-# BP controls differentiate task loss + deployed sparse-layer energy
-# Energy is SUMMED over views (not averaged) -- the bug all 3 reviewers found
 def test_control_objective_composition():
+    """Checks that the BP objective equals task loss plus the deployed sparse-layer energy summed over views.
+    Verifies the sum (not average) over views, matching the fix for the bug found by all three reviewers."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, alpha=1.0)
         cb = dataclasses.replace(cfg, arm="bp")
@@ -380,13 +415,12 @@ def test_control_objective_composition():
               ok, f"total={float(tot):.5f} task={float(task):.5f} sum_v head={head:.5f}")
 
 
-# PC arm vs BP control w/ task drive removed (identical views, SIGReg off): grads from sparse layer energy alone.
-# GATED on grad-norm ratios (separates bug class from correct code, seeds 0-4, measured 2026-10-07):
-# B, layers<=s: 0.73-1.36; C, dictionary: 0.57-0.64. Head energy avg over views would give ~4x those.
-# Cosines PRINTED not gated: seed-sensitive on 4-layer width-16 net (B 0.65-0.95; C w/ task drive 0.40-0.87); also image-split dependent.
-# Not measured: B w/ task drive (train at S(f_s+g_s/rho) vs C1-B at S(f_s)) -- case B's train/test gap, the hypothesis under test, not a bug.
 def test_pc_agrees_with_its_bp_control_below_s():
+    """Checks PC gradients match BP-control gradients on layers at or below the sparse layer, with task drive removed.
+    Gates on grad-norm ratios (B: 0.73-1.36, C dictionary: 0.57-0.64 across seeds 0-4), not on seed-sensitive cosines."""
     def cos(a, b):
+        """Computes the cosine similarity between two flattened arrays.
+        Adds a small epsilon to the denominator to avoid division by zero."""
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
     nrm = lambda x: float(jnp.linalg.norm(x))
@@ -413,9 +447,9 @@ def test_pc_agrees_with_its_bp_control_below_s():
               cos(gp[2], gb[2]) > 0.9 and 0.4 <= r <= 1.5, f"cos={cos(gp[2], gb[2]):.3f} ratio={r:.2f}")
 
 
-# Sparse layer's prediction is per-sample normalised to fs_norm,
-# consistently in BOTH the deployed network and the relaxation energy.
 def test_fs_normalisation():
+    """Verifies that the sparse layer's output f_s is normalised per sample to fs_norm.
+    Checks this holds consistently for the deployed network, the relaxation energy, and under W_s rescaling."""
     for case in ("B", "C"):
         params, Zin, A, cfg = small(case=case, beta=0.0 if case == "B" else 0.3)
         s, c = cfg.sparse.layer, cfg.sparse.fs_norm
@@ -439,11 +473,9 @@ def test_fs_normalisation():
     check("normalised f_s is invariant to rescaling W_s", maxrel(e2["f_s"], e1["f_s"]) < 1e-5)
 
 
-# Case B's own step at s, tested on FULL-SIZE architecture (small test net not representative:
-# its layer-s curvature differs, and 0.5/rho oscillated there).
-# Measured 2026-10-07 at init, B=64: spec fixed-point residual at s
-# 0.324 (shared eta_h) -> 0.036 (s_step=0.5) at T=16.
 def test_B_layer_s_step_converges():
+    """Tests Case B's layer-s step on the full-size architecture, not the unrepresentative small test net.
+    Checks that s_step=0.5 drives the fixed-point residual at s below 0.1 at T=16, better than shared eta_h."""
     import diag_sparse as DS
     Xtr = _data()
     res = {}
@@ -457,10 +489,9 @@ def test_B_layer_s_step_converges():
           f"shared eta_h: {res[0.0625]:.3f}  s_step=0.5: {res[0.5]:.3f}")
 
 
-# All-black augmented view (f_s = 0 exactly) must not produce NaN.
-# Regression test for job b3c717c6: such a view at step 68 made every
-# arm's gradient NaN via f / ||f||.
 def test_all_zero_view_gives_finite_gradients():
+    """Checks that gradients stay finite when one augmented view is all-zero (f_s = 0 exactly).
+    Regression test for job b3c717c6, where a zero view caused NaN gradients via f / ||f||."""
     for case in ("B", "C"):
         for arm in ("pc", "bp"):
             params, Zin, A, cfg = small(case=case, alpha=1.0, T=4)
@@ -474,12 +505,10 @@ def test_all_zero_view_gives_finite_gradients():
 
 # ------------------------------------------------------- case D: side heads
 
-# Tiny encoder (L = 6) with case-D side heads on residual layers.
 def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=True,
            projector="bn", seed=0, eta=0.0625):
-    # defaults calibrated like production: gamma ~ 20 % active on the normalised
-    # head input, w small (head energy well below the task loss), T_test == T.
-    # An uncalibrated w (head energy 2.5x task) made the tiny relaxation unstable.
+    """Builds a tiny (L=6) encoder config with case-D sparse-coding side heads on residual layers.
+    Returns initialized params, input views, sampled directions, and the run config, using calibrated defaults."""
     K = len(heads)
     ws = tuple(ws if ws is not None else [0.005] * K)
     gammas = tuple(gammas if gammas is not None else [1.0] * K)
@@ -495,10 +524,9 @@ def smallD(heads=(2,), ws=None, gammas=None, alpha=1.0, T=8, B=8, use_sigreg=Tru
     return params, Zin, A, cfg
 
 
-# Encoder identical to case none; D_l depends only on (seed, l),
-# so nested head sets share dictionaries;
-# every multiplier kept; no normalisation.
 def test_D_init_and_nesting():
+    """Verifies that D_l depends only on (seed, l) so nested head sets share dictionaries with unit-norm columns.
+    Checks that the encoder matches case "none", all alpha multipliers are kept with no normalization, and invalid head sets are rejected."""
     pD, _, _, cD = smallD(heads=(2, 3))
     pN, _, _, cN = small(case="none")
     same_enc = all(np.array_equal(a, b) for a, b in zip(leaves((pD[0], pD[1])), leaves(pN)))
@@ -519,8 +547,9 @@ def test_D_init_and_nesting():
           not bad, f"accepted: {bad}")
 
 
-# w_l = 0: heads are inert, so relax/grads equal plain PC-ALM.
 def test_D_zero_weight_equals_pcalm():
+    """Checks that zero head weights make sparse-coding heads inert, matching plain PC-ALM relax and grads.
+    Also verifies the dictionary gradient is exactly zero in this case."""
     pD, Zin, A, cD = smallD(heads=(2, 3), ws=[0.0, 0.0])
     pN, _, _, cN = small(case="none", alpha=1.0, T=8)
     aD, _, _ = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
@@ -534,8 +563,9 @@ def test_D_zero_weight_equals_pcalm():
           da < 1e-5 and dg < 1e-5 and dD == 0.0, f"acts {da:.2e} grads {dg:.2e} |dD| {dD:.1e}")
 
 
-# Deployed codes approach the FISTA optimum of each head's LASSO as t grows.
 def test_D_codes_solve_lasso():
+    """Checks that deployed codes' relative LASSO suboptimality decreases as t grows across heads.
+    Asserts the gap falls below 1e-3 at t=512, matching each head's FISTA optimum."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     x = Zin[0]
     out = []
@@ -553,9 +583,9 @@ def test_D_codes_solve_lasso():
           " ".join(f"{v:.2e}" for v in out))
 
 
-# During PC relaxation, codes descend each head's energy at the RELAXED z_l.
-# With all multipliers on, z_l stays near f_l.
 def test_D_relaxation_codes_track_layer():
+    """Tests that sparse-code relaxation keeps codes finite and layer activations close to their predictions.
+    Checks relative residual between relaxed head layers and their predictions stays below 0.1 when multipliers are on."""
     pD, Zin, A, cD = smallD(heads=(2, 3), T=40)
     acts, duals, h = pcalm.relax(pD, Zin, A, cD, jax.random.PRNGKey(0))
     preds = pcalm.layer_predictions(pD, acts[0], Zin[0], cD.enc)
@@ -566,10 +596,9 @@ def test_D_relaxation_codes_track_layer():
           fin and max(r) < 0.1, "rel resid " + " ".join(f"{v:.3f}" for v in r))
 
 
-# BP-D = task + head energy SUMMED over views.
-# With task drive removed, PC-D's gradient matches BP-D's
-# on the dictionaries and on layers <= max head.
 def test_D_control_objective_and_agreement():
+    """Checks that BP-D's objective equals task loss plus head energy summed over views.
+    Checks that with task drive removed, PC-D's gradient agrees with BP-D's on dictionaries and on layers up to the max head."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     cb = dataclasses.replace(cD, arm="bp")
     tot, aux = TR.bp_objective(pD, Zin, A, cb)
@@ -580,6 +609,8 @@ def test_D_control_objective_and_agreement():
           f"tot={float(tot):.6f} task={float(task):.6f} head={head:.6f}")
 
     def cos(a, b):
+        """Computes the cosine similarity between two arrays after flattening them.
+        Adds a small epsilon to the denominator to avoid division by zero."""
         a, b = np.ravel(a), np.ravel(b)
         return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
     nrm = lambda x: float(jnp.linalg.norm(x))
@@ -605,6 +636,8 @@ def test_D_control_objective_and_agreement():
 
 
 def test_D_batch_invariance_and_zero_view():
+    """Checks that sample 0's settled codes stay invariant to batch size across sizes (2, 8, 32).
+    Checks that an all-zero input view still yields finite PC and BP gradients."""
     sizes = (2, 8, 32)
     pD, Zf, A, cD = smallD(heads=(2, 3), T=6, B=max(sizes), use_sigreg=False, projector="none")
     ref, worst = None, 0.0
@@ -624,9 +657,9 @@ def test_D_batch_invariance_and_zero_view():
     check("D: an all-zero view gives finite PC and BP gradients", all(fin), str(fin))
 
 
-# A few training steps per arm: finite, D re-normalised, round-trips through
-# load_run, and the pair gate reads the case-D health rows.
 def test_D_train_project_serialise_and_gate():
+    """Trains both PC and BP arms for a few steps with case-D sparse heads.
+    Checks D stays unit-norm, round-trips through load_run, and logs head health, then verifies the pair gate reads case-D rows cleanly."""
     import gate_pilot as GP
     from run_probes import load_run
     tmp = tempfile.mkdtemp()
@@ -649,10 +682,9 @@ def test_D_train_project_serialise_and_gate():
     check("D: pair gate evaluates case-D criteria without schema errors", readable, str(reasons)[:300])
 
 
-# Heads explain sqrt(n) f/||f||: codes and head energy are invariant to
-# rescaling the head layer, so shrinking it cannot lower the energy
-# (the route the smoke run showed). BP-D's code is detached.
 def test_D_head_reads_normalised_copy():
+    """Checks that head input is centered on mu and row-normalised to sqrt(n), making head energy invariant to scale.
+    Checks the BP-D head gradient wrt D matches the code-detached partial derivative, and that mu has no gradient and is EMA-updated."""
     pD, Zin, A, cD = smallD(heads=(2,))
     x = Zin[0]
     acts, ex = SP.deploy(pD, x, cD)
@@ -662,6 +694,7 @@ def test_D_head_reads_normalised_copy():
     rows_ok = np.allclose(nrm, np.sqrt(f.shape[-1]), rtol=1e-4)
     D0, g0 = SP.get_D(pD)[0], cD.sparse.gammas[0]
     def e(v, m):
+        """Computes the mean LASSO energy after running ISTA sparse coding on the head-processed input."""
         h = SP.head_in(v, m)
         return float(jnp.mean(SP.lasso_energy(h, D0, SP.ista(h, D0, g0, 1.0, 16, 0.9 / SP.spectral_sq(D0)), g0, 1.0)))
     # scale about mu, and a shared offset absorbed by mu, leave the head energy unchanged
@@ -696,8 +729,9 @@ def test_D_head_reads_normalised_copy():
 
 # ------------------------------------------------- case E: reconstruction anchor
 
-# smallD with the code -> pixel anchor (beta_r > 0); params are a 6-tuple.
 def smallE(heads=(2, 3), beta_r=0.05, **kw):
+    """Builds smallD's config and params, then sets a positive beta_r to anchor the code to the pixel space.
+    Returns the resulting params, input batch, activity, and config as a 6-tuple."""
     pD, Zin, A, cD = smallD(heads=heads, **kw)
     cE = dataclasses.replace(cD, sparse=dataclasses.replace(cD.sparse, beta_r=beta_r))
     pE = SP.init_params(jax.random.PRNGKey(cE.opt.seed), cE, cE.data.input_dim)
@@ -705,9 +739,9 @@ def smallE(heads=(2, 3), beta_r=0.05, **kw):
     return pE, Zin, A, cE
 
 
-# beta_r = 0 is case D exactly (4-tuple, same codes); beta_r > 0 adds unit-norm G_l
-# and the pixel mean, encoder/D/mu identical to case D, labels cover all 6 parts.
 def test_E_init_and_reduction():
+    """Checks that case E's params match case D with beta_r=0, plus unit-norm G and pixel mean when beta_r>0.
+    Verifies param_labels has 6 entries and sparse codes are identical between D and E at beta_r=0."""
     pD, Zin, A, cD = smallD(heads=(2, 3))
     pE, _, _, cE = smallE(heads=(2, 3))
     x = Zin[0]
@@ -724,13 +758,15 @@ def test_E_init_and_reduction():
           f"same={same} unitG={unitG} xbar={xbar} labels={labs} codes_eq={codes_eq}")
 
 
-# Deployed codes approach FISTA optimum of EXPLICIT anchored energy:
-# beta_g/2||f~ - D a||^2 + beta_r/2||xbar - G a||^2 + gamma||a||_1.
 def test_E_codes_solve_anchored_lasso():
+    """Checks that deployed codes converge toward the FISTA optimum of the explicit anchored lasso energy.
+    Verifies the energy gap shrinks monotonically with more deployment steps, reaching under 1e-3 at t=512."""
     pE, Zin, A, cE = smallE(heads=(2, 3))
     x = Zin[0]; sp = cE.sparse
     xc = SP.anchor_target(x, pE[5])
     def energy(f, Dl, Gl, a, g):
+        """Computes the total sparse-coding energy: reconstruction loss on f and xc plus an L1 sparsity penalty on a.
+        Returns the scalar mean energy over the batch."""
         return float(jnp.mean(0.5 * sp.beta_g * jnp.sum((f - a @ Dl.T) ** 2, -1)
                               + 0.5 * sp.beta_r * jnp.sum((xc - a @ Gl.T) ** 2, -1) + g * jnp.sum(jnp.abs(a), -1)))
     out = []
@@ -746,9 +782,9 @@ def test_E_codes_solve_anchored_lasso():
           out[0] >= out[1] >= out[2] and out[2] < 1e-3 and min(out) > -1e-4, " ".join(f"{v:.2e}" for v in out))
 
 
-# head_smooth includes the anchor.
-# a_step is a prox step on its exact gradient.
 def test_E_relaxation_hooks_match_autodiff():
+    """Checks that head_smooth matches a manual energy including the anchor term.
+    Verifies a_step equals a prox step on its exact gradient with step size set by the stacked Lipschitz constant."""
     pE, Zin, A, cE = smallE(heads=(2, 3))
     x = Zin[0]; sp = cE.sparse
     acts, ex = SP.deploy(pE, x, cE, t=3)
@@ -770,11 +806,12 @@ def test_E_relaxation_hooks_match_autodiff():
           maxrel(hs, manual) < 1e-5 and err < 1e-4 and lip, f"energy {maxrel(hs, manual):.1e} step {err:.1e} lip={lip}")
 
 
-# Zero task drive, long relaxation: PC's G and D gradients match BP-E's.
-# Then a few training steps per arm: G unit-norm, xbar unchanged, round-trip,
-# R^2 logged, gate reads it.
 def test_E_pc_bp_agree_and_train():
+    """Verifies PC and BP-E gradients on G and D agree closely under zero task drive with no xbar gradient.
+    Trains both arms briefly and checks unit-norm G, fixed xbar, round-trip reload, logged R^2, and gate readout."""
     def cos(u, v):
+        """Computes the cosine similarity between two flattened vectors.
+        Adds a small epsilon to the denominator to avoid division by zero."""
         u, v = np.ravel(u), np.ravel(v); return float(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-30))
     pE, Zin, A, cE = smallE(heads=(2, 3), T=200, use_sigreg=False, projector="none")
     Zin = jnp.stack([Zin[0]] * Zin.shape[0])
@@ -805,12 +842,8 @@ def test_E_pc_bp_agree_and_train():
     check("E: pair gate reads the reconstruction criteria", "head_recon_r2_first_last" in info["pc"], str(reasons)[:200])
 
 
-# (1) Anchor target removes each view's brightness: zero row mean; deployed code/energy
-# invariant to adding per-view constant to x.
-# (2) code_k: one a_step with code_k=k equals k a_steps with code_k=1; deployed default
-# runs T_test * code_k steps.
-# (3) Distinct views at production-like beta_r: relaxation energy uses each view's OWN pixels.
 def test_E_target_codek_and_views():
+    """Tests that anchor targets remove brightness, code_k steps match deploy count, and views use own pixels."""
     pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0)
     x = Zin[0]
     t = SP.anchor_target(x, pE[5])
@@ -842,14 +875,15 @@ def test_E_target_codek_and_views():
           f"({float(own):.3g} vs {float(swapped):.3g})")
 
 
-# At fixed codes, PC gradient on G_l is -sum_v w_l beta_r (xc_v - G a_v)^T a_v / B
-# Local, Hebbian update; tested at production-like beta_r with distinct views.
 def test_E_G_gradient_is_local_hebbian():
+    """Verifies that the PC gradient on G_l equals -sum_v w_l beta_r (xc_v - G a_v)^T a_v / B.
+    Confirms this local, Hebbian update holds at production-like beta_r across distinct views."""
     pE, Zin, A, cE = smallE(heads=(2, 3), beta_r=8.0, T=4)
     sp = cE.sparse
     acts_v = [SP.deploy(pE, Zin[v], cE)[0] for v in range(Zin.shape[0])]
     a_v = [SP.deploy(pE, Zin[v], cE)[1]["a"] for v in range(Zin.shape[0])]
     def F(G):
+        """Computes smooth sparse-coding energy for parameter G across all views, then sums the results."""
         p = (pE[0], pE[1], pE[2], pE[3], G, pE[5])
         return sum(SP.head_smooth(p, acts_v[v], a_v[v], cE, x=Zin[v]) for v in range(Zin.shape[0]))
     g = jax.grad(F)(pE[4])

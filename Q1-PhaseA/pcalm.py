@@ -1,3 +1,6 @@
+# PC-ALM (predictive-coding augmented Lagrangian method): primal-dual activity relaxation and the resulting
+# weight gradient for the encoder, matching jpc.pc_energy_fn term-for-term when duals are zero (rho=1).
+# Supports the sparse-coding arms (cases B/C/D) via sparse.py hooks.
 from typing import List, Optional
 
 import jax
@@ -14,11 +17,9 @@ from config import EncoderCfg, RunCfg
 # --------------------------------------------------------------- residuals
 
 
-# Per-layer prediction f_l(z_{l-1}), same order as `acts`.
-# Mirrors term structure of jpc.pc_energy_fn, term for term (see module docstring).
-# acts = [z_1, ..., z_{L-1}, z_out], z_0 clamped to x and not included.
-# Order matches encoder.forward return order and relaxation order.
 def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=None):
+    """Returns the per-layer prediction f_l(z_{l-1}) for every layer, in the same order as acts (z_0 = x excluded).
+    Mirrors jpc.pc_energy_fn's term structure term-for-term."""
     model, skip = params[0], params[1]   # case-C params carry a 3rd entry, D
     scalings = jpc._get_param_scalings(
         model=model,
@@ -43,28 +44,23 @@ def layer_predictions(params, acts: List[jnp.ndarray], x, enc: EncoderCfg, norm=
     return preds
 
 
-# r_l = z_l - f_l(z_{l-1}) for every layer, same shapes as `acts`.
-# norm = (s, c) normalises prediction at layer s (sparse arms);
-# None leaves every layer exactly as jpc defines it.
 def residuals(params, acts, x, enc: EncoderCfg, norm=None):
+    """Returns r_l = z_l - f_l(z_{l-1}) for every layer; norm=(s, c) normalises the prediction at layer s."""
     return [a - p for a, p in zip(acts, layer_predictions(params, acts, x, enc, norm))]
 
 
-# Duals start at zero (Algorithm 1 line 5), one per activity.
 def zero_duals(acts):
+    """Returns zero-initialized duals, one per activity per view (Algorithm 1 line 5)."""
     return [[jnp.zeros_like(z) for z in acts_v] for acts_v in acts]
 
 
 # ------------------------------------------------------------------ energy
 
 
-# Augmented Lagrangian, completing-the-square form (paper Eq. 9):
-# L_rho = (1/2B) * rho * sum_l || r_l + lam_l/rho ||^2
-# duals=None -> plain PC energy; at rho=1 matches jpc.pc_energy_fn (test_pcalm.py)
-# Dropped -1/(2 rho) sum_l ||lam_l||^2 term (indep. of activities/weights, no grad effect)
-# No supervised-loss term; LeJEPA grad injected at output node via output_drive during relaxation
 def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
               out_scale: Optional[float] = None, norm=None):
+    """Computes the augmented Lagrangian L_rho = (1/2B) rho sum_l ||r_l + lam_l/rho||^2 (paper Eq. 9).
+    duals=None gives plain PC energy; matches jpc.pc_energy_fn exactly at rho=1 with duals=None."""
     r = residuals(params, acts, x, enc, norm)
     if duals is not None:
         r = [ri + li / rho for ri, li in zip(r, duals)]
@@ -79,9 +75,10 @@ def al_energy(params, acts, x, duals, rho: float, enc: EncoderCfg,
 # -------------------------------------------------------------- relaxation
 
 
-# LeJEPA objective computed on a stack of per-view embeddings.
 def _objective(cfg: RunCfg, A):
+    """Returns a closure computing the LeJEPA loss on a stack of per-view embeddings, with cfg and A bound in."""
     def loss_z(Zv):
+        """Computes the LeJEPA loss on embedding stack Zv."""
         return S.lejepa_loss(
             Zv, A, cfg.data.n_global_views, cfg.sig.lambd, cfg.use_sigreg,
             projector=cfg.projector, t_max=cfg.sig.t_max,
@@ -89,12 +86,9 @@ def _objective(cfg: RunCfg, A):
     return loss_z
 
 
-# Primal-dual relaxation. Returns (acts, duals, history).
-# Algorithm 1: T-1 cycles of {primal step, dual step}, then final primal step.
-# T primal steps total (same budget as old PC) plus T-1 dual updates.
-# If cfg.pc.alpha == 0, duals stay zero, al_energy collapses to PC energy,
-# reduces exactly to old relaxation.
 def relax(params, Zin, A, cfg: RunCfg, key):
+    """Runs Algorithm 1's primal-dual relaxation (T-1 primal/dual cycles, then a final primal step).
+    alpha=0 keeps duals at zero (exactly the old PC relaxation); returns (acts, duals, history)."""
     V, B = Zin.shape[0], Zin.shape[1]
     alpha, rho, T = cfg.pc.alpha, cfg.pc.rho, cfg.pc.T
     # the *B that turns cfg.pc.eta_h into a per-sample step -- see module docstring
@@ -130,14 +124,16 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     loss_z = _objective(cfg, A)
 
     def out_stack(acts):
+        """Stacks the final (output) activity of every view into one array."""
         return jnp.stack([acts[v][-1] for v in range(V)])
 
     def F_total(acts, duals):
+        """Sums the augmented Lagrangian over all views."""
         return sum(al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
                              cfg.pc.out_scale, norm) for v in range(V))
 
-    # smooth part (differentiated) and reported energy (+ the L1 terms)
     def F_smooth(acts, duals, a):
+        """Returns the differentiable part of the total energy, adding the sparse-arm head terms if active."""
         if not sparse_on:
             return F_total(acts, duals)
         return F_total(acts, duals) + sum(
@@ -145,6 +141,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
             for v in range(V))
 
     def F_report(acts, duals, a):
+        """Returns the full reported energy, adding the sparse-arm non-smooth (L1) terms to F_smooth."""
         if not sparse_on:
             return F_total(acts, duals)
         return F_smooth(acts, duals, a) + sum(
@@ -157,6 +154,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     dL = jax.grad(lambda a: loss_z(out_stack(a)))
 
     def primal(acts, duals, a=None):
+        """Performs one gradient-descent step on the activities (and sparse code a, if active)."""
         g = dF(acts, duals) if not sparse_on else dF(acts, duals, a)
         if cfg.pc.output_drive == "coupled":
             gL = dL(acts)
@@ -175,6 +173,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         return new, [SP.a_step(params, acts[v], a[v], cfg, eta_g, x=Zin[v]) for v in range(V)]
 
     def dual(acts, duals):
+        """Performs one dual-ascent step on the multipliers, lam += alpha * r, per layer and view."""
         if all(al == 0.0 for al in alphas):
             return duals
         r = [residuals(params, acts[v], Zin[v], cfg.enc, norm) for v in range(V)]
@@ -183,6 +182,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
 
     if not sparse_on:
         def body(carry, _):
+            """Performs one primal step then one dual step; scanned over the relaxation steps."""
             acts, duals = carry
             acts = primal(acts, duals)
             duals = dual(acts, duals)
@@ -199,6 +199,7 @@ def relax(params, Zin, A, cfg: RunCfg, key):
         F_last = F_total(acts, duals)
     else:
         def body_sp(carry, _):
+            """Performs one primal step (with sparse code a) then one dual step; scanned over the steps."""
             acts, duals, a = carry
             acts, a = primal(acts, duals, a)
             duals = dual(acts, duals)
@@ -228,12 +229,9 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     hist = {"F": F_hist, "L": L_hist}
     if sparse_on:
         hist["F0"] = F_report(acts0, duals0, a0)
-        # pilot stability gate: the largest activity norm at the end, relative to
-        # the largest activity norm at the start (per view).  NOT F_T / F_0 -- the
-        # completed-square energy grows with the multipliers by design -- and NOT a
-        # per-layer ratio: layers at and above s can START near zero (thresholded
-        # code; s is non-residual), which made a per-layer ratio read 505x with
-        # nothing unstable.  A genuine blow-up anywhere exceeds the start scale.
+        # pilot stability gate: largest activity norm at the end vs. the start (per view), NOT F_T / F_0
+        # (grows with the multipliers by design) and NOT per-layer (layers >= s start near zero, which
+        # read as a false 505x). A genuine blow-up anywhere exceeds the start scale.
         hist["act_growth"] = jnp.max(jnp.stack([
             jnp.max(jnp.stack([jnp.linalg.norm(z) for z in acts[v]]))
             / (jnp.max(jnp.stack([jnp.linalg.norm(z) for z in acts0[v]])) + 1e-12)
@@ -243,12 +241,9 @@ def relax(params, Zin, A, cfg: RunCfg, key):
     return acts, duals_w, hist
 
 
-# Weight gradient from relaxed primal-dual state.
-# Activities and duals held fixed (stop_gradient); differentiate augmented
-# Lagrangian wrt weights only (same pattern as pc_grads / pc-alm method_grad).
-# Update is local: each weight sees only its layer's composite credit
-# rho * r_l + lam_l and the activity below it.
 def grads(params, Zin, A, cfg: RunCfg, key):
+    """Relaxes the activities/duals, then returns the weight gradient of the augmented Lagrangian at that
+    fixed state (stop-gradiented), plus a dict of diagnostics."""
     import equinox as eqx
 
     acts, duals, hist = relax(params, Zin, A, cfg, key)
@@ -258,6 +253,7 @@ def grads(params, Zin, A, cfg: RunCfg, key):
     a = jax.lax.stop_gradient(hist["a"]) if "a" in hist else None
 
     def F_of_params(p):
+        """Computes the augmented Lagrangian as a function of weights p, at the fixed relaxed state."""
         F = sum(al_energy(p, acts[v], Zin[v], duals[v], cfg.pc.rho, cfg.enc,
                           cfg.pc.out_scale, SP.norm_spec(cfg)) for v in range(V))
         if a is not None:            # case C: D's gradient from the head energy

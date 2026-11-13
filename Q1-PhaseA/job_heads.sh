@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
-# Case D: sparse side heads, K = 1..5 nested heads outward from layer 5, all
-# multipliers kept.  Spec: vault PCWM/Methods/'Method - Sparse side-head arm plan'.
-#   preflight -> gates -> selection -> pilot pair per K (+ agreement, + gate)
-#   -> full runs per seed (K=1, 5 first; analysis of those immediately)
-#   -> K=2,3,4 screens (time-guarded) -> floor -> probes -> analysis -> collect.
-#
-#   bash job_heads.sh <project_root> <job_dir>
-#
-# User decisions 2026-10-07: K=1 and K=5 at 3 seeds, K=2,3,4 at 1 seed; heads
-# explain a normalised copy of the layer; BP-D uses a detached code; K is reported
-# as a package contrast.  A pair failing its pilot gate has its full runs skipped
-# and is reported; nothing is re-tuned after a pilot.
-# Review fixes (2026-10-07): fail fast on pre-existing run dirs (N1); per-seed runs
-# and a completed-run check (N5); gate crash != gate FAIL (D13); the gate is
-# re-applied, report-only, to every full run (D2); probes_summary.csv is never
-# reused stale and the reused arms are probed with the same protocol (N4/D11);
-# weights are collected (D12); time guard before the K screens (N5).
+# Case D sparse side heads, K=1..5 (spec: vault 'Method - Sparse side-head arm
+# plan'). Pipeline: preflight -> gates -> selection -> pilot pair per K -> full
+# runs (K=1,5 first) -> K=2,3,4 screens (time-guarded) -> floor -> probes ->
+# analysis -> collect.  Usage: bash job_heads.sh <project_root> <job_dir>.
+# Review fixes 2026-10-07 (N1/N5/D13/D2/N4/D11/D12) are applied throughout.
 set -uo pipefail
 P="$1"; JOBDIR="$2"
 cd "$P/Q1-PhaseA" || exit 2
@@ -29,15 +17,21 @@ STEPS=${STEPS:-17200}; PILOT=${PILOT:-2000}; PILOT_ONLY=${PILOT_ONLY:-0}; REUSE_
 OP="--T 16 --eta-h 0.0625 --alpha 1"
 REUSED="runs/pc_sigreg_T16_coupled_alm_s0 runs/pc_sigreg_T16_coupled_alm_s1 runs/pc_sigreg_T16_coupled_alm_s2 runs/bp_sigreg_etafix_s0 runs/bp_sigreg_etafix_s1 runs/bp_sigreg_etafix_s2"
 STATUS=${TAG}_status.txt
+# Appends a message to stdout and the status file.
 note() { echo "$*" | tee -a $STATUS; }
+# Returns the seed list for head count K (K in {1,5}: 3 seeds, else 1).
 seeds_for() { case $1 in 1|5) echo "0 1 2";; *) echo "0";; esac; }
+# Builds the PC run dir path for head count $1, seed $2.
 pcdir() { echo "runs/pc_sigreg_T16_coupled_${TAG}$1_s$2"; }
+# Builds the BP run dir path for head count $1, seed $2.
 bpdir() { echo "runs/bp_sigreg_${TAG}$1_s$2"; }
+# True if a run finished STEPS without diverging.
 complete() {   # params.eqx, no DIVERGED, log reaches the last step
   [ -f "$1/params.eqx" ] && [ ! -f "$1/DIVERGED" ] && \
   $PY -c "import json,sys;l=json.load(open('$1/log.json'));sys.exit(0 if l and l[-1]['step']==$2-1 else 1)" 2>/dev/null
 }
 
+# Packs job status/logs/configs/weights into a tarball in JOBDIR (EXIT trap).
 collect() {
   tar czf "$JOBDIR/q1_${TAG}.tar.gz" ${TAG}_status.txt ${TAG}_heads_selected.json \
       ${TAG}_gates.log ${TAG}_select.log ${TAG}_train*.log ${TAG}_gate_D*.json ${TAG}_gate_D*.err ${TAG}_gate_full_*.json \
@@ -104,6 +98,7 @@ if [ "$PILOT_ONLY" = 1 ]; then note "PILOT_ONLY: stopping after the pilots (pass
 [ -n "$PASSED" ] || { note "no K passed its pilot"; exit 5; }
 
 NEW=""; FLOORS="runs/pc_sigreg_T16_coupled_${TAG}randD_s0 runs/pc_sigreg_T16_coupled_${TAG}randD_s1 runs/pc_sigreg_T16_coupled_${TAG}randD_s2"
+# Launches full pc/bp runs for head count K across its seeds, gating each pair.
 run_K() {   # $1 = K; one run_arms call per seed so a failure is isolated
   local K=$1
   for s in $(seeds_for $K); do
@@ -119,6 +114,7 @@ run_K() {   # $1 = K; one run_arms call per seed so a failure is isolated
     fi
   done
 }
+# Runs the head-geometry diagnostic on $NEW runs so far, labelled $1.
 analyse_now() {   # $1 = label; incremental head analysis on what exists so far
   $PY -W ignore diag_heads.py $NEW --heads-json ${TAG}_heads_selected.json --csv ${TAG}_diag_heads_$1.csv > ${TAG}_diag_heads_$1.log 2>&1 \
     || note "${TAG}_diag_heads ($1) exited nonzero"

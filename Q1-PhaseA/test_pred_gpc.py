@@ -1,3 +1,5 @@
+# Gates for pred_gpc.py: PC/BP/ALM inference stability and equivalence, locality of PC weight updates,
+# batch independence, predictive training, and divergence detection.
 import dataclasses, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp
@@ -7,26 +9,30 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records whether cond holds under name, prints PASS/FAIL, and updates the overall OK flag."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}")
 
 
 def data(seed=0, b=16, k=3, d=128):
+    """Returns random synthetic observations Z and task vectors T9 of the given batch/k/dim."""
     kz, kt = jax.random.split(jax.random.PRNGKey(seed + 11))
     return jax.random.normal(kz, (b, k, d)), 0.5 * jax.random.normal(kt, (b, k, 9))
 
 
 def flat(t):
+    """Returns pytree t flattened into a single 1-D array."""
     return jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
 
 
 def cos(a, b):
+    """Returns the cosine similarity between flattened pytrees a and b."""
     a, b = flat(a), flat(b)
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b)))
 
 
-# Targets a planted generator can explain: Z = G(s_true, tau) + noise.
 def planted(p, cfg, b=32, k=4, noise=0.1, seed=3):
+    """Returns noisy targets Z, task vectors T9, and the true latent s_true for a generator p can explain exactly."""
     ks, kt, kn = jax.random.split(jax.random.PRNGKey(seed), 3)
     s_true = jax.random.normal(ks, (b, G.M))
     T9 = 0.5 * jax.random.normal(kt, (b, k, 9))
@@ -35,6 +41,8 @@ def planted(p, cfg, b=32, k=4, noise=0.1, seed=3):
 
 
 def equivalence():
+    """Checks (in float64) that PC/ALM weight gradients match the BP auto-decoder gradient in the fixed-s,
+    infinite-precision, and large-penalty ALM limits; returns pass/fail."""
     assert jnp.zeros(1).dtype == jnp.float64, "run with JAX_ENABLE_X64=1"
     Z, T9 = data(); Ph = G.phi(T9)
     for depth in (3, 10):
@@ -67,6 +75,8 @@ def equivalence():
 
 
 def alm_gates():
+    """Checks ALM invariants: reduces to PC energy/gradients at zero multipliers, stays finite on the grid,
+    is batch-independent, and runs predictive training with the credit logger on."""
     Z, T9 = data(); Ph = G.phi(T9)
     for depth in (3, 10):
         cfg = G.GCfg(depth=depth, T=200, rule="alm", alpha=1.0)
@@ -113,6 +123,8 @@ def alm_gates():
 
 
 def main():
+    """Runs the full pred_gpc gate suite (stability, locality, batch invariance, training, divergence) and returns
+    pass/fail."""
     print("matmul precision:", jax.config.jax_default_matmul_precision, "| backend:", jax.default_backend())
     Z, T9 = data()
     Ph = G.phi(T9)

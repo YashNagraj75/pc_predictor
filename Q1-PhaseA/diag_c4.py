@@ -3,33 +3,35 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp, equinox as eqx
 import pred_gpc as G, pred_ff as PF
 
-# Inference-only test of two fixes from Qi et al. 2025 (arXiv:2506.23800) on trained generative decoders. Never trains.
-#  Spiking precision, generative direction: the error wave starts at the observation, so hidden level j gets a one-off
-#    large step at t = j and s at t = H.  'lit1' = step 1 on hidden levels (Qi's literal step); 'x10' = 10x the normal
-#    curvature-normalised step on hidden levels and s.
-#  Forward update: weights learn from eps~ = x_final - mu_td, mu_td = clean top-down pass from the final belief s_T
-#    (the computation used at prediction).  'qi' keeps the relaxed presynaptic activity (Qi's rule); 'fixed' uses the
-#    top-down one (Millidge's fixed-prediction form).  'pc' is the standard rule and must equal G.pc_wgrads (gate).
+# Inference-only test of two fixes from Qi et al. 2025 (arXiv:2506.23800) on trained generative decoders; never trains.
+# Spiking precision: 'lit1' = unit step on hidden levels at the error wavefront (Qi's literal step); 'x10' = 10x the
+#   normal curvature-normalised step on hidden levels and s.
+# Forward update: 'qi' uses the relaxed presynaptic activity, 'fixed' uses the clean top-down one (Millidge's form);
+#   'pc' is the standard rule and must equal G.pc_wgrads (gate).
 OUT = sys.argv[1] if len(sys.argv) > 1 else "pred_runs/diag_c4.json"
 FIELDS = {f.name for f in dc.fields(G.GCfg)}
 sg = jax.lax.stop_gradient
 
 
 def flat(t):
+    """Returns a single flat vector of all leaf arrays in pytree t."""
     return jnp.concatenate([x.ravel() for x in jax.tree_util.tree_leaves(t)])
 
 
 def cosv(a, b):
+    """Returns the cosine similarity between two (possibly pytree) gradients a and b."""
     a, b = flat(a), flat(b)
     return float(a @ b / (jnp.linalg.norm(a) * jnp.linalg.norm(b) + 1e-30))
 
 
 def blocks(g):
+    """Returns the top/mid/bottom weight-gradient blocks of g as a flat list."""
     return [g["top"]] + list(g["mid"]) + [g["bot"]]
 
 
 # Relaxation with a per-level spike at the wavefront; mode 'none' is G.pc_infer exactly (gated).
 def infer_sched(p, cfg, s0, Z, Ph, T, mode, freeze_s=False, xs0=None):
+    """Runs T steps of scheduled relaxation and returns the final belief s and hidden states xs."""
     H = cfg.H
     xs0 = G.topdown(p, s0, Ph, H)[0] if xs0 is None else xs0
     etas = G.pc_etas(p, Z.shape[1], cfg)
@@ -43,6 +45,7 @@ def infer_sched(p, cfg, s0, Z, Ph, T, mode, freeze_s=False, xs0=None):
         mx, ms = [1.0] * H, 1.0
 
     def step(v, t):
+        """Applies one scheduled gradient-descent step to (s, xs), spiking the level that matches t."""
         gs, gx = gfn(v)
         s = v[0] if freeze_s else v[0] - etas[0] * jnp.where(t == H, ms, 1.0) * gs
         xs = [x - etas[j + 1] * jnp.where(t == j, mx[j], 1.0) * g for j, (x, g) in enumerate(zip(v[1], gx))]
@@ -54,6 +57,7 @@ def infer_sched(p, cfg, s0, Z, Ph, T, mode, freeze_s=False, xs0=None):
 
 # Weight gradient from fixed errors and presynaptic activities via a linear surrogate (dE/dW = -eps * dmu/dW).
 def fu_grads(p, s, xs, Z, Ph, H, mode):
+    """Returns the weight gradient from fixed errors and presynaptic activities under the given update mode."""
     s, xs = sg(s), [sg(x) for x in xs]
     xtd = [sg(x) for x in G.topdown(p, s, Ph, H)[0]]
     if mode == "pc":
@@ -68,6 +72,7 @@ def fu_grads(p, s, xs, Z, Ph, H, mode):
     e0, em, eH = sg(e0), [sg(e) for e in em], sg(eH)
 
     def sur(q):
+        """Returns the negated linear-surrogate energy for weights q, differentiated for dE/dW."""
         v = jnp.sum(e0 * G.mu_bot(q, pre[0])) + jnp.sum(eH * G.mu_top(q, s, Ph))
         v += sum(jnp.sum(e * G.mu_mid(q["mid"][l - 1], pre[l], H)) for l, e in zip(range(1, H), em))
         return -v
@@ -76,6 +81,7 @@ def fu_grads(p, s, xs, Z, Ph, H, mode):
 
 
 def shares(e):
+    """Returns the normalised per-level energy shares plus obs/top/min and max-over-min summaries."""
     e = np.asarray([float(v) for v in e]); e = e / e.sum()
     return {"obs": float(e[0]), "top": float(e[-1]), "min": float(e.min()),
             "log10_max_over_min": float(np.log10(e.max() / max(e.min(), 1e-30))), "all": e.round(5).tolist()}

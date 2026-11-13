@@ -10,6 +10,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+# Diagnostics for the sparse-coding predictor arm (cases "none"/"B"/"C"): robustness probes under corruption,
+# the test-time inference curve and amortisation gap, the beta_g dial, LASSO solver validity, PC-vs-BP gradient
+# agreement, and the training-relaxation fixed point. Writes one row per (run, group, metric, condition) to CSV.
 import data as D
 import metrics as M
 import pcalm as PA
@@ -27,12 +30,9 @@ CORRUPT_SEED = 12345                 # shared by every arm
 
 # ------------------------------------------------------------- readouts
 
-# Deployed embedding with t test-time inference steps.
-# C: t ISTA steps (deploy). B: t iterated prox-gradient steps on z_s alone,
-# starting from DENSE f_s (eta=0.5/rho): t=0 = no inference, t->inf = closed form S_{beta/rho}(f_s).
-# none: feedforward pass (t ignored).
-# Returns (z_out, z_s, f_s) -- z_s, f_s are None for case none.
 def readout(params, x, cfg, t=None, beta_g=None):
+    """Computes the deployed embedding with t test-time inference steps (case C: ISTA; case B: prox-gradient
+    on z_s from dense f_s; case none: plain forward). Returns (z_out, z_s, f_s), z_s/f_s None for case none."""
     sp = cfg.sparse
     if sp.case == "none":
         z, _ = SP.forward(params, x, cfg)
@@ -59,6 +59,7 @@ def readout(params, x, cfg, t=None, beta_g=None):
 
 
 def batched(fn, X, bs=1000):
+    """Applies fn to X in chunks of bs and concatenates each tuple position of the results."""
     outs = [fn(X[i:i + bs]) for i in range(0, len(X), bs)]
     return [None if outs[0][k] is None else np.concatenate([np.asarray(o[k]) for o in outs])
             for k in range(len(outs[0]))]
@@ -66,9 +67,9 @@ def batched(fn, X, bs=1000):
 
 # --------------------------------------------------------------- probes
 
-# Closed-form ridge regression on one-hot encoded labels.
-# Lambda (regularization) tuned on a 20% split of TRAIN.
 def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), seed=0, sd_floor=1e-3):
+    """Fits closed-form ridge regression on one-hot labels, tuning lambda on a 20% split of train, and
+    returns the test accuracy with the chosen lambda."""
     # floor the per-dimension scale: a near-constant dimension would otherwise
     # be amplified up to 1e6x on corrupted inputs (review)
     mu, sd = Ztr.mean(0), Ztr.std(0)
@@ -81,10 +82,12 @@ def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), see
     va, tr = perm[:nv], perm[nv:]
 
     def fit(X, T, lam):
+        """Solves the ridge-regularised normal equations for targets T from bias-augmented inputs X."""
         X1 = np.hstack([X, np.ones((len(X), 1))])
         return np.linalg.solve(X1.T @ X1 + lam * np.eye(X1.shape[1]), X1.T @ T)
 
     def acc(W, X, y):
+        """Returns the classification accuracy of linear weights W on bias-augmented inputs X against labels y."""
         return float(np.mean(np.argmax(np.hstack([X, np.ones((len(X), 1))]) @ W, 1) == y))
 
     best = max(lams, key=lambda l: acc(fit(A[tr], Y[tr], l), A[va], ytr[va]))
@@ -92,14 +95,15 @@ def ridge_classifier(Ztr, ytr, Zte, yte, lams=(1e-2, 1e-1, 1, 10, 100, 1e3), see
 
 
 def probe_pair(Ztr, ytr, Zte, yte, sd_floor=1e-3):
+    """Returns the linear-probe and kNN classification accuracies of embeddings Ztr/Zte against labels ytr/yte."""
     lin, lam = ridge_classifier(Ztr, ytr, Zte, yte, sd_floor=sd_floor)
     return {"linear": lin, "knn": float(M.knn_accuracy(Ztr, ytr, Zte, yte))}
 
 
 # ------------------------------------------------------------ corruption
 
-# Test-time corruption in pixel space; xflat is eval_batch output in [0,1].
 def corrupt(xflat, cfg, kind, level, seed=CORRUPT_SEED):
+    """Applies test-time noise or occlusion corruption in pixel space to xflat (an eval_batch output in [0,1])."""
     if kind == "clean" or level == 0:
         return xflat
     c = 1 if cfg.data.grayscale else 3
@@ -121,6 +125,8 @@ def corrupt(xflat, cfg, kind, level, seed=CORRUPT_SEED):
 # ------------------------------------------------------------- group A
 
 def lasso_curve(params, x, cfg):
+    """Returns, for a grid of ISTA step counts, the LASSO sub-optimality, KKT violation, and active fraction
+    relative to a 2000-step reference solution."""
     sp, mu = cfg.sparse, SP.lasso_mu(cfg)
     Dm = SP.get_D(params)
     _, ex = SP.deploy(params, x, cfg, t=0)
@@ -139,12 +145,9 @@ def lasso_curve(params, x, cfg):
     return rows
 
 
-# step_rel_l = ||z_l - prox_l(z_l - eta*grad_l)|| / ||z_l||: one more relax step's rel change -> 0 at stationary
-# grad_l = per-sample grad relaxation uses (B*dF_smooth/dz_l + coupled output drive); prox_l = S_{eta*beta} at s for case B
-# Normalized by STATE not start mapping (start mapping is 0 on feasible layers -> old version read 1e12)
-# resid_rel_l = ||r_l||/||z_l|| (primal feasibility); dual_step_rel_l = alpha_l*||r_l||/||lambda_l||
-# Case B fp residual: fp_B = ||z_s - S_{beta/rho}(f_s+g_s/rho)||/||z_s||, with f_s+g_s/rho = z_s - grad_s/rho, grad_s = rho(z_s-f_s)-g_s, lambda_s=0; coupled drive only
 def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0):
+    """Returns, per layer and tested T, the relative one-more-step change, primal residual, and dual step size
+    of the training relaxation (plus, for case B, the fixed-point residual of z_s), normalized by state norm."""
     if cfg.pc.output_drive != "coupled":
         print("   [A] skipped: fixed-point check implemented for the coupled drive only")
         return []
@@ -158,7 +161,9 @@ def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0
     alphas = SP.layer_alphas(cfg, len(params[0]))
 
     def measures(acts, duals, a):
+        """Returns per-layer step_rel/resid_rel/dual_step_rel lists and the case-B fixed-point residual fp_B."""
         def Fs(acts):
+            """Returns the augmented-Lagrangian energy of acts, plus the smooth head term if a is given."""
             F = sum(PA.al_energy(params, acts[v], Zin[v], duals[v], rho, cfg.enc,
                                  cfg.pc.out_scale, SP.norm_spec(cfg)) for v in range(V))
             if a is not None:
@@ -199,8 +204,8 @@ def relax_fixed_point_residual(params, cfg, Xtr, Ts=(16, 64, 256), B=256, seed=0
 
 # ------------------------------------------------------------- group D
 
-# Per-layer cosine: PC weight gradient vs BP through the same deployed net.
 def grad_cosines(params, cfg, Xtr, B=256, seed=0):
+    """Returns, per layer, the cosine between the PC and BP weight gradients through the same deployed net."""
     key = jax.random.PRNGKey(seed + 1)
     kb, kv, ka, kg = jax.random.split(key, 4)
     idx = np.random.default_rng(seed).choice(len(Xtr), B, replace=False)
@@ -222,6 +227,8 @@ def grad_cosines(params, cfg, Xtr, B=256, seed=0):
 # ------------------------------------------------------------------ main
 
 def analyse(run_dir, n_train, n_test, fast=False):
+    """Runs all diagnostic groups (C robustness, B inference/dial, A relaxation fixed point, D gradient
+    agreement) for one run and returns the collected result rows."""
     cfg, params = load_run(run_dir)
     sp = cfg.sparse
     Xtr, ytr, Xte, yte = D.load_dataset(cfg.data)
@@ -234,6 +241,7 @@ def analyse(run_dir, n_train, n_test, fast=False):
     rows = []
 
     def add(group, metric, value, condition="clean", t="", **kw):
+        """Appends one result row (run/case/arm/seed plus the given group/metric/value) to rows."""
         rows.append({"run": tag, "case": sp.case, "arm": cfg.arm, "seed": cfg.opt.seed,
                      "group": group, "metric": metric, "condition": condition, "t": t,
                      "value": value, **kw})
@@ -344,13 +352,14 @@ def analyse(run_dir, n_train, n_test, fast=False):
     return rows
 
 
-# Plain forward pass of the MODIFIED network (no sparse step), via jpc.
 def E_plain(params, x, cfg):
+    """Returns the plain forward pass of the modified network (no sparse step), via the jpc-style encoder."""
     import encoder as E
     return E.forward(params, x, cfg.enc)[0]
 
 
 def main():
+    """Parses CLI args, runs analyse() on every given run directory, and writes the combined rows to CSV."""
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--csv", default="diag_sparse.csv")

@@ -1,3 +1,8 @@
+# Sparse-coding augmentations for the PC encoder: case B (soft-threshold a layer), case C (ISTA-coded
+# layer with a trained dictionary), case D (per-head LASSO dictionaries explaining centred residual-stream
+# activity, optionally anchored to pixels in case E). Provides dictionary/code init, ISTA/FISTA solvers,
+# the deployed (test-time) forward pass, PC-relaxation hooks (dual rates, prox steps), and health/diagnostic
+# scalars for the training log.
 import math
 
 import equinox as eqx
@@ -13,49 +18,45 @@ import encoder as E
 # ------------------------------------------------------------------ basics
 
 def active(cfg) -> bool:
+    """Returns whether sparse coding is active for cfg (case != "none")."""
     return cfg.sparse.case != "none"
 
 
-# Case D: side dictionary heads on the residual stream, all multipliers kept.
 def is_D(cfg) -> bool:
+    """Returns whether cfg is case D: side dictionary heads on the residual stream, all multipliers kept."""
     return cfg.sparse.case == "D"
 
 
-# Case-D head explains CENTRED, per-sample normalised activity:
-# sqrt(n) (v - mu) / ||v-mu|| (safe norm); mu = running EMA mean (params[3]), no gradient.
-# History: raw v let heads shrink stream (||f_5|| 2.35->1.36); normalising alone allowed
-# constant-offset route (job 4faac68e, both arms grew layers 6-12x toward one shared dir).
-# Centring forces head to explain differences; few-direction collapse still possible -> health_D/gate.
 def head_in(v, mu):
+    """Returns the centred, sqrt(n)-scaled unit vector (v - mu) / ||v - mu|| (safe norm), mu stop-gradiented.
+    Centring (not raw v) avoids the encoder's shrink-to-offset collapse route (job 4faac68e)."""
     return normalise_rows(v - jax.lax.stop_gradient(mu), float(np.sqrt(v.shape[-1])))
 
 
 def get_mu(params):
+    """Returns the per-head running-mean mu array from params."""
     return params[3]
 
 
-# Case E: case D plus a code -> pixel reconstruction anchor (beta_r > 0).
-# Spec: wiki 'Method - Reconstruction-anchored sparse heads plan'.
-# Params then (model, skip, Ds, mus, Gs, xbar);
-# with beta_r = 0 reduces exactly to case D's 4-tuple/expressions.
 def recon(cfg) -> bool:
+    """Returns whether cfg is case E: case D plus a pixel-reconstruction anchor (beta_r > 0).
+    Params are then (model, skip, Ds, mus, Gs, xbar); beta_r=0 reduces exactly to case D's 4-tuple."""
     return is_D(cfg) and cfg.sparse.beta_r > 0
 
 
 def get_G(params):
+    """Returns the per-head generative dictionaries G from params (case E)."""
     return params[4]
 
 
 def get_xbar(params):
+    """Returns the fixed per-pixel training mean xbar from params (case E)."""
     return params[5]
 
 
-# Per-head LASSO as (target, dictionary, mu):
-# case D: (f~, D, beta_g) -> beta_g/2||f~ - D a||^2
-# case E: ([sqrt(bg) f~; sqrt(br) xc], [sqrt(bg) D; sqrt(br) G], 1)
-#   -> beta_g/2||f~ - D a||^2 + beta_r/2||xc - G a||^2
-# so ista/fista/lasso_energy solve/score the anchored code unchanged.
 def stacked(f_t, Dl, xc, Gl, cfg):
+    """Returns the per-head LASSO (target, dictionary, mu): plain (f~, D, beta_g) for case D, or the
+    beta-weighted stack [sqrt(bg) f~; sqrt(br) xc], [sqrt(bg) D; sqrt(br) G] for case E's anchor."""
     sp = cfg.sparse
     if not recon(cfg):
         return f_t, Dl, sp.beta_g
@@ -63,13 +64,13 @@ def stacked(f_t, Dl, xc, Gl, cfg):
             stacked_D(Dl, Gl, cfg), 1.0)
 
 
-# [sqrt(beta_g) D ; sqrt(beta_r) G]  (case E's per-head LASSO dictionary)
 def stacked_D(Dl, Gl, cfg):
+    """Returns the case-E stacked dictionary [sqrt(beta_g) D; sqrt(beta_r) G]."""
     return jnp.concatenate([jnp.sqrt(cfg.sparse.beta_g) * Dl, jnp.sqrt(cfg.sparse.beta_r) * Gl], 0)
 
 
-# Per head: (layer, D_l, mu_l, G_l or None, centred pixels or None).
 def _heads(params, cfg, x=None):
+    """Returns, per head, the tuple (layer, D_l, mu_l, G_l or None, centred pixels or None)."""
     sp = cfg.sparse
     Ds, mus = get_D(params), get_mu(params)
     if recon(cfg):
@@ -79,11 +80,9 @@ def _heads(params, cfg, x=None):
     return [(l, Dl, mu, None, None) for l, Dl, mu in zip(sp.heads, Ds, mus)]
 
 
-# Calibration rows: init mu (and case E's xbar), select gamma / beta_r.
-# Same images, rng(0). Case D: deterministic training centre views.
-# Case E (decision 2026-10-08, review E-M1/D5): AUGMENTED training views,
-# the distribution the model trains on -- one view per image, fixed key PRNGKey(0).
 def mu_rows(Xtr, cfg, n=1024):
+    """Returns calibration rows (rng(0), same images across calls) for init_mu and gamma/beta_r selection:
+    training centre views for case D, one fixed-key augmented view per image for case E."""
     import data as Dd
     idx = np.random.default_rng(0).choice(len(Xtr), n, replace=False)
     if recon(cfg):
@@ -92,28 +91,27 @@ def mu_rows(Xtr, cfg, n=1024):
     return Dd.eval_batch(jnp.asarray(Xtr[idx]), cfg.data)
 
 
-# Deployed ISTA steps after a^(0): T_test * code_k, the count the relaxation takes.
 def t_deploy(cfg):
+    """Returns the number of deployed ISTA steps after a^(0): T_test * code_k."""
     return cfg.sparse.T_test * cfg.sparse.code_k
 
 
-# Case E target: view minus its own pixel mean.
-# Removes per-view mean brightness so brightness jitter isn't rewarded.
-# Decision 2026-10-08.
 def anchor_target(x, xbar):
+    """Returns the case-E reconstruction target: x minus the fixed pixel mean xbar, then minus its own per-view mean."""
     xc = x - jax.lax.stop_gradient(xbar)
     return xc - jnp.mean(xc, axis=-1, keepdims=True)
 
 
 def _head_means(params, x, cfg):
+    """Returns the feedforward per-head activation means over x."""
     z, hs = E.forward(params, x, cfg.enc)
     acts = [*hs, z]
     return tuple(jnp.mean(acts[l], axis=0) for l in cfg.sparse.heads)
 
 
-# Sets mu_l to the feedforward mean of head layer l over x.
-# Call before training, before head selection, and for every untrained floor.
 def init_mu(params, x, cfg):
+    """Sets mu_l to the feedforward mean of head layer l over x (and xbar for case E).
+    Call before training, before head selection, and for every untrained floor."""
     if not is_D(cfg):
         return params
     out = list(params)
@@ -125,15 +123,15 @@ def init_mu(params, x, cfg):
 
 @eqx.filter_jit
 def _mu_ema(params, Zin, cfg):
+    """Returns mu updated by one EMA step toward this batch's feedforward per-head means."""
     m = cfg.sparse.mu_momentum
     means = [jnp.mean(jnp.stack([_head_means(params, Zin[v], cfg)[h] for v in range(Zin.shape[0])]), axis=0)
              for h in range(len(cfg.sparse.heads))]
     return tuple(m * mu + (1 - m) * jax.lax.stop_gradient(nm) for mu, nm in zip(params[3], means))
 
 
-# EMA update of mu from this step's training views (feedforward), after optimiser step.
-# Same rule applied in both arms.
 def update_mu(params, Zin, cfg):
+    """Returns params with mu EMA-updated from this step's training views, after the optimiser step."""
     if not is_D(cfg):
         return params
     out = list(params)
@@ -142,6 +140,7 @@ def update_mu(params, Zin, cfg):
 
 
 def check_D(cfg, L):
+    """Asserts that case D's heads/head_ws/gammas are consistent and interior to the network."""
     sp = cfg.sparse
     assert len(sp.heads) >= 1, "case D needs at least one head"
     assert len(sp.head_ws) == len(sp.heads) == len(sp.gammas), \
@@ -150,22 +149,19 @@ def check_D(cfg, L):
     assert all(0 < l < L - 1 for l in sp.heads), f"heads {sp.heads} must be interior (1..{L-2})"
 
 
-# S_theta(v) = sign(v) * max(|v| - theta, 0)
-# Derivative: 1[|v| > theta]
 def soft_threshold(v, theta):
+    """Returns the soft-threshold S_theta(v) = sign(v) * max(|v| - theta, 0)."""
     return jnp.sign(v) * jnp.maximum(jnp.abs(v) - theta, 0.0)
 
 
-# Normalize columns to unit norm.
 def normalise_dict(D, eps=1e-8):
+    """Normalizes D's columns to unit norm."""
     return D / jnp.maximum(jnp.linalg.norm(D, axis=0, keepdims=True), eps)
 
 
-# ||D||_2^2, exact (spectral norm squared).
-# Used as solver step-size constant, never part of a gradient path.
-# stop_gradient applied to D itself, so no SVD derivative is built.
-# Note: stopping only the OUTPUT still built the JVP (found in review).
 def spectral_sq(D):
+    """Returns ||D||_2^2 (exact spectral norm squared) for the solver step size; D is stop-gradiented.
+    Stopping only the output still built a JVP, so stop_gradient is applied to D itself."""
     Ds = jax.lax.stop_gradient(D)
     # exact: lambda_max(D D^T) = sigma_max(D)^2, via a symmetric eigensolve of the
     # n x n Gram, cheaper on GPU than the SVD behind norm(ord=2) (review D-M5/N7)
@@ -173,12 +169,9 @@ def spectral_sq(D):
     return jnp.linalg.eigvalsh(Ds @ Ds.T if Ds.shape[0] <= Ds.shape[1] else Ds.T @ Ds)[-1]
 
 
-# Case-C relax step: eta_g = step_frac / (beta_g ||D||^2).
-# D constant within one relaxation; computed ONCE per relax.
-# Case D: one step per head (tuple).
-# w_l cancels from code dynamics: energy w_l[beta_g/2||z_l-D_l a||^2 + gamma_l||a||_1],
-# prox-gradient step at eta/w_l equals unweighted step at eta.
 def code_step(params, cfg):
+    """Returns the ISTA step size eta_g = step_frac / (beta_g ||D||^2), per head for case D.
+    Computed once per relaxation; head weights w_l cancel from the code dynamics."""
     if recon(cfg):          # exact Lipschitz constant of the stacked LASSO
         sp = cfg.sparse
         return tuple(sp.step_frac / spectral_sq(stacked_D(Dl, Gl, cfg))
@@ -189,25 +182,23 @@ def code_step(params, cfg):
     return cfg.sparse.step_frac / (cfg.sparse.beta_g * spectral_sq(get_D(params)))
 
 
-# Per-sample Moreau envelope of beta||.||_1 at f:
-# min_z rho/2||z-f||^2 + beta||z||_1 = rho/2||f-S(f)||^2 + beta||S(f)||_1,
-# S = S_{beta/rho} (soft-threshold). Returns shape (B,)
 def huber_energy(f, beta, rho):
+    """Returns the per-sample Moreau envelope of beta||.||_1 at f, shape (B,)."""
     zs = soft_threshold(f, beta / rho)
     return 0.5 * rho * jnp.sum((f - zs) ** 2, -1) + beta * jnp.sum(jnp.abs(zs), -1)
 
 
 def lasso_mu(cfg):
+    """Returns the LASSO coupling mu = rho * beta_g / (rho + beta_g)."""
     rho, bg = cfg.pc.rho, cfg.sparse.beta_g
     return rho * bg / (rho + bg)
 
 
 # ------------------------------------------------------------------ params
 
-# E.init, plus case-B/C architecture change and (case C) D.
-# Encoder weights use same key as E.init -> shared layers start from same draw.
-# D comes from an independent fold of the same key.
 def init_params(key, cfg, input_dim):
+    """Returns initial params: E.init's encoder plus the case-specific architecture change and dictionaries.
+    Shared layers use the same key as E.init; dictionaries come from independent folds of that key."""
     params = E.init(key, cfg.enc, input_dim)
     sp = cfg.sparse
     if sp.case == "none":
@@ -240,8 +231,8 @@ def init_params(key, cfg, input_dim):
     return (model, skip, normalise_dict(D))
 
 
-# Post-optimiser-step projection: re-normalise D's columns (case C).
 def project(params, cfg):
+    """Re-normalises D's (and case E's G's) columns to unit norm after an optimiser step."""
     if cfg.sparse.case == "D":
         out = list(params)
         out[2] = tuple(normalise_dict(Dl) for Dl in params[2])
@@ -254,11 +245,12 @@ def project(params, cfg):
 
 
 def get_D(params):
+    """Returns the dictionary D (or per-head dictionaries) from params."""
     return params[2]
 
 
-# optax.multi_transform labels for case-C params: encoder vs dictionary.
 def param_labels(params):
+    """Returns optax.multi_transform labels ("enc"/"dict"/"frozen") for each param leaf."""
     enc = jax.tree_util.tree_map(lambda _: "enc", (params[0], params[1]))
     if isinstance(params[2], tuple):                       # case D: one D per head
         lab = (enc[0], enc[1], tuple("dict" for _ in params[2]),
@@ -271,27 +263,27 @@ def param_labels(params):
 
 # ----------------------------------------------------------------- LASSO
 
-# ISTA steps minimizing mu/2||f - D a||^2 + gamma||a||_1, rows of f independent.
-# a0=None starts from a^(0) = S_{eta*gamma}(eta*mu*D^T f),
-# i.e. one ISTA step from a=0 (untrained one-stage LISTA initializer).
 def ista(f, D, gamma, mu, t, eta, a0=None):
+    """Runs t ISTA steps minimizing mu/2||f - D a||^2 + gamma||a||_1 (rows of f independent).
+    a0 defaults to one ISTA step from a=0: S_(eta*gamma)(eta*mu*D^T f)."""
     th = eta * gamma
     if a0 is None:
         a0 = soft_threshold(eta * mu * (f @ D), th)
 
     def step(_, a):
+        """Returns one ISTA update of code a."""
         return soft_threshold(a + eta * mu * ((f - a @ D.T) @ D), th)
 
     return jax.lax.fori_loop(0, t, step, a0) if t > 0 else a0
 
 
-# Reference LASSO solver via FISTA.
-# Step size exactly 1/(mu * ||D||^2).
 def fista(f, D, gamma, mu, n_iter=2000):
+    """Runs n_iter FISTA steps as a reference LASSO solver, with step size exactly 1/(mu * ||D||^2)."""
     eta = 1.0 / (mu * spectral_sq(D))
     th = eta * gamma
 
     def step(_, c):
+        """Returns one FISTA (accelerated proximal-gradient) update of (a, y, momentum tk)."""
         a, y, tk = c
         a_new = soft_threshold(y + eta * mu * ((f - y @ D.T) @ D), th)
         tk1 = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * tk ** 2))
@@ -302,16 +294,13 @@ def fista(f, D, gamma, mu, n_iter=2000):
     return a
 
 
-# Per-sample loss: mu/2 * ||f - D a||^2 + gamma * ||a||_1 -> shape (B,).
 def lasso_energy(f, D, a, gamma, mu):
+    """Returns the per-sample LASSO loss mu/2 * ||f - D a||^2 + gamma * ||a||_1, shape (B,)."""
     return 0.5 * mu * jnp.sum((f - a @ D.T) ** 2, -1) + gamma * jnp.sum(jnp.abs(a), -1)
 
 
-# Per-sample max violation of LASSO optimality conditions, divided by gamma.
-# c = mu * D^T (f - D a):
-# a_j != 0 requires c_j = gamma*sign(a_j);
-# a_j == 0 requires |c_j| <= gamma.
 def kkt_violation(f, D, a, gamma, mu):
+    """Returns the per-sample max violation of the LASSO KKT optimality conditions, divided by gamma."""
     c = mu * ((f - a @ D.T) @ D)
     on = jnp.abs(c - gamma * jnp.sign(a))
     off = jnp.maximum(jnp.abs(c) - gamma, 0.0)
@@ -322,14 +311,15 @@ def kkt_violation(f, D, a, gamma, mu):
 # ------------------------------------------------------- deployed forward
 
 def _scalings(params, x, cfg):
+    """Returns jpc's per-layer parameter scalings for the deployed network at x."""
     model, skip = params[0], params[1]
     return jpc._get_param_scalings(model=model, input=x, skip_model=skip,
                                    param_type=cfg.enc.parameterisation,
                                    gamma=E.gamma_for(cfg.enc))
 
 
-# Returns (s, c) if sparse layer's prediction is normalised, else None.
 def norm_spec(cfg):
+    """Returns (layer, norm constant) if the sparse layer's prediction is normalised, else None."""
     sp = cfg.sparse
     if sp.case in ("none", "D") or not sp.normalise_fs:
         return None
@@ -339,17 +329,13 @@ def norm_spec(cfg):
 NORM_EPS = 1e-6
 
 
-# f / sqrt(||f||^2 + eps^2), per row (safe norm, not plain L2 normalize).
-# All-black augmented view gives f_s = 0 exactly (no biases in encoder);
-# plain f/||f|| grad is 0/0 there -> NaN. Caused pilot runs to stall at
-# step 68 of job b3c717c6 (one all-zero view in that batch).
 def normalise_rows(f, c):
+    """Returns c * f / sqrt(||f||^2 + eps^2) per row (a safe norm, avoiding 0/0 on all-zero rows, job b3c717c6)."""
     return c * f / jnp.sqrt(jnp.sum(f * f, axis=-1, keepdims=True) + NORM_EPS ** 2)
 
 
-# f_l(prev), mirroring jpc.init_activities_with_ffwd term for term
-# norm = (s, c) normalises layer s's prediction (as pcalm.layer_predictions)
 def _pred(params, scalings, l, prev, norm=None):
+    """Returns f_l(prev), mirroring jpc's term structure; normalises layer s's prediction if norm=(s, c) matches l."""
     model, skip = params[0], params[1]
     p = scalings[l] * vmap(model[l])(prev)
     if skip[l] is not None:
@@ -359,12 +345,9 @@ def _pred(params, scalings, l, prev, norm=None):
     return p
 
 
-# Deployed (test-time) network -> (acts, extras).
-# acts: [z_0,...,z_{L-1}] in encoder.forward order (z_{L-1}=embedding).
-# extras: {} for case none; {"f_s"} for B; {"f_s","a","eta"} for C.
-# t: case-C ISTA steps (default cfg.sparse.T_test); t=0 uses a^(0).
-# beta_g: case-C test-time coupling override; beta_g=0 -> plain forward pass.
 def deploy(params, x, cfg, t=None, beta_g=None):
+    """Runs the deployed (test-time) network, returning (acts, extras): each head codes its own LASSO for
+    case D, case B/C threshold/code the sparse layer; t overrides ISTA steps, beta_g=0 forces a plain pass."""
     sp = cfg.sparse
     if sp.case == "none":
         z, hs = E.forward(params, x, cfg.enc)
@@ -417,18 +400,15 @@ def deploy(params, x, cfg, t=None, beta_g=None):
     return acts, extras
 
 
-# encoder.forward's (z, hs) contract for the deployed network.
 def forward(params, x, cfg, t=None):
+    """Returns (z, hs) in encoder.forward's contract, from the deployed network."""
     acts, _ = deploy(params, x, cfg, t=t)
     return acts[-1], acts[:-1]
 
 
-# Deployed energy of sparse layer, batch mean, for ONE view.
-# Energy PC arm minimizes over z_s, at deployed z_s:
-# B (C1-B): Huber_{beta,rho}(f_s), Moreau envelope of beta||.||_1
-# C (C2): mu/2||f_s - D a^(T)||^2 + gamma||a^(T)||_1
-# train.bp_objective SUMS this over views, as the PC energy does.
 def deployed_head_energy(params, x, cfg):
+    """Returns the deployed sparse-layer energy for one view, batch mean (Huber for B, LASSO for C,
+    weighted per-head LASSO for D); train.bp_objective sums this over views."""
     sp = cfg.sparse
     if sp.case == "none":
         return 0.0
@@ -449,9 +429,9 @@ def deployed_head_energy(params, x, cfg):
 
 # --------------------------------------------------- relaxation hooks
 
-# Per-layer dual rates.
-# case none: alpha everywhere (unchanged).
 def layer_alphas(cfg, L):
+    """Returns per-layer dual rates: zero below/at the sparse layer (unless below_hard) for B/C, alpha
+    everywhere for case D/none."""
     a = cfg.pc.alpha
     if not active(cfg) or is_D(cfg):          # case D keeps every multiplier
         return [a] * L
@@ -460,16 +440,14 @@ def layer_alphas(cfg, L):
             for l in range(L)]
 
 
-# Relaxation start for ONE view: the deployed forward pass (C at t = 0).
-# Returns (acts, a or None).
 def relax_init(params, x, cfg):
+    """Returns the relaxation start for one view: the deployed forward pass at t=0, as (acts, a or None)."""
     acts, ex = deploy(params, x, cfg, t=0)
     return acts, ex.get("a")
 
 
-# Smooth head energy (case C), batch mean:
-# beta_g/(2B) * sum ||z_s - D a||^2
 def head_smooth(params, acts, a, cfg, x=None):
+    """Returns the smooth case-C/D head energy, batch mean: beta_g/2 ||z_s - D a||^2 (plus case E's anchor term)."""
     if is_D(cfg):
         sp = cfg.sparse
         e = 0.0
@@ -485,9 +463,8 @@ def head_smooth(params, acts, a, cfg, x=None):
     return 0.5 * cfg.sparse.beta_g * jnp.sum((zs - a @ get_D(params).T) ** 2) / zs.shape[0]
 
 
-# L1 terms, batch mean.
-# Reported in F; never differentiated.
 def nonsmooth(acts, a, cfg):
+    """Returns the L1 sparsity term, batch mean (reported only, never differentiated)."""
     sp = cfg.sparse
     if sp.case == "D":
         return sum(wl * gl * jnp.sum(jnp.abs(al)) / al.shape[0]
@@ -500,10 +477,8 @@ def nonsmooth(acts, a, cfg):
     return 0.0
 
 
-# Case B proximal step on z_s.
-# Per-sample threshold = (per-sample step at layer s) * beta = (s_step / rho) * beta.
-# Layer s has its own step (pcalm.relax), never eta_h * B.
 def prox_zs(acts, cfg):
+    """Returns acts with case B's proximal soft-threshold step applied to layer s, using layer s's own step size."""
     if cfg.sparse.case != "B":
         return acts
     s = cfg.sparse.layer
@@ -512,11 +487,9 @@ def prox_zs(acts, cfg):
     return out
 
 
-# Case C proximal-gradient step on code, at PRE-step activities.
-# a <- S_{eta_g gamma}(a - eta_g beta_g D^T (D a - z_s))
-# eta = eta_g from code_step(), computed once per relaxation.
-# Gradient is per-sample (no batch averaging).
 def a_step(params, acts, a, cfg, eta, x=None):
+    """Returns one (or code_k, for case D) proximal-gradient step(s) on code a, at pre-step activities.
+    eta is code_step()'s per-relaxation step size; the gradient is per-sample, not batch-averaged."""
     sp = cfg.sparse
     if is_D(cfg):           # one prox-gradient step per head; eta is a tuple
         out = []
@@ -535,8 +508,8 @@ def a_step(params, acts, a, cfg, eta, x=None):
     return soft_threshold(a - eta * grad, eta * sp.gamma)
 
 
-# Fraction of nonzero units in the sparse variable (z_s for B, a for C).
 def active_fraction(acts, a, cfg):
+    """Returns the fraction of nonzero units in the sparse variable (z_s for B, a for C; mean over heads for D)."""
     sp = cfg.sparse
     if is_D(cfg):           # mean over heads
         return sum(jnp.mean((al != 0).astype(jnp.float32)) for al in a) / len(a)
@@ -546,8 +519,8 @@ def active_fraction(acts, a, cfg):
 
 # ------------------------------------------------------------- health
 
-# Scalars for the training log (rescaling cheat, sparsity, dictionary).
 def health(params, x, cfg):
+    """Returns training-log health scalars (rescaling, sparsity, dictionary diagnostics) for the deployed network."""
     if not active(cfg):
         return {}
     sp = cfg.sparse
@@ -576,19 +549,16 @@ def health(params, x, cfg):
     return out
 
 
-# 1 - median cosine to the mean direction (0 = every row points the same way).
 def _spread(v):
+    """Returns 1 minus the median cosine of each row to the mean direction (0 = all rows point the same way)."""
     m = jnp.mean(v, 0)
     c = (v @ m) / (jnp.linalg.norm(v, axis=1) * jnp.linalg.norm(m) + 1e-12)
     return float(1.0 - jnp.median(c))
 
 
-# Case D log scalars per head, and collapse guards of pilot gate.
-# h{l}_fnorm: mean||f_l|| raw activity scale guard; h{l}_input_spread: angular spread collapse guard
-# h{l}_lasso: unweighted per-view head energy at deployed code on f~_l; h{l}_wlasso = w_l*h{l}_lasso (xV -> BP-D share)
-# h{l}_subopt: rel LASSO suboptimality a^(T_test) vs FISTA(500); h{l}_D_spec: ||D_l||_2^2 (ISTA step)
-# h{l}_pr: participation ratio (sum lam)^2/sum lam^2 of centred f_l-mu_l cov; h{l}_mu_offset: ||mean_rows(f_l)-mu_l||/rms||f_l-mean||
 def health_D(params, acts, ex, cfg, n_fista=256):
+    """Returns case-D per-head log scalars and collapse guards: activity scale/spread, LASSO energy and
+    suboptimality vs FISTA(500), dictionary coherence/spectral norm, participation ratio, mu offset, etc."""
     sp = cfg.sparse
     z = acts[-1]
     out = {"embed_spread": _spread(z), "embed_norm": float(jnp.mean(jnp.linalg.norm(z, axis=-1))),

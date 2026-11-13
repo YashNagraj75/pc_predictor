@@ -1,3 +1,5 @@
+# Unit tests for pred_sdpc: inference monotonicity/KKT, dictionary gradient
+# checks, batch-independence, and predict()'s causal (seen-views-only) behavior.
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, jax, jax.numpy as jnp
@@ -7,11 +9,13 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records a pass/fail result for a named check and prints it."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}")
 
 
 def small(seed=0, b=16, k=3, d=12, sizes=(16, 12, 10, 8, 6)):
+    """Builds a small random SDPC dictionary plus latent/target batches for testing."""
     kz, kt = jax.random.split(jax.random.PRNGKey(seed + 7))
     Ds = S.init(jax.random.PRNGKey(seed), d, sizes)
     Z = jax.random.normal(kz, (b, k, d)); T = 0.5 * jax.random.normal(kt, (b, k, 9))
@@ -19,6 +23,7 @@ def small(seed=0, b=16, k=3, d=12, sizes=(16, 12, 10, 8, 6)):
 
 
 def main():
+    """Runs all pred_sdpc checks and returns True iff every check passed."""
     Ds, Z, T = small()
     Ph = S.phi(T)
     cfg = S.SCfg(beta=1.0, lam=0.05, T_inf=3000)

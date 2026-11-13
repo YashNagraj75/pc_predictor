@@ -6,6 +6,7 @@ import vit_ijepa as V, train_pred_vit as A, latent_vit as LV
 # Known-answer tests for latent_vit.py rev 2 (3 reviewers); exits 1 on any failure.
 OK = [True]
 def check(name, ok, info=""):
+    """Updates the global pass flag and prints a pass/fail status line for a named check."""
     OK[0] &= bool(ok); print(f"  [{'PASS' if ok else 'FAIL'}] {name} {info}", flush=True)
 rng = np.random.default_rng(0)
 X = rng.standard_normal((500, 32)); Q, _ = np.linalg.qr(rng.standard_normal((32, 32)))

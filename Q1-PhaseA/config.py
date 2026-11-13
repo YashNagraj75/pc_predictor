@@ -1,3 +1,4 @@
+# Dataclass configs for the Phase-A encoder runs (data, encoder, SIGReg, PC-ALM inference, sparse prior, optimiser) and presets.
 from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional, Tuple
 import json
@@ -5,6 +6,7 @@ import json
 
 @dataclass(frozen=True)
 class DataCfg:
+    """Config for the dataset and its multi-view augmentation settings (LeJEPA Sec 5)."""
     dataset: Literal["galaxy10", "mnist", "cifar10"] = "galaxy10"
     root: str = "../data"
     img_size: int = 32              # all views resized to this; FC encoder needs fixed dim
@@ -29,6 +31,7 @@ class DataCfg:
 
     @property
     def input_dim(self) -> int:
+        """Returns the flattened per-view input dimension (img_size^2 * channels)."""
         c = 1 if self.grayscale else 3
         return self.img_size * self.img_size * c
 
@@ -38,6 +41,7 @@ class DataCfg:
 # Training sets are matched to Galaxy10's 15,675 images (user 2026-10-30, fairness across datasets).
 N_TRAIN_MATCHED = 15675
 def data_preset(name):
+    """Returns the DataCfg preset for name ('galaxy10', 'mnist', or 'cifar10'); raises ValueError otherwise."""
     if name == "galaxy10":
         return DataCfg()
     if name == "mnist":
@@ -47,9 +51,9 @@ def data_preset(name):
     raise ValueError(name)
 
 
-# muPC-parameterised fully-connected residual net (see mu_pc.ipynb).
 @dataclass(frozen=True)
 class EncoderCfg:
+    """Config for the muPC-parameterised fully-connected residual encoder (see mu_pc.ipynb)."""
     depth: int = 8                  # number of residual blocks
     width: int = 128
     embed_dim: int = 128            # K -- dimension SIGReg acts on
@@ -57,9 +61,9 @@ class EncoderCfg:
     parameterisation: Literal["mupc", "sp"] = "mupc"
 
 
-# LeJEPA Definition 2 + Algorithm 1.
 @dataclass(frozen=True)
 class SIGRegCfg:
+    """Config for the LeJEPA SIGReg regularizer (Definition 2 + Algorithm 1)."""
     num_slices: int = 256           # |A|; Table 1(a) sweeps 512/2048, 256 is cheap
     t_max: float = 5.0              # integration range [-t_max, t_max]
     n_points: int = 17              # quadrature points; Table 1(a): 5/17/41 all fine
@@ -70,17 +74,15 @@ class SIGRegCfg:
     lambd: float = 0.05             # weight on SIGReg vs the invariance term
 
 
-# Predictive-coding inference (relaxation) settings.
 @dataclass(frozen=True)
 class PCCfg:
+    """Config for predictive-coding inference (relaxation) settings."""
     T: int = 16                     # inference steps per weight update.
                                     # THE independent variable of this study.
-    # PER-SAMPLE activity step (the paper's eta_h).  Replaces the old
-    # `activity_lr`, which was applied straight to jpc's BATCH-MEAN energy
-    # gradient and so realised eta_h/B per sample: at activity_lr=0.5,
-    # batch_size=256 the realised step was 0.002 against a stable optimum near
-    # 0.25, and the relaxation never left its initialisation.  pcalm.relax
-    # multiplies this by the batch size.  Set it from diag_inference.py.
+    # PER-SAMPLE activity step (eta_h); replaces old `activity_lr`, which
+    # realised eta_h/B per sample via jpc's BATCH-MEAN gradient (step 0.002
+    # vs optimum ~0.25 at activity_lr=0.5, bs=256 -- relaxation stalled).
+    # pcalm.relax now multiplies by batch size; set from diag_inference.py.
     eta_h: float = 0.25
     # --- augmented Lagrangian (PC-ALM) ---------------------------------
     # alpha = 0 is plain PC: the duals stay zero and the energy collapses to
@@ -92,14 +94,11 @@ class PCCfg:
                                         # output_energy_scaling); None == 1
     weight_credit_timing: Literal["pre_dual", "post_dual"] = "pre_dual"
     init: Literal["feedforward", "zeros"] = "feedforward"
-    # How the output node is driven when the loss is not a per-sample target.
-    #   "coupled" : eps_out = dL/dz_out recomputed every relaxation step from the
-    #               current batch.  Exact, but couples samples -> the energy is
-    #               no longer a sum of per-sample energies.
-    #   "frozen"  : eps_out = dL/dz_out computed ONCE from the feedforward
-    #               embeddings and held fixed for all T steps.  Factorises over
-    #               the batch.  Direct analogue of the `fixed_prediction`
-    #               assumption.  <-- build and test BOTH.
+    # Output-node drive when the loss isn't a per-sample target.
+    #   "coupled": eps_out recomputed each relaxation step from the current
+    #     batch; exact, but couples samples (energy no longer per-sample sum).
+    #   "frozen": eps_out computed once from feedforward embeddings, held
+    #     fixed for all T steps; factorises over the batch. <-- test BOTH.
     output_drive: Literal["coupled", "frozen"] = "coupled"
 
 
@@ -110,6 +109,7 @@ class PCCfg:
 # B and C make layer s NON-residual and rescale W_s by sqrt(L) at init.
 @dataclass(frozen=True)
 class SparseCfg:
+    """Config selecting the sparse-prior variant ('none'/'B'/'C'/'D') and its hyperparameters."""
     case: Literal["none", "B", "C", "D"] = "none"
     layer: int = 5                  # s: index into the activity list (interior)
     beta: float = 0.0               # case B L1 weight; threshold beta/rho
@@ -144,6 +144,7 @@ class SparseCfg:
 
 @dataclass(frozen=True)
 class OptCfg:
+    """Config for the optimizer (AdamW-style) and training schedule."""
     param_lr: float = 1e-3
     batch_size: int = 256           # Table 1(c): 256-512 best
     n_steps: int = 2000
@@ -160,6 +161,7 @@ class OptCfg:
 
 @dataclass(frozen=True)
 class RunCfg:
+    """Top-level config bundling the data, encoder, SIGReg, PC, optimizer and sparse sub-configs for a run."""
     arm: Literal["bp", "pc"] = "pc"
     use_sigreg: bool = True         # False -> invariance only (collapse control)
     # "bn": parameterless BatchNorm over the pooled (V*B) axis before BOTH
@@ -177,6 +179,7 @@ class RunCfg:
 
     @property
     def name(self) -> str:
+        """Returns the run's directory/tag name encoding arm, sigreg, and PC settings."""
         bits = [self.arm, "sigreg" if self.use_sigreg else "nosigreg"]
         if self.arm == "pc":
             bits += [f"T{self.pc.T}", self.pc.output_drive]
@@ -185,16 +188,15 @@ class RunCfg:
         return "_".join(bits)
 
     def to_json(self, path=None):
+        """Serializes the config to a JSON string, optionally writing it to path, and returns the string."""
         s = json.dumps(asdict(self), indent=2, default=str)
         if path:
             open(path, "w").write(s)
         return s
 
 
-# The 2x2 (x2) grid Q1 actually needs.
-# arm x use_sigreg -> the four Phase A runs.
-# See README section 'The runs'.
 def q1_grid(**overrides):
+    """Builds the four Phase A RunCfgs (arm x use_sigreg), applying overrides to each."""
     out = []
     for arm in ("bp", "pc"):
         for use_sigreg in (True, False):

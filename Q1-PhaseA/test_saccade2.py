@@ -10,16 +10,19 @@ OK = [True]
 
 
 def check(name, cond, info=""):
+    """Records whether cond holds under name, prints PASS/FAIL, and updates the overall OK flag."""
     OK[0] &= bool(cond)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}  {info}", flush=True)
 
 
-def rel(a, b):                                   # element-wise, floored at 1e-3 x median |b| (review NUM N8)
+def rel(a, b):
+    """Returns the element-wise max relative error between a and b, floored at 1e-3 x median |b| (review NUM N8)."""
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     return float(np.max(np.abs(a - b) / (np.abs(b) + 1e-3 * np.median(np.abs(b)) + 1e-12)))
 
 
-def brute_loo(m, pool, groups):                  # leave-out error of every latent, leaving out its whole group
+def brute_loo(m, pool, groups):
+    """Returns the brute-force leave-out error of every latent, leaving out its whole group if groups is set."""
     N = len(pool.w); out = np.zeros((pool.n, N))
     for i in range(N):
         keep = np.array([pool.g[j] != pool.g[i] if groups else j != i for j in range(N)]); w = pool.w[keep]
@@ -31,12 +34,15 @@ def brute_loo(m, pool, groups):                  # leave-out error of every late
     return out
 
 
-def pooled(m, pool, p):                          # pooled prediction with explicit weights p (n, N)
+def pooled(m, pool, p):
+    """Returns the pooled prediction for pool using explicit weights p of shape (n, N)."""
     c = np.einsum("nj,nj...->n...", p, pool.C) / p.sum(1).reshape((-1,) + (1,) * (pool.C.ndim - 2))
     return m.readout(c, pool.tte) if m.kind == "G" else c
 
 
 def build(m, Zc, Tc, t_, fix, geom, shift=None):
+    """Builds a glimpse pool by fixating the sequence fix, optionally shifting one glimpse, and returns it with
+    per-step prediction error."""
     n = len(t_); pool = S2.LPool(m, t_)
     pool.add(Zc[:, S.PERI:S.PERI + 1], np.repeat(Tc[None, S.PERI:S.PERI + 1], n, 0), -1); pool.set_peri(0)
     dpre = []
@@ -52,6 +58,7 @@ def build(m, Zc, Tc, t_, fix, geom, shift=None):
 
 
 def main():
+    """Runs the diag_saccade2 gates (reproduction, pools, saccade policies, BP comparisons) and returns pass/fail."""
     L_ = np.load("pred_latents.npz")
     raw_tr = L_["bp_emb_tr"]; mu, sd = raw_tr.reshape(-1, 128).mean(0), raw_tr.reshape(-1, 128).std(0) + 1e-6
     zte, tte, yte = (L_["bp_emb_te"] - mu) / sd, L_["tau_te"].astype(np.float32), np.asarray(L_["yte"])
