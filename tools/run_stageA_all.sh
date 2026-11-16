@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One host job for ALL remaining stage-A work, in order: depth 10, depth 6, BP noise floor (STAGES overrides, e.g.
-# STAGES="gpugate:10 depth:6" on a second GPU).  Each stage is re-run after a
+# STAGES="gpugate:10 depth:6" or "seeds:10" with SEEDS / SEED_ARMS).  Each stage is re-run after a
 # clean time-limit stop (rc 75) and resumes from its checkpoints; rc 1 (stage finished, some arms recorded as failed)
 # moves on; any other rc (GPU gate, lock, sync, crash) stops for a decision.  The host runs job commands with -e, so
 # this script turns it off and never depends on a line running after a non-zero command.  Log: sequence.txt.

@@ -21,7 +21,9 @@ def _np(o):                                      # numpy scalars/arrays -> pytho
 
 
 def dump(obj, path):                             # atomic json write
-    tmp = path + ".tmp"; json.dump(obj, open(tmp, "w"), default=_np); os.replace(tmp, path)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh: json.dump(obj, fh, default=_np)
+    os.replace(tmp, path)
 
 
 def readable(path):

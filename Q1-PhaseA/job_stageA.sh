@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Stage A (plan_stageA_scoped.md v3).  bash job_stageA.sh <project_root> <job_dir> <smoke|a0|depth|noise> [depth]
+# Stage A (plan_stageA_scoped.md v3).  bash job_stageA.sh <project_root> <job_dir> <smoke|a0|depth|noise|seeds> [depth]
 #   Resumable: re-launch the same command after a deadline exit (rc 75); finished and diverged runs are skipped.
 #   depth D: per arm, 5-epoch lr selection on the 90/10 split at {3e-4,1e-3,3e-3}, then 25 epochs at the winner
-#   (BP also runs 25 epochs at all three lrs: lr sensitivity).  noise: BP seeds 1-4 at BP's selected lr, both depths.
+#   (BP also runs 25 epochs at all three lrs).  noise: BP seeds 1-4.  seeds: SEEDS of SEED_ARMS at DEPTH, seed-0 lr.
 set -uo pipefail
 P="$1"; JOBDIR=$(readlink -f "$2"); MODE="$3"; DEPTH="${4:-10}"; cd "$P/Q1-PhaseA" || exit 2
 PY="$(cd ../.venv/bin && pwd)/python"
@@ -102,9 +102,16 @@ case "$MODE" in
     for D in 10 6; do lr=$(best_lr bp $D); case "$lr" in incomplete|none) touch $FAIL; continue ;; esac
       for s in 1 2 3 4; do d=$(run1 bp $D $lr 25 full $s); rc=$?; [ $rc -eq 75 ] && exit 75; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done; done ;;
   seeds)  # extra seeds SEEDS (default 1 2) of SEED_ARMS (default epc_alm_blk4) at DEPTH, each at its seed-0 selected lr
-    for arm in ${SEED_ARMS:-epc_alm_blk4}; do lr=$(best_lr $arm $DEPTH); case "$lr" in incomplete|none) note "seeds: no selected lr for $arm d$DEPTH"; touch $FAIL; continue ;; esac
-      for s in ${SEEDS:-1 2}; do d=$(run1 $arm $DEPTH $lr 25 full $s); rc=$?; [ $rc -eq 75 ] && exit 75
-        [ $rc -eq 3 ] && note "SEED DIVERGED $arm d$DEPTH s$s: reported, not re-tuned"; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done; done ;;
+    read T0 GI0 < <(TG)
+    for arm in ${SEED_ARMS:-epc_alm_blk4}; do lr=$(best_lr $arm $DEPTH)
+      case "$lr" in 3e-4|1e-3|3e-3) ;; *) note "seeds: no valid selected lr for $arm d$DEPTH ('$lr')"; touch $FAIL; continue ;; esac
+      s0="$B/${arm}_d${DEPTH}_lr${lr}_e25_full_s0"; [ "$arm" = bp ] || s0="${s0}_T${T0}g${GI0}"
+      [ -f "$s0/report.json" ] || { note "seeds: seed-0 final $s0 missing, not starting"; touch $FAIL; continue; }
+      for s in ${SEEDS:-1 2}; do d=$(run1 "$arm" "$DEPTH" "$lr" 25 full "$s"); rc=$?; [ $rc -eq 75 ] && exit 75
+        [ $rc -eq 3 ] && note "SEED DIVERGED $arm d$DEPTH s$s: reported, not re-tuned"; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done
+      nd=0; nv=0; nm=0; for s in ${SEEDS:-1 2}; do d="${s0%_s0*}_s$s${s0#*_s0}"
+        if [ -f "$d/report.json" ]; then nd=$((nd + 1)); elif [ -f "$d/diverged.json" ]; then nv=$((nv + 1)); else nm=$((nm + 1)); fi; done
+      note "seeds summary $arm d$DEPTH: finished $nd, diverged $nv, missing $nm"; [ $nm -eq 0 ] || touch $FAIL; done ;;
   *) note "unknown mode $MODE"; exit 64 ;;
 esac
 [ ! -e $FAIL ] || { note "finished with failures"; exit 1; }

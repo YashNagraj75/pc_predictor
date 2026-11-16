@@ -17,10 +17,10 @@ out, pas = sys.argv[1], int(sys.argv[2]); bad, n = [], {}
 for f in sorted(glob.glob(out + "/latent_*.json")):
     r = json.load(open(f)); n[(r["depth"], r["arm"])] = n.get((r["depth"], r["arm"]), 0) + 1
     if r["arm"] != "init" and not r.get("reproduces_report"): bad.append((r["run"], "report", r.get("report_dev")))
-    if max(r["instr_vs_model_rel"].values()) > 1e-3: bad.append((r["run"], "instr", r["instr_vs_model_rel"]))
+    if not (max(r["instr_vs_model_rel"].values()) <= 1e-3): bad.append((r["run"], "instr", r["instr_vs_model_rel"]))
     for c, v in r["conds"].items():
-        if abs(v["band_sum_check"] - 1) > 1e-5 or abs(v["dist_sum_check"] - 1) > 1e-5: bad.append((r["run"], c, v["band_sum_check"], v["dist_sum_check"]))
-    if r["conds"]["noise"]["noise"]["split_check_rel"] > 1e-3: bad.append((r["run"], "noise split"))
+        if not (abs(v["band_sum_check"] - 1) <= 1e-5 and abs(v["dist_sum_check"] - 1) <= 1e-5): bad.append((r["run"], c, v["band_sum_check"], v["dist_sum_check"]))
+    if not (r["conds"]["noise"]["noise"]["split_check_rel"] <= 1e-3): bad.append((r["run"], "noise split"))
 for d in (6, 10):
     exp = {"bp": 5, "init": 1, "epc_alm_k4": 1, "epc_alm_blk4": 1, "epc_k4": 1, **({"spc_u1": 1} if pas == 2 else {})}
     for a, k in exp.items():
