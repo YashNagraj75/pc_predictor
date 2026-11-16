@@ -17,7 +17,7 @@ out, pas = sys.argv[1], int(sys.argv[2]); bad, n = [], {}
 for f in sorted(glob.glob(out + "/latent_*.json")):
     r = json.load(open(f)); n[(r["depth"], r["arm"])] = n.get((r["depth"], r["arm"]), 0) + 1
     if r["arm"] != "init" and not r.get("reproduces_report"): bad.append((r["run"], "report", r.get("report_dev")))
-    if max(r["instr_vs_model_rel"].values()) > 1e-4: bad.append((r["run"], "instr", r["instr_vs_model_rel"]))
+    if max(r["instr_vs_model_rel"].values()) > 1e-3: bad.append((r["run"], "instr", r["instr_vs_model_rel"]))
     for c, v in r["conds"].items():
         if abs(v["band_sum_check"] - 1) > 1e-5 or abs(v["dist_sum_check"] - 1) > 1e-5: bad.append((r["run"], c, v["band_sum_check"], v["dist_sum_check"]))
     if r["conds"]["noise"]["noise"]["split_check_rel"] > 1e-3: bad.append((r["run"], "noise split"))

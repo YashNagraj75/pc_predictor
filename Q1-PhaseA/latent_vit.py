@@ -14,8 +14,14 @@ PC_ARMS = ("epc_alm_k4", "epc_alm_blk4", "epc_k4", "spc_u1")
 SHA = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__))).stdout.strip()
 
 
+def _np(o):                                      # numpy scalars/arrays -> python (pass-2 crash, 2026-11-15)
+    if isinstance(o, np.generic): return o.item()
+    if isinstance(o, np.ndarray): return o.tolist()
+    raise TypeError(f"not JSON serializable: {type(o).__name__}")
+
+
 def dump(obj, path):                             # atomic json write
-    tmp = path + ".tmp"; json.dump(obj, open(tmp, "w")); os.replace(tmp, path)
+    tmp = path + ".tmp"; json.dump(obj, open(tmp, "w"), default=_np); os.replace(tmp, path)
 
 
 def readable(path):

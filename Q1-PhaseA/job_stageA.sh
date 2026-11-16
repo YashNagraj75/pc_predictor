@@ -58,7 +58,7 @@ gpu_gate() {
 }
 case "$MODE" in
   gpugate) gpu_gate; exit $? ;;
-  depth|noise|a0|smoke_spc) gpu_gate || exit 4 ;;
+  depth|noise|seeds|a0|smoke_spc) gpu_gate || exit 4 ;;
 esac
 case "$MODE" in
   smoke)   # every arm at depth 6 for 12 steps (via run1, with resume at step 6), and the depth-10 ePC memory/time case
@@ -101,6 +101,10 @@ case "$MODE" in
   noise)
     for D in 10 6; do lr=$(best_lr bp $D); case "$lr" in incomplete|none) touch $FAIL; continue ;; esac
       for s in 1 2 3 4; do d=$(run1 bp $D $lr 25 full $s); rc=$?; [ $rc -eq 75 ] && exit 75; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done; done ;;
+  seeds)  # extra seeds SEEDS (default 1 2) of SEED_ARMS (default epc_alm_blk4) at DEPTH, each at its seed-0 selected lr
+    for arm in ${SEED_ARMS:-epc_alm_blk4}; do lr=$(best_lr $arm $DEPTH); case "$lr" in incomplete|none) note "seeds: no selected lr for $arm d$DEPTH"; touch $FAIL; continue ;; esac
+      for s in ${SEEDS:-1 2}; do d=$(run1 $arm $DEPTH $lr 25 full $s); rc=$?; [ $rc -eq 75 ] && exit 75
+        [ $rc -eq 3 ] && note "SEED DIVERGED $arm d$DEPTH s$s: reported, not re-tuned"; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done; done ;;
   *) note "unknown mode $MODE"; exit 64 ;;
 esac
 [ ! -e $FAIL ] || { note "finished with failures"; exit 1; }

@@ -39,6 +39,7 @@ for st in ${STAGES:-depth:10 depth:6 noise}; do
              elif [ "$depth" = 10 ]; then export STAGEA_ARMS="${STAGEA_ARMS:-bp epc_k4 epc_k16 epc_alm_blk4 epc_alm_k4}"; else unset STAGEA_ARMS; fi
              run_stage "depth $depth" depth $depth; rc=$?; unset STAGEA_ARMS; [ $rc -eq 0 ] || { log "STOPPED in depth $depth, rc=$rc"; exit $rc; } ;;
     noise)   run_stage "noise" noise; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in noise, rc=$rc"; exit $rc; } ;;
+    seeds)   run_stage "seeds $depth" seeds $depth; rc=$?; [ $rc -eq 0 ] || { log "STOPPED in seeds $depth, rc=$rc"; exit $rc; } ;;
     *)       log "unknown stage $st"; exit 64 ;;
   esac
 done
