@@ -30,7 +30,8 @@ retry rsync -a --partial --files-from=$W/files.txt $P/ $C/a4000/ || { log "stagi
 find $C/a4000 -type f -size +95M ! -name '*.part_*' | while read -r f; do rm -f "$f".part_*
   split -b 95m -d "$f" "$f.part_" && rm "$f" && log "split $(basename $f)"; done
 for g in $(cut -d/ -f1-2 $W/files.txt | sed 's#^_sync_backup_.*#_sync_backups#' | sort -u) a4000/MANIFEST.md5; do
-  case $g in _sync_backups) G add a4000/_sync_backup_* ;; a4000/*) G add "$g" ;; *) G add "a4000/$g" ;; esac
+  case $g in _sync_backups) G add a4000/_sync_backup_* ;; a4000/*) G add "$g" ;;
+    *) if [ -e "$C/a4000/$g" ] || [ -L "$C/a4000/$g" ]; then G add "a4000/$g"; else G add "a4000/$g.part_*"; fi ;; esac   # split files
   G diff --cached --quiet && continue
   G commit -q -m "a4000 backup: $g" && retry G push -q origin HEAD:main || { log "push failed at $g"; exit 4; }
   log "pushed $g"
@@ -39,7 +40,7 @@ log "verifying from a fresh HTTPS clone"
 rm -rf $V && retry git clone -q --depth 1 --filter=blob:none --sparse https://github.com/$REPO.git $V && git -C $V sparse-checkout set a4000 \
   || { log "verify clone failed"; exit 5; }
 cd $V/a4000 && for p in $(find . -name '*.part_00'); do cat "${p%.part_00}".part_* > "${p%.part_00}"; done
-md5sum -c --quiet $W/MANIFEST.md5 > $W/verify_failures.txt 2>&1; bad=$(grep -c . $W/verify_failures.txt)
+md5sum -c --quiet $W/MANIFEST.md5 > $W/verify_failures.txt 2>&1; bad=$(grep -c 'FAILED' $W/verify_failures.txt)
 n=$(wc -l < $W/MANIFEST.md5)
 if [ $bad -eq 0 ]; then log "BACKUP COMPLETE: all $n files on GitHub match the A4000 (md5)"; else log "BACKUP INCOMPLETE: $bad of $n files missing or different (see verify_failures.txt)"; fi
 log "DONE"
