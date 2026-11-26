@@ -1,0 +1,709 @@
+{
+ "env": {
+  "XLA_FLAGS": "--xla_gpu_enable_triton_gemm=false",
+  "NVIDIA_TF32_OVERRIDE": "0"
+ },
+ "device": "cuda:0",
+ "N_per_round": 10,
+ "rounds": 3,
+ "commit": "a33a97e",
+ "idle_before": {
+  "gpu": {
+   "utilization.gpu": "0",
+   "memory.used": "898",
+   "clocks.sm": "1560",
+   "clocks.max.sm": "2100",
+   "power.draw": "32.71",
+   "temperature.gpu": "37"
+  },
+  "n_compute_apps": 2,
+  "apps": "2966, 161 MiB\n2842256, 232 MiB"
+ },
+ "rows": [
+  {
+   "arm": "bp",
+   "depth": 10,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.034928781911730766,
+   "update_s": 0.6973736761137843,
+   "update_s_q10_q90": [
+    0.6857458464801311,
+    0.7034599481150509
+   ],
+   "gain_call_s": 0.0,
+   "per_step_s": 0.7323024580255151,
+   "rho": 1.0,
+   "gain_at_final_weights": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 0.6872499641031027,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "77",
+       "memory.used": "7706",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "136.62",
+       "temperature.gpu": "83"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7040 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "87",
+       "memory.used": "7710",
+       "clocks.sm": "1755",
+       "clocks.max.sm": "2100",
+       "power.draw": "137.85",
+       "temperature.gpu": "85"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7044 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 0.6977438861504197,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "70",
+       "memory.used": "7774",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "135.57",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "88",
+       "memory.used": "7774",
+       "clocks.sm": "1605",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.45",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 0.698600772768259,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "92",
+       "memory.used": "7774",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.83",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "87",
+       "memory.used": "7774",
+       "clocks.sm": "1590",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.35",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    }
+   ],
+   "x_bp": 1.0,
+   "x_bp_per_round": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "arm": "epc_alm_blk4",
+   "depth": 10,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.03620799444615841,
+   "update_s": 14.57535638473928,
+   "update_s_q10_q90": [
+    14.534175548143685,
+    14.620671174116433
+   ],
+   "gain_call_s": 0.7140789246186614,
+   "per_step_s": 14.62584595767781,
+   "rho": 60622.1171875,
+   "gain_at_final_weights": [
+    38208.265625,
+    242488.46875,
+    2152549.25
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 14.605303972028196,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "43",
+       "memory.used": "7710",
+       "clocks.sm": "1785",
+       "clocks.max.sm": "2100",
+       "power.draw": "131.16",
+       "temperature.gpu": "84"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7044 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1425",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.69",
+       "temperature.gpu": "92"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 14.580655235797167,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1815",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.17",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1590",
+       "clocks.max.sm": "2100",
+       "power.draw": "140.04",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 14.5686088623479,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "87",
+       "memory.used": "7774",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.95",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "137.90",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    }
+   ],
+   "x_bp": 19.97241139557695,
+   "x_bp_per_round": [
+    21.25180754441928,
+    20.89685846799934,
+    20.853983319569878
+   ]
+  },
+  {
+   "arm": "spc_u1",
+   "depth": 10,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.036218879744410515,
+   "update_s": 16.58591570518911,
+   "update_s_q10_q90": [
+    16.57244843877852,
+    16.617169781215487
+   ],
+   "gain_call_s": 0.7125250184908509,
+   "per_step_s": 16.636385085303335,
+   "rho": 1.0,
+   "gain_at_final_weights": [
+    7992277.5,
+    13077020.0,
+    17120422.0
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 16.613360316492617,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "56",
+       "memory.used": "7774",
+       "clocks.sm": "1845",
+       "clocks.max.sm": "2100",
+       "power.draw": "133.86",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1635",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.87",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 16.581191044300795,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "81",
+       "memory.used": "7774",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "137.10",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7774",
+       "clocks.sm": "1605",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.95",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 16.584085382521152,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "88",
+       "memory.used": "7774",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "133.19",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "92",
+       "memory.used": "7774",
+       "clocks.sm": "1575",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.83",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7108 MiB"
+     }
+    }
+   ],
+   "x_bp": 22.71791512233827,
+   "x_bp_per_round": [
+    24.173679424158173,
+    23.76400764438403,
+    23.739002344365357
+   ]
+  },
+  {
+   "arm": "bp",
+   "depth": 6,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.03484475705772638,
+   "update_s": 0.42038705106824636,
+   "update_s_q10_q90": [
+    0.4100294355303049,
+    0.42504589799791576
+   ],
+   "gain_call_s": 0.0,
+   "per_step_s": 0.45523180812597275,
+   "rho": 1.0,
+   "gain_at_final_weights": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 0.41022223979234695,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "93",
+       "memory.used": "7802",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.62",
+       "temperature.gpu": "79"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "85",
+       "memory.used": "7802",
+       "clocks.sm": "1770",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.87",
+       "temperature.gpu": "81"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 0.42167388647794724,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1800",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.84",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "86",
+       "memory.used": "7802",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.24",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 0.4209552016109228,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.77",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "86",
+       "memory.used": "7802",
+       "clocks.sm": "1635",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.75",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    }
+   ],
+   "x_bp": 1.0,
+   "x_bp_per_round": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "arm": "epc_alm_blk4",
+   "depth": 6,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.03568193130195141,
+   "update_s": 8.484492029994726,
+   "update_s_q10_q90": [
+    8.387778403237462,
+    8.500495176762342
+   ],
+   "gain_call_s": 0.4055159371346235,
+   "per_step_s": 8.52828428003937,
+   "rho": 42336.6171875,
+   "gain_at_final_weights": [
+    59964.08203125,
+    169346.46875,
+    1047918.0
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 8.443900340236723,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "85",
+       "memory.used": "7802",
+       "clocks.sm": "1860",
+       "clocks.max.sm": "2100",
+       "power.draw": "135.76",
+       "temperature.gpu": "80"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1350",
+       "clocks.max.sm": "2100",
+       "power.draw": "138.22",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 8.488395068794489,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1830",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.90",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1590",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.23",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 8.484492029994726,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "51",
+       "memory.used": "7802",
+       "clocks.sm": "1845",
+       "clocks.max.sm": "2100",
+       "power.draw": "133.27",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.40",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    }
+   ],
+   "x_bp": 18.733937584781874,
+   "x_bp_per_round": [
+    20.583721507909946,
+    20.13023651925483,
+    20.155332438050515
+   ]
+  },
+  {
+   "arm": "spc_u1",
+   "depth": 6,
+   "batch": 256,
+   "T": 20,
+   "gn_iters": 12,
+   "hv_iters": 8,
+   "encode_s": 0.03591910284012556,
+   "update_s": 9.608570024371147,
+   "update_s_q10_q90": [
+    9.595155788771809,
+    9.646562975086272
+   ],
+   "gain_call_s": 0.4041980467736721,
+   "per_step_s": 9.652573088146745,
+   "rho": 1.0,
+   "gain_at_final_weights": [
+    6120465.5,
+    8718925.0,
+    11869160.0
+   ],
+   "rounds": [
+    {
+     "round": 0,
+     "update_s_median": 9.64159955829382,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "135.39",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.30",
+       "temperature.gpu": "91"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 1,
+     "update_s_median": 9.606239803135395,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1560",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.92",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1515",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.41",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    },
+    {
+     "round": 2,
+     "update_s_median": 9.59926863759756,
+     "before": {
+      "gpu": {
+       "utilization.gpu": "55",
+       "memory.used": "7802",
+       "clocks.sm": "1845",
+       "clocks.max.sm": "2100",
+       "power.draw": "134.45",
+       "temperature.gpu": "89"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     },
+     "after": {
+      "gpu": {
+       "utilization.gpu": "100",
+       "memory.used": "7802",
+       "clocks.sm": "1620",
+       "clocks.max.sm": "2100",
+       "power.draw": "139.48",
+       "temperature.gpu": "90"
+      },
+      "n_compute_apps": 2,
+      "apps": "2966, 161 MiB\n2842256, 7136 MiB"
+     }
+    }
+   ],
+   "x_bp": 21.20364376092908,
+   "x_bp_per_round": [
+    23.503356529802875,
+    22.781206309387585,
+    22.803539666127936
+   ]
+  }
+ ],
+ "co_tenant_seen": true
+}
