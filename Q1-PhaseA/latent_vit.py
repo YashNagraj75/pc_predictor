@@ -326,17 +326,24 @@ def main():
         assert len(lr_sel) == 1, f"BP seeds 1-4 at more than one lr: {lr_sel}"; lr_sel = lr_sel.pop()
         assert {s for (lr, s) in bp if lr == lr_sel} == {0, 1, 2, 3, 4}, f"d{depth}: BP seeds at lr {lr_sel}: {sorted(bp)}"
         runs = [(bp[(lr_sel, s)], "bp", s) for s in range(5)]; pc_lrs = set()
-        for arm in PC_ARMS:
-            ds = [d for d in glob.glob(f"{SA}/{arm}_d{depth}_lr*_e25_full_s0_*") if os.path.exists(d + "/report.json") and os.path.exists(d + "/predictor.eqx")]
-            assert len(ds) <= 1, ds
-            if ds:
-                runs.append((os.path.basename(ds[0]), arm, 0)); pc_lrs.add(json.load(open(ds[0] + "/report.json"))["cfg"]["lr"])
-            elif arm != "spc_u1":
-                raise SystemExit(f"missing {arm} d{depth}")
+        for arm in PC_ARMS:                       # every finished seed of each PC arm (seed 0 required except spc_u1)
+            ds = [d for d in glob.glob(f"{SA}/{arm}_d{depth}_lr*_e25_full_s*_*") if os.path.exists(d + "/report.json") and os.path.exists(d + "/predictor.eqx")]
+            bys = {}
+            for d in ds:
+                rr = json.load(open(d + "/report.json")); s = rr["cfg"]["seed"]; ev = rr.get("eval", {})
+                ok = rr["cfg"].get("epochs") == 25 and all(math.isfinite(ev.get(c, {}).get("nmse", math.nan)) for c in CONDS) \
+                    and "nmse_cal_cleanalpha" in ev.get("noise", {}) and "knn" in ev.get("knn_pred", {})
+                if not ok: print("SKIP incomplete or non-finite run", os.path.basename(d), flush=True); continue
+                assert s not in bys, (arm, depth, s, d, bys.get(s)); bys[s] = d
+            if 0 not in bys and arm != "spc_u1":
+                raise SystemExit(f"missing {arm} d{depth} seed 0")
+            for s in sorted(bys):
+                runs.append((os.path.basename(bys[s]), arm, s)); pc_lrs.add(json.load(open(bys[s] + "/report.json"))["cfg"]["lr"])
         for lr in sorted(pc_lrs - {lr_sel}):     # lr-matched BP control (seed 0) for any PC arm trained at another lr
             if (lr, 0) in bp: runs.append((bp[(lr, 0)], "bp_lrmatch", 0))
         runs.append((f"init_d{depth}_s0", "init", 0))
         print("RUNS", depth, lr_sel, [r[0] for r in runs], flush=True)
+        dump({"sha": SHA, "runs": [[nm, ar, sd] for nm, ar, sd in runs]}, os.path.join(outd, f"runs_d{depth}.json"))
         for name, arm, seed in runs:
             f = os.path.join(outd, f"latent_{name}.json"); old = readable(f)
             if old and old.get("sha") == SHA and os.path.exists(os.path.join(st, name + ".npy")): continue
@@ -363,7 +370,8 @@ def main():
             np.savez_compressed(os.path.join(outd, f"perimg_{name}.npz"), **flat)
             dump(res, f); print("DONE", name, res.get("reproduces_report"), res["instr_vs_model_rel"]["clean"], res["sec"], flush=True)
         # CKA per node >= 1 on position-residualised states, every pair; image-shuffled control
-        cf2 = os.path.join(outd, f"cka_d{depth}.json"); ck = (readable(cf2) or {}).get("pairs", {})
+        cf2 = os.path.join(outd, f"cka_d{depth}.json"); prev = readable(cf2) or {}
+        ck = prev.get("pairs", {}) if prev.get("sha") == SHA else {}   # pairs from another commit are recomputed
         names = [r[0] for r in runs if os.path.exists(os.path.join(st, r[0] + ".npy"))]
         cache = {n: residualise(np.load(os.path.join(st, n + ".npy"))).reshape(-1, *np.load(os.path.join(st, n + ".npy"), mmap_mode="r").shape[2:]).astype(np.float32)
                  for n in names}                  # (rows, nodes, w); all state files are kept (later passes add spc_u1)
@@ -373,7 +381,7 @@ def main():
                 if key not in ck:
                     X, Y = cache[names[i1]], cache[names[i2]]; ck[key] = [linear_cka(X[:, j], Y[:, j]) for j in range(1, X.shape[1])]
         X, Y = cache[runs[0][0]], cache[runs[1][0]]; perm = np.random.default_rng(0).permutation(len(Y))
-        dump({"pairs": ck, "nodes": "1..2L (node 0 = embedding, removed by residualisation)", "shuffled_control": [linear_cka(X[:, j], Y[perm, j]) for j in range(1, X.shape[1])],
+        dump({"sha": SHA, "pairs": ck, "nodes": "1..2L (node 0 = embedding, removed by residualisation)", "shuffled_control": [linear_cka(X[:, j], Y[perm, j]) for j in range(1, X.shape[1])],
               "rows": "(image, target block) states pooled over valid target tokens, minus the per-(mask shape, block) mean over images"}, cf2)
         print("CKA", depth, len(ck), flush=True); del cache
     print("ALL DONE", flush=True)

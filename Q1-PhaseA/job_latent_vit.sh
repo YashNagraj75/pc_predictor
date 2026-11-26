@@ -21,10 +21,14 @@ for f in sorted(glob.glob(out + "/latent_*.json")):
     for c, v in r["conds"].items():
         if not (abs(v["band_sum_check"] - 1) <= 1e-5 and abs(v["dist_sum_check"] - 1) <= 1e-5): bad.append((r["run"], c, v["band_sum_check"], v["dist_sum_check"]))
     if not (r["conds"]["noise"]["noise"]["split_check_rel"] <= 1e-3): bad.append((r["run"], "noise split"))
-for d in (6, 10):
-    exp = {"bp": 5, "init": 1, "epc_alm_k4": 1, "epc_alm_blk4": 1, "epc_k4": 1, **({"spc_u1": 1} if pas == 2 else {})}
-    for a, k in exp.items():
-        if n.get((d, a), 0) != k: bad.append((d, a, "count", n.get((d, a), 0), "expected", k))
+for d in (6, 10):                                # expected = the run list latent_vit.py wrote for this depth
+    man = json.load(open(f"{out}/runs_d{d}.json")); want = {nm for nm, _, _ in man["runs"]}
+    have = {json.load(open(f))["run"] for f in glob.glob(out + "/latent_*.json") if json.load(open(f))["depth"] == d}
+    if want != have: bad.append((d, "runs vs results", sorted(want - have), sorted(have - want)))
+    ar = [a for _, a, _ in man["runs"]]
+    for a, k in {"bp": 5, "init": 1, "epc_alm_k4": 1, "epc_k4": 1}.items():
+        if ar.count(a) != k: bad.append((d, a, "count", ar.count(a), "expected", k))
+    if pas >= 3 and d == 10 and sorted(s for _, a, s in man["runs"] if a == "epc_alm_blk4") != [0, 1, 2]: bad.append((d, "epc_alm_blk4 seeds", "expected 0,1,2"))
     ck = json.load(open(f"{out}/cka_d{d}.json"))["pairs"]; m = sum(v for (dd, _), v in n.items() if dd == d)
     if len(ck) != m * (m - 1) // 2: bad.append((d, "cka pairs", len(ck), m * (m - 1) // 2))
 print("OUTPUT CHECKS", "PASS" if not bad else f"FAIL {bad}")
