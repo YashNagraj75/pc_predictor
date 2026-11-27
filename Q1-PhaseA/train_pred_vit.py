@@ -42,6 +42,7 @@ class ACfg:
     warmup_epochs: int = 1
     max_steps: int = 0           # >0: stop early (smoke); schedule unchanged
     deadline_min: float = 0.0    # >0: checkpoint and exit 75 before this many wall minutes (host run limit)
+    arch: str = "vit"            # vit: transformer predictor (depth = blocks); resnet: conv ResNet (depth = residual blocks)
 
 
 def load_encoders(v0_dir=V0_DIR):
@@ -57,6 +58,10 @@ def load_encoders(v0_dir=V0_DIR):
 
 
 def make_predictor(vc, a):
+    if a.arch == "resnet":                       # plan_resnet_predictor.md: width 112 matches the transformer's parameters
+        import resnet_pred as RN
+        return RN.ResPredictor(jax.random.PRNGKey(10_000 + a.seed), vc, depth=a.depth, width=112)
+    assert a.arch == "vit", a.arch
     return V.Predictor(jax.random.PRNGKey(10_000 + a.seed), vc, depth=a.depth, width=192, heads=3, mlp=768, scaled=True)
 
 
@@ -207,7 +212,7 @@ def run(a, out_dir):
     src = ck if os.path.exists(ck) else (ckp if os.path.exists(ckp) else None)
     if src:                                      # rho and the last gain are restored, so a resumed run is exact
         prev = json.load(open(logf)) if os.path.exists(logf) else {"cfg": dc.asdict(a), "log": []}
-        same = lambda d: {x: y for x, y in d.items() if x not in ("max_steps", "deadline_min")}
+        same = lambda d: {"arch": "vit", **{x: y for x, y in d.items() if x not in ("max_steps", "deadline_min")}}   # pre-arch checkpoints are vit
         assert same(prev["cfg"]) == same(dc.asdict(a)), "config changed since the checkpoint"
         (state, r_, g_), st = eqx.tree_deserialise_leaves(src, ((state, jnp.float32(0), jnp.zeros(3)), jnp.int32(0)))
         step0, rho, gs = int(st), float(r_), tuple(float(x) for x in g_)

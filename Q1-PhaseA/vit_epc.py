@@ -32,21 +32,31 @@ def _hvp_max(E, z0, iters):                      # lambda_max of the Hessian of 
     return jnp.linalg.norm(hv(v))
 
 
-def _masks(cvalid, tvalid):
+def _masks(cvalid, tvalid, p=None):              # (kv, row, tm); grid predictors (resnet_pred) define their own
+    if p is not None and hasattr(p, "pc_masks"):
+        return p.pc_masks(cvalid, tvalid)
     kv = jnp.concatenate([cvalid, tvalid])
     return kv, kv[:, None].astype(jnp.float32), tvalid[:, None].astype(jnp.float32)
 
 
+def _embed(p, ctx, cidx, cvalid, tidx, tvalid):  # grid predictors need validity to scatter tokens onto the grid
+    return p.embed_m(ctx, cidx, cvalid, tidx, tvalid) if hasattr(p, "embed_m") else p.embed_(ctx, cidx, tidx)
+
+
+def _head(p, h, tidx):                           # predictions at the target tokens, (NT, dim)
+    return p.head_at(h, tidx) if hasattr(p, "head_at") else p.head(h, tidx.shape[0])
+
+
 def states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e):
-    kv, row, _ = _masks(cvalid, tvalid)
-    h, hs = p.embed_(ctx, cidx, tidx), []
+    kv, row, _ = _masks(cvalid, tvalid, p)
+    h, hs = _embed(p, ctx, cidx, cvalid, tidx, tvalid), []
     for j in range(p.n_sub):
         h = h + p.scale * p.f(j, h, kv) + e[j] * row; hs.append(h)
     return jnp.stack(hs)
 
 
 def feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid):
-    z = jnp.zeros((p.n_sub, cidx.shape[0] + tidx.shape[0], p.pos.shape[-1]))
+    z = jnp.zeros((p.n_sub, _masks(cvalid, tvalid, p)[0].shape[0], p.pos.shape[-1]))
     return states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, z)
 
 
@@ -54,22 +64,22 @@ def feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid):
 # If the node errors e are given, the residual is evaluated as e + u - (pred - stop_gradient(pred)): same value and
 # gradient, without recomputing e as the float32 difference hs - pred (cancellation at large rho).
 def local_energy(p, ctx, cidx, cvalid, tidx, tvalid, hs, u, y, rho, e=None):
-    kv, row, tm = _masks(cvalid, tvalid)
-    prev, E = p.embed_(ctx, cidx, tidx), 0.0
+    kv, row, tm = _masks(cvalid, tvalid, p)
+    prev, E = _embed(p, ctx, cidx, cvalid, tidx, tvalid), 0.0
     for j in range(p.n_sub):
         pred = prev + p.scale * p.f(j, prev, kv)
         r = (hs[j] - pred) if e is None else (e[j] - (pred - jax.lax.stop_gradient(pred)))
         E = E + 0.5 * rho * jnp.sum(((r + u[j]) * row) ** 2)
         prev = hs[j]
-    return E + 0.5 * jnp.sum(tm * (p.head(hs[-1], tidx.shape[0]) - y) ** 2)
+    return E + 0.5 * jnp.sum(tm * (_head(p, hs[-1], tidx) - y) ** 2)
 
 
 # Returns states, multipliers, (energy at start, energy at end) and this block's rho.  rho_rel > 0 (per-block precision,
 # findings/40): rho = max(1, gain / rho_rel) from this block's own gain lam, which the step size already measures.
 def epc_core(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, gn_iters=12, hist=False, rho_rel=0.0):
-    kv, row, tm = _masks(cvalid, tvalid)
+    kv, row, tm = _masks(cvalid, tvalid, p)
     nt = tidx.shape[0]
-    yhat = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], nt)
+    yhat = lambda e: _head(p, states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], tidx)
     e0 = jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1]))
     lam = _gn_max(lambda e: yhat(e) * tm, e0, gn_iters)
     if rho_rel > 0:
@@ -94,7 +104,7 @@ def epc_one(*a, **k):                            # the original 4-tuple interfac
 
 
 def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iters=20, hist=False):
-    kv, row, tm = _masks(cvalid, tvalid)
+    kv, row, tm = _masks(cvalid, tvalid, p)
     h0 = feedforward_states(p, ctx, cidx, cvalid, tidx, tvalid)
     u0 = jnp.zeros_like(h0)
     E = lambda h, u: local_energy(p, ctx, cidx, cvalid, tidx, tvalid, h, u, y, rho)
@@ -102,7 +112,7 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
     eta = c * 0.9 / lam
     gE = jax.grad(E)
     def resid(h):
-        prev, r = p.embed_(ctx, cidx, tidx), []
+        prev, r = _embed(p, ctx, cidx, cvalid, tidx, tvalid), []
         for j in range(p.n_sub):
             r.append((h[j] - prev - p.scale * p.f(j, prev, kv)) * row); prev = h[j]
         return jnp.stack(r)
@@ -119,8 +129,8 @@ def spc_one(p, ctx, cidx, cvalid, tidx, tvalid, y, rho, alpha, T, c=1.0, hv_iter
 # Output gain of one (image, target block): lambda_max(J^T J) of the valid predictions with respect to all node errors at
 # zero error.  ePC behaves like BP only when rho >> gain; reported by the gates and logged in training.
 def gain(p, ctx, cidx, cvalid, tidx, tvalid, gn_iters=50):
-    kv, row, tm = _masks(cvalid, tvalid)
-    f = lambda e: p.head(states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], tidx.shape[0]) * tm
+    kv, row, tm = _masks(cvalid, tvalid, p)
+    f = lambda e: _head(p, states_from_errors(p, ctx, cidx, cvalid, tidx, tvalid, e)[-1], tidx) * tm
     return _gn_max(f, jnp.zeros((p.n_sub, kv.shape[0], p.pos.shape[-1])), gn_iters)
 
 

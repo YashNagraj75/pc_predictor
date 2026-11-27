@@ -19,8 +19,10 @@ jax.config.update("jax_default_matmul_precision", "highest")
 import data as D, vit_ijepa as V, vit_epc as P, train_pred_vit as A
 ROOT, TAG, OUTD = sys.argv[2:5]; depth = int(sys.argv[5]) if len(sys.argv) > 5 else 10; os.makedirs(OUTD, exist_ok=True)
 V0 = os.path.join(ROOT, "Q1-PhaseA/runs_vit/v0_d6_s0"); vc, enc, tenc, _ = A.load_encoders(V0)
-SA = os.path.join(ROOT, "Q1-PhaseA/runs_vit/stageA"); a = A.ACfg(arm="epc_alm_k4", depth=depth)
-ck = sorted(glob.glob(f"{SA}/*_d{depth}_*_e25_full_s0*/predictor.eqx")) + sorted(glob.glob(f"{SA}_invalid_f41/epc_alm_k4_d{depth}_*_e25_full_s0*/predictor.eqx"))
+ARCH = os.environ.get("ARCH", "vit"); a = A.ACfg(arm="epc_alm_k4", depth=depth, arch=ARCH)
+SA = os.path.join(ROOT, "Q1-PhaseA/runs_vit/stageA" + ("_rn" if ARCH == "resnet" else ""))
+ck = sorted(glob.glob(f"{SA}/*_d{depth}_*_e25_full_s0*/predictor.eqx"))           # trained weights if any, else init
+if ARCH == "vit": ck += sorted(glob.glob(f"{SA}_invalid_f41/epc_alm_k4_d{depth}_*_e25_full_s0*/predictor.eqx"))
 pred = eqx.tree_deserialise_leaves(ck[0], A.make_predictor(vc, a)) if ck else A.make_predictor(vc, a)
 Xtr, _, _, _ = D.load_cifar10(root=os.path.join(ROOT, "data"), n_train=-1, n_test=2000, seed=0)
 flat = lambda t: np.concatenate([np.asarray(v).ravel() for v in jax.tree_util.tree_leaves(eqx.filter(t, eqx.is_inexact_array))])
@@ -34,7 +36,7 @@ fns = {"pred_bp": lambda: P.grads(pred, *b, "bp", chunk=64)[0],
        "pred_spc_u1": lambda: P.grads(pred, *b, "spc", rho=1.0, alpha=0.0, T=20, chunk=32, hv_iters=A.ACfg.hv_iters)[0],
        "pred_epc_blk": lambda: P.grads(pred, *b, "epc", rho=1.0, alpha=1.0, T=10, chunk=32, gn_iters=4, rho_rel=4.0)[0],
        "v0_loss": lambda: eqx.filter_grad(V.loss_fn)((enc, p0), tenc, X2, *m2, vc)}
-out = {"tag": TAG, "backend": jax.default_backend(), "xla_flags": os.environ.get("XLA_FLAGS", ""), "ckpt": ck[0] if ck else "init"}
+out = {"tag": TAG, "arch": ARCH, "backend": jax.default_backend(), "xla_flags": os.environ.get("XLA_FLAGS", ""), "ckpt": ck[0] if ck else "init"}
 for name, f in fns.items():
     g = eqx.filter_jit(f)(); np.save(f"{OUTD}/{TAG}_{name}.npy", flat(g)); print(name, "saved", flush=True)
 json.dump(out, open(f"{OUTD}/{TAG}.json", "w")); print("DONE", json.dumps(out))

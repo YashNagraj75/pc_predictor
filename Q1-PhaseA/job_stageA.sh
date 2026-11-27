@@ -4,13 +4,17 @@
 #   depth D: per arm, 5-epoch lr selection on the 90/10 split at {3e-4,1e-3,3e-3}, then 25 epochs at the winner
 #   (BP also runs 25 epochs at all three lrs).  noise: BP seeds 1-4.  seeds: SEEDS of SEED_ARMS at DEPTH, seed-0 lr.
 set -uo pipefail
-P="$1"; JOBDIR=$(readlink -f "$2"); MODE="$3"; DEPTH="${4:-10}"; cd "$P/Q1-PhaseA" || exit 2
+P="$1"; JOBDIR=$(readlink -f "$2"); MODE="$3"; DEPTH="${4:-$([ "${ARCH:-vit}" = resnet ] && echo 20 || echo 10)}";   # default = the deep depth of each architecture
+ cd "$P/Q1-PhaseA" || exit 2
 PY="$(cd ../.venv/bin && pwd)/python"
 # Triton GEMMs give WRONG batched training gradients on this host (findings/41); cuBLAS with autotuning is correct and as fast
 export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_enable_triton_gemm=false
 ST=stageA_status.txt; note() { echo "$(date +%m-%d_%H:%M) [stageA/$MODE$DEPTH] $*" | tee -a $ST >&2; }   # stderr: run1 returns its dir on stdout
-B=runs_vit/stageA; mkdir -p $B; FAIL=$B/.fail_$MODE$DEPTH; rm -f $FAIL
-exec 9>"$B/.gpu.lock"; flock -n 9 || { note "another stage-A job holds the GPU lock"; exit 9; }
+ARCH=${ARCH:-vit}; export ARCH; B=runs_vit/stageA; mkdir -p $B; LOCK=$B/.gpu.lock    # one GPU lock for both architectures
+if [ "$ARCH" = resnet ]; then B=runs_vit/stageA_rn; mkdir -p $B/a0         # ResNet runs: own folder; same T/gn and arm decision
+  for f in a0/a0_choice.json blockrho_decision.json; do [ -f $B/$f ] || cp runs_vit/stageA/$f $B/$f || exit 7; done; fi
+FAIL=$B/.fail_$MODE$DEPTH; rm -f $FAIL
+exec 9>"$LOCK"; flock -n 9 || { note "another stage-A job holds the GPU lock"; exit 9; }
 trap 'kill 0' TERM INT
 JOB_MIN=${JOB_MIN:-610}; T_START=$(date +%s)
 left() { echo $(( JOB_MIN - ($(date +%s) - T_START) / 60 )); }
@@ -25,7 +29,7 @@ run1() {  # arm depth lr epochs split seed [extra args] -> echoes dir; rc 0 done
   [ -f "$d/report.json" ] && return 0
   [ -f "$d/diverged.json" ] && { note "$tag previously diverged (skipped)"; return 3; }
   local m=$(left); [ $m -gt 30 ] || { note "$tag not started: job budget used"; return 75; }
-  $PY -W ignore train_pred_vit.py --arm $1 --depth $2 --lr $3 --epochs $4 --split $5 --seed $6 --T $T --gn-iters $GI --deadline-min $((m - 20)) --out "$d" "${@:7}" >> "$d.log" 2>&1
+  $PY -W ignore train_pred_vit.py --arm $1 --depth $2 --lr $3 --epochs $4 --split $5 --seed $6 --T $T --gn-iters $GI --deadline-min $((m - 20)) --arch $ARCH --out "$d" "${@:7}" >> "$d.log" 2>&1
   local rc=$?; note "$tag rc=$rc"
   [ $rc -eq 0 ] || [ $rc -eq 3 ] || [ $rc -eq 75 ] || touch $FAIL
   return $rc
@@ -58,7 +62,7 @@ gpu_gate() {
 }
 case "$MODE" in
   gpugate) gpu_gate; exit $? ;;
-  depth|noise|seeds|a0|smoke_spc) gpu_gate || exit 4 ;;
+  depth|noise|seeds|a0|smoke_spc|smoke_rn) gpu_gate || exit 4 ;;
 esac
 case "$MODE" in
   smoke)   # every arm at depth 6 for 12 steps (via run1, with resume at step 6), and the depth-10 ePC memory/time case
@@ -71,6 +75,18 @@ case "$MODE" in
     done
     d=$(run1 epc_k16 10 1e-3 2 val 91 --max-steps 3); rc=$?; [ $rc -eq 0 ] || exit 5; cp "$d/report.json" "$JOBDIR/smoke_epc_k16_d10.json"
     rm -rf $B/*_s90* $B/*_s91*; [ -f $B/a0/.provisional ] && rm -f $B/a0/a0_choice.json $B/a0/.provisional; note "smoke ok" ;;
+  smoke_rn)   # ResNet: known-answer tests, then bp / epc_alm_blk4 / spc_u1 6 + 6 steps at 12 blocks with resume, 3 steps at 20
+    [ "$ARCH" = resnet ] || { note "smoke_rn needs ARCH=resnet"; exit 64; }
+    $PY -W ignore test_resnet.py > "$JOBDIR/test_resnet.log" 2>&1 || { note "test_resnet FAILED"; exit 5; }
+    rm -rf "$B"/*_s90* "$B"/*_s91*
+    for arm in bp epc_alm_blk4 spc_u1; do
+      d=$(run1 $arm 12 1e-3 2 val 90 --max-steps 6); [ $? -eq 0 ] || exit 5
+      rm -f "$d/report.json"; d=$(run1 $arm 12 1e-3 2 val 90 --max-steps 12); [ $? -eq 0 ] || exit 5
+      grep -q "RESUME at step 6" "$d.log" || { note "smoke_rn $arm: resume did not start from step 6"; exit 6; }
+      cp "$d/report.json" "$JOBDIR/smoke_rn_${arm}_d12.json"
+      d=$(run1 $arm 20 1e-3 2 val 91 --max-steps 3); [ $? -eq 0 ] || exit 5; cp "$d/report.json" "$JOBDIR/smoke_rn_${arm}_d20.json"
+    done
+    rm -rf "$B"/*_s90* "$B"/*_s91*; note "smoke_rn ok" ;;
   smoke_spc)  # spc_u1: 6 + 6 steps at depth 6 with a resume check, then 3 steps at depth 10 (memory, s/step)
     rm -rf "$B"/spc_u1_d6_lr1e-3_e2_val_s90_* "$B"/spc_u1_d10_lr1e-3_e2_val_s91_*     # only this smoke's own runs
     d=$(run1 spc_u1 6 1e-3 2 val 90 --max-steps 6); [ $? -eq 0 ] || exit 5
@@ -99,7 +115,7 @@ case "$MODE" in
       done
     done ;;
   noise)
-    for D in 10 6; do lr=$(best_lr bp $D); case "$lr" in incomplete|none) touch $FAIL; continue ;; esac
+    for D in ${NOISE_DEPTHS:-10 6}; do lr=$(best_lr bp $D); case "$lr" in incomplete|none) touch $FAIL; continue ;; esac
       for s in 1 2 3 4; do d=$(run1 bp $D $lr 25 full $s); rc=$?; [ $rc -eq 75 ] && exit 75; cp "$d/report.json" "$JOBDIR/report_$(basename $d).json" 2>/dev/null; done; done ;;
   seeds)  # extra seeds SEEDS (default 1 2) of SEED_ARMS (default epc_alm_blk4) at DEPTH, each at its seed-0 selected lr
     read T0 GI0 < <(TG)

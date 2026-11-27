@@ -9,7 +9,7 @@ JOBDIR=$(pwd); R=${R:-/media/md_lab/hd_21/preprocessed/pc_predictor}; SHA=${SHA:
 log() { echo "$(date '+%m-%d %H:%M') $*" >> "$JOBDIR/sequence.txt"; }
 cd "$R" || { log "cannot cd to $R"; exit 2; }
 [ "$(git rev-parse --short HEAD)" = "$SHA" ] || { log "HEAD is $(git rev-parse --short HEAD), expected $SHA"; exit 9; }
-P=$(pgrep -af 'pytho[n].*(train_pred_vit|a0_vit|vit_ijepa|gpu_gate)[.]py' | head -3)
+P=$(pgrep -af 'pytho[n].*(train_pred_vit|a0_vit|vit_ijepa|gpu_gate|test_resnet|latent_vit|timing_vit)[.]py' | head -3)
 [ -z "$P" ] || { log "stale training processes, not starting: $P"; exit 8; }
 
 run_stage() {  # label, then the job_stageA.sh arguments
@@ -32,6 +32,7 @@ log "sequence start at $(git rev-parse --short HEAD), stages: ${STAGES:-depth:10
 for st in ${STAGES:-depth:10 depth:6 noise}; do
   mode=${st%%:*}; depth=${st#*:}; [ "$depth" = "$st" ] && depth=""
   case $mode in
+    smoke_rn)  bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" smoke_rn; rc=$?; log "smoke_rn rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: smoke_rn failed"; exit 5; } ;;
     smoke_spc) bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" smoke_spc; rc=$?; log "smoke_spc rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: smoke_spc failed"; exit 5; } ;;
     gpugate) log "gpu gate d$depth"; bash Q1-PhaseA/job_stageA.sh "$R" "$JOBDIR" gpugate $depth; rc=$?
              log "gpu gate d$depth rc=$rc"; [ $rc -eq 0 ] || { log "STOPPED: GPU gate failed"; exit 4; } ;;
